@@ -8,6 +8,15 @@
 
 ---
 
+## 仓库
+
+- 远程：`git@github.com:Honestman69/aamps.git`（网页：https://github.com/Honestman69/aamps）
+- 分支：`main`，首个提交 `ceccdc6`
+- 网络：本机 `github.com:22` 会被重置，`~/.ssh/config` 已配置走 `ssh.github.com:443` + `Compression yes`。
+  直接 `git push` 即可；若出现 `Connection reset`，先重试一次，通常是网络波动。
+
+---
+
 ## 下一步（从这里开始写代码）
 
 ### ~~第 1 步：定契约（`packages/contracts/src/`）~~ ✅ 已完成
