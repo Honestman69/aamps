@@ -18,6 +18,11 @@
   `corepack pnpm install` 首次约 9 分钟，别以为卡死了。
 - 构建：`pnpm build` 先构建 `packages/*`（契约包 `main` 指向 `dist/index.js`）再编译主服务。
   只跑 `tsc` 不构建包，运行时会 `ERR_MODULE_NOT_FOUND`。
+- **推送阻塞（2026-10-24）**：本地已积累 3 个提交待推送。本机 `git remote` 是 HTTPS，
+  `credential.helper=manager` 但**没有已存储的 GitHub 凭据**，也没有 SSH 私钥，
+  非交互终端无法输入账号密码 → `git push` 报 `could not read Username`。
+  网络可达（`https://github.com` 200），**这是凭据问题不是网络问题**。
+  解：在本地终端手动 `git push` 一次（会弹出 GitHub 登录并记住），或配置 PAT / SSH key。
 
 ---
 
