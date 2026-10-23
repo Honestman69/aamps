@@ -3,9 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "description": "主服务与所有平台适配器之间唯一的共享契约包",
-  "main": "src/index.ts",
-  "types": "src/index.ts",
-  "files": ["src"],
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "build": "tsc -p tsconfig.json"

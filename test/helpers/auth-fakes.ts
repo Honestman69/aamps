@@ -124,6 +124,13 @@ export class FakeAuditRepository implements IAuditLogRepository {
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id));
   }
 
+  async listRecent(tenantId: string, limit: number): Promise<AuditLogRow[]> {
+    return this.rows
+      .filter((row) => row.tenantId === tenantId)
+      .slice(-limit)
+      .reverse();
+  }
+
   /** 测试辅助：直接篡改某行，模拟"有人在数据库层面动了手" */
   corrupt(index: number, patch: Partial<AuditLogRow>): void {
     const row = this.rows[index];

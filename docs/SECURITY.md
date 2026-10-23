@@ -316,7 +316,7 @@ hash = sha256(prevHash + actorUserId + action + target + createdAt + payloadDige
 - [ ] `CredentialRepository` 无 `findById` / `findMany`，只有带 `userId` 的方法
 - [ ] 所有对外 DTO 类型中不含 `apiKeyEnc` 字段（靠 TypeScript 编译期保证）
 - [ ] `decryptApiKey` 全局只有 1 处调用
-- [ ] `change-password` 与 `reset-password` 是两个独立接口，前者强制校验旧密码
+- [x] `change-password` 与 `reset-password` 是两个独立接口，前者强制校验旧密码
 - [x] `change-password` 在**单事务**内同时更新 `passwordHash` 与 `wrappedDek`，任一失败整体回滚（CAS 单条 SQL）
 - [x] `change-password` 不修改任何 `Credential` 记录（Key 必须原样保留）
 - [x] `reset-password` 不校验旧密码，且必须销毁 `wrappedDek` 并停用该用户全部 Credential
@@ -324,12 +324,13 @@ hash = sha256(prevHash + actorUserId + action + target + createdAt + payloadDige
 - [x] 忘记密码流程复用 `reset-password` 的销毁语义，不复用重包裹逻辑
 - [x] 审计 action 区分 `password_change` / `password_reset` / `password_reset_self`
 - [x] 启动自检：扫描 `Credential.apiKeyEnc`，发现非 `dek:v1:` 前缀则拒绝启动并提示迁移
-- [ ] 日志中间件白名单中不含任何密钥字段
-- [x] 审计哈希链校验接口可用，且能报出断点（服务层 `AuditService.verifyTenant`，HTTP 接口待 M1）
+- [x] 日志中间件白名单中不含任何密钥字段（`AppExceptionFilter` 只记 method / path / code，**不记 body 与 headers**）
+- [x] 审计哈希链校验接口可用，且能报出断点（`POST /api/admin/audit/verify`）
 - [ ] 未解锁时机器人走预设话术 + 通知 owner，而不是静默不回
 
-> **2026-10-23 进度**：服务层条目已全部打勾（`src/modules/auth/`），并有 50 个单测 + 真实 SQLite 端到端冒烟兜底。
-> 剩下 6 条都依赖 HTTP 层或 M2 的消息链路，随第 4 步一起做。
+> **2026-10-23 进度**：除 1/2/3/4 与最后一条外全部打勾。
+> 1–4 依赖凭据模块（第 5 步），最后一条依赖 M2 的消息链路。
+> 认证链路已有 50 个单测 + 真实库冒烟 + 14 项 HTTP 冒烟三重复核。
 > 第 7 条尤其重要：它防止"开发期用全局 KEK 存了几条数据，上线后忘了迁移"这类事故。宁可启动失败，也不要带着两种解密路径上线。
 
 ---

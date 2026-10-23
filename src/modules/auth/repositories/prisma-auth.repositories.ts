@@ -14,7 +14,9 @@ import type { AuditLogRow } from '../audit.service';
 import type {
   IAuditLogRepository,
   ICredentialAdminRepository,
+  IUserAdminQueryRepository,
   IUserAuthRepository,
+  UserAdminDTO,
   UserAuthRecord,
 } from '../ports';
 
@@ -158,6 +160,62 @@ export class PrismaAuditLogRepository implements IAuditLogRepository {
       where: { tenantId },
       orderBy: { createdAt: 'asc' },
       take: limit,
+    });
+  }
+
+  async listRecent(tenantId: string, limit: number): Promise<AuditLogRow[]> {
+    return this.prisma.auditLog.findMany({
+      where: { tenantId },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+  }
+}
+
+/**
+ * 管理端用户查询。
+ *
+ * 唯一一处 select 里出现 `wrappedDek` 的地方，而且**只是为了算一个布尔**
+ * （`dekInitialized`），密文本身绝不进入返回值。类型 `UserAdminDTO` 里也没有它。
+ */
+export class PrismaUserAdminQueryRepository implements IUserAdminQueryRepository {
+  constructor(private readonly prisma: PrismaClient) {}
+
+  async listForAdmin(tenantId: string): Promise<UserAdminDTO[]> {
+    const rows = await this.prisma.user.findMany({
+      where: { tenantId },
+      select: {
+        id: true,
+        username: true,
+        displayName: true,
+        role: true,
+        status: true,
+        wrappedDek: true,
+        dekVersion: true,
+        lastLoginAt: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    return rows.map((row) => ({
+      id: row.id,
+      username: row.username,
+      displayName: row.displayName,
+      role: row.role,
+      status: row.status,
+      dekInitialized: row.wrappedDek !== null,
+      dekVersion: row.dekVersion,
+      lastLoginAt: row.lastLoginAt?.toISOString() ?? null,
+      createdAt: row.createdAt.toISOString(),
+    }));
+  }
+
+  async findForAdmin(userId: string, tenantId: string): Promise<{ id: string; username: string } | null> {
+    // 带 tenantId 一起查：跨租户一律查不到，不靠上层再判断
+    return this.prisma.user.findFirst({
+      where: { id: userId, tenantId },
+      select: { id: true, username: true },
     });
   }
 }

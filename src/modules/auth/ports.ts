@@ -112,6 +112,30 @@ export interface ITenantRepository {
   ensureTenant(slug: string, name: string): Promise<{ id: string }>;
 }
 
+/**
+ * 管理端用户查询：**只有脱敏字段**。
+ * 类型里没有 `wrappedDek` / `keySalt`，所以"管理员能不能看到密钥材料"这个问题
+ * 在编译期就答完了（SECURITY.md 第 8 条第 3 条）。
+ */
+export type UserAdminDTO = {
+  id: string;
+  username: string;
+  displayName: string | null;
+  role: string;
+  status: string;
+  /** DEK 是否已初始化（是布尔，不是密文） */
+  dekInitialized: boolean;
+  dekVersion: number;
+  lastLoginAt: string | null;
+  createdAt: string;
+};
+
+export interface IUserAdminQueryRepository {
+  listForAdmin(tenantId: string): Promise<UserAdminDTO[]>;
+  /** 只在同一租户内可见，跨租户一律当作"无权" */
+  findForAdmin(userId: string, tenantId: string): Promise<{ id: string; username: string } | null>;
+}
+
 /** 审计仓储：只提供 append 与读取，**没有 update / delete 方法**（D009） */export interface IAuditLogRepository {
   /**
    * 追加一行，并返回实际写入的记录。
@@ -124,4 +148,7 @@ export interface ITenantRepository {
 
   /** 按时间正序取出用于校验 */
   listForVerify(tenantId: string, limit: number): Promise<AuditLogRow[]>;
+
+  /** 按时间倒序取最近记录（后台展示用） */
+  listRecent(tenantId: string, limit: number): Promise<AuditLogRow[]>;
 }

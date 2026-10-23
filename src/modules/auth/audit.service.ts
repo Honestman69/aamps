@@ -339,4 +339,9 @@ export class AuditService {
     const rows = await this.repo.listForVerify(tenantId, limit);
     return verifyAuditChain(rows);
   }
+
+  /** 后台展示用：最近 N 条（倒序） */
+  async listRecent(tenantId: string, limit = 100): Promise<AuditLogRow[]> {
+    return this.repo.listRecent(tenantId, limit);
+  }
 }

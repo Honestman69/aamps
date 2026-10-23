@@ -1,0 +1,170 @@
+/**
+ * HTTP 层冒烟：对**已经跑起来的服务**发真实请求。
+ *
+ * 验证的是端到端行为，不是代码形状：
+ *   鉴权 → 登录 → 改密 → 锁定 → 重新解锁 → 管理员接口 → 审计链
+ * 以及最关键的一条：**任何响应体里都不许出现 Key 明文或密文**。
+ *
+ * 用法：
+ *   BASE_URL=http://127.0.0.1:3111 ADMIN_PASSWORD=... npx tsx scripts/http-smoke.ts
+ */
+
+import assert from 'node:assert/strict';
+
+const BASE = process.env.BASE_URL ?? 'http://127.0.0.1:3111';
+const ADMIN = process.env.SMOKE_USERNAME ?? 'smoke_http_admin';
+const PASSWORD = process.env.SMOKE_PASSWORD ?? 'smoke-http-pass-01';
+const NEW_PASSWORD = process.env.SMOKE_NEW_PASSWORD ?? 'smoke-http-pass-02';
+
+/** 极简 cookie jar：只关心我们自己的 session cookie */
+let cookie = '';
+
+type Res = { status: number; body: any; setCookie: string | null; raw: string };
+
+async function call(
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<Res> {
+  const headers: Record<string, string> = {};
+  if (body !== undefined) {
+    headers['content-type'] = 'application/json';
+  }
+  if (cookie) {
+    headers.cookie = cookie;
+  }
+  const response = await fetch(`${BASE}${path}`, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const raw = await response.text();
+  const setCookie = response.headers.get('set-cookie');
+  if (setCookie) {
+    // 只取 name=value 部分
+    const first = setCookie.split(';')[0]!;
+    cookie = first.endsWith('=') ? '' : first;
+  }
+  let parsed: any = null;
+  try {
+    parsed = raw ? JSON.parse(raw) : null;
+  } catch {
+    parsed = raw;
+  }
+  assert.ok(
+    !raw.includes('sk-live') && !raw.includes('dek:v1:') && !raw.includes('wrap:v1:'),
+    `${method} ${path} 的响应里出现了密钥材料`,
+  );
+  return { status: response.status, body: parsed, setCookie, raw };
+}
+
+function step(name: string): void {
+  process.stdout.write(`• ${name}\n`);
+}
+
+async function main(): Promise<void> {
+  step('未登录访问 /api/auth/me → 401');
+  let res = await call('GET', '/api/auth/me');
+  assert.equal(res.status, 401);
+
+  step('错误密码登录 → 401，且不泄漏"用户存在与否"');
+  res = await call('POST', '/api/auth/login', { username: ADMIN, password: 'definitely-wrong-pass' });
+  assert.equal(res.status, 401);
+  const wrongUser = await call('POST', '/api/auth/login', { username: 'no-such-user', password: 'whatever-1234' });
+  assert.equal(wrongUser.status, 401);
+  assert.equal(wrongUser.body?.message, res.body?.message, '两种失败的文案必须一致（防枚举）');
+
+  step('正确密码登录 → 200 + HttpOnly cookie');
+  res = await call('POST', '/api/auth/login', { username: ADMIN, password: PASSWORD });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(res.body.unlocked, true);
+  assert.match(res.setCookie ?? '', /HttpOnly/);
+  assert.ok(!(res.setCookie ?? '').includes('dek'), 'cookie 里不允许出现密钥材料');
+
+  step('/api/auth/me → 已解锁，且只返回身份字段');
+  res = await call('GET', '/api/auth/me');
+  assert.equal(res.status, 200);
+  assert.equal(res.body.unlocked, true);
+  assert.deepEqual(Object.keys(res.body.user).sort(), ['id', 'role', 'username']);
+
+  step('本人改密 → 200，当前会话仍可用');
+  res = await call('POST', '/api/auth/password', {
+    oldPassword: PASSWORD,
+    newPassword: NEW_PASSWORD,
+  });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  res = await call('GET', '/api/auth/me');
+  assert.equal(res.body.unlocked, true);
+
+  step('旧密码不能再解锁 → 401');
+  res = await call('POST', '/api/auth/unlock', { password: PASSWORD });
+  assert.equal(res.status, 401);
+
+  step('新密码可以重新解锁 → 200');
+  res = await call('POST', '/api/auth/unlock', { password: NEW_PASSWORD });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.unlocked, true);
+
+  step('管理员接口：用户列表不含任何密钥材料');
+  res = await call('GET', '/api/admin/users');
+  assert.equal(res.status, 200);
+  const users = res.body as Array<Record<string, unknown>>;
+  assert.ok(Array.isArray(users) && users.length >= 1);
+  for (const user of users) {
+    for (const forbidden of ['wrappedDek', 'keySalt', 'passwordHash', 'apiKeyEnc']) {
+      assert.ok(!(forbidden in user), `用户列表泄漏字段 ${forbidden}`);
+    }
+  }
+  const self = users.find((user) => user.username === ADMIN)!;
+  assert.equal(self.dekInitialized, true);
+
+  step('重置自己 → 403（必须走改密路径）');
+  res = await call('POST', `/api/admin/users/${String(self.id)}/reset-password`, {
+    newPassword: 'another-pass-123456',
+    confirmUsername: ADMIN,
+  });
+  assert.equal(res.status, 403);
+
+  step('二次确认用户名不匹配 → 403');
+  res = await call('POST', '/api/admin/users/no-such-id/reset-password', {
+    newPassword: 'another-pass-123456',
+    confirmUsername: 'wrong-name',
+  });
+  assert.equal(res.status, 403);
+
+  step('审计列表：动作齐全且已脱敏');
+  res = await call('GET', '/api/admin/audit?limit=50');
+  assert.equal(res.status, 200);
+  const rows = res.body as Array<Record<string, any>>;
+  const actions = rows.map((row) => row.action);
+  for (const expected of ['user.create', 'credential.unlock', 'user.password_change']) {
+    assert.ok(actions.includes(expected), `审计缺少 ${expected}，实际：${actions.join(',')}`);
+  }
+  const dump = JSON.stringify(rows);
+  for (const forbidden of [PASSWORD, NEW_PASSWORD, 'passwordHash', 'wrappedDek', 'keySalt']) {
+    assert.ok(!dump.includes(forbidden), `审计泄漏了 ${forbidden}`);
+  }
+
+  step('审计链校验 → ok');
+  res = await call('POST', '/api/admin/audit/verify');
+  assert.equal(res.status, 200);
+  assert.equal(res.body.ok, true, JSON.stringify(res.body));
+
+  step('锁定 → 会话失效');
+  res = await call('POST', '/api/auth/lock');
+  assert.equal(res.status, 200);
+  res = await call('GET', '/api/auth/me');
+  assert.equal(res.status, 401);
+
+  step('伪造 cookie → 401（签名校验生效）');
+  cookie = 'aamps_sid=forged-session-id.deadbeef';
+  res = await call('GET', '/api/auth/me');
+  assert.equal(res.status, 401);
+
+  process.stdout.write('\nHTTP SMOKE PASSED\n');
+}
+
+main().catch((err) => {
+  process.stderr.write(`\nHTTP SMOKE FAILED: ${(err as Error).message}\n`);
+  process.exitCode = 1;
+});

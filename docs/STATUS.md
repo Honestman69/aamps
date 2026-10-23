@@ -4,7 +4,7 @@
 > 新会话接手时，直接从「下一步」开始，不要重新规划。
 
 **最后更新**：2026-10-23
-**当前阶段**：M0 安全底座完成到**服务层**（HTTP 层与 NestJS 装配未开始）
+**当前阶段**：M0 收尾（认证 + HTTP 层已完成，剩凭据管理与零知识验收）
 
 ---
 
@@ -16,6 +16,8 @@
   直接 `git push` 即可；若出现 `Connection reset`，先重试一次，通常是网络波动。
 - 包管理器：本机原本没有 pnpm，已用 `corepack enable pnpm`（9.15.0）装好；依赖已 `pnpm install`。
   `corepack pnpm install` 首次约 9 分钟，别以为卡死了。
+- 构建：`pnpm build` 先构建 `packages/*`（契约包 `main` 指向 `dist/index.js`）再编译主服务。
+  只跑 `tsc` 不构建包，运行时会 `ERR_MODULE_NOT_FOUND`。
 
 ---
 
@@ -85,18 +87,48 @@
 - **审计 `createdAt` 在进程内严格递增**（同一毫秒顺延 1ms）。否则按时间重算链时同毫秒记录的顺序会退化成按 cuid 排序，一条没被改过的链会被误报断链。跨进程仍需数据库序列，当前单进程 + SQLite（D010）。
 - **审计 payload 裁剪按字段名精确判定 + 值形态兜底**，不能用 `/(dek|key|token)/` 这类宽正则——曾经把 `dekVersion`、`wrapDekDestroyed` 也抹了，审计当场失去意义。
 
-### 第 4 步：HTTP 层与启动装配（M1 开头）← 现在做这个
+### ~~第 4 步：HTTP 层与启动装配~~ ✅ 已完成
 
-- [ ] `src/main.ts` + NestJS(Fastify) 启动：加载 `.env`、连 Prisma、跑 `assertNoLegacyCiphertexts`、执行 `ensureSuperadmin`
-- [ ] `AuthModule`：把 `RuntimeKeyStore` / `AuditService` 注册为**单例**（全进程共用，不能每个请求 new 一个）
-- [ ] 接口：`POST /api/auth/login`（校验密码 + 解锁）、`POST /api/auth/unlock`、`POST /api/auth/lock`、`POST /api/auth/password`（本人改密）、`POST /api/admin/users/:id/reset-password`（管理员重置，二次确认）
-- [ ] 会话：签名 cookie/JWT 只存 sessionId，**不存任何 DEK 材料**；`SESSION_TTL_HOURS` 控制解锁态
-- [ ] `GET /api/admin/audit` + `POST /api/admin/audit/verify`（报断点）
-- [ ] 全局异常过滤器：`AppError.code` → HTTP 状态；**错误信息不回显任何密钥片段**
+- [x] `src/main.ts` —— 启动顺序：连库 → 密文前缀自检 → 种子管理员 → 才监听端口
+- [x] `app.module.ts` —— `ConfigModule` + 全局 `PrismaModule` + `AuthModule`
+- [x] `AuthModule` —— `RuntimeKeyStore` / `SessionService` 注册为**单例**，全部 `useFactory` + 显式 `inject`
+- [x] 接口：`login`（登录即解锁）、`unlock`、`lock`、`me`、`POST /api/auth/password`
+- [x] 管理端：`GET /api/admin/users`（脱敏 DTO）、`POST /api/admin/users/:id/reset-password`（二次确认用户名）、`GET /api/admin/audit`、`POST /api/admin/audit/verify`
+- [x] `SessionService` —— 内存会话 + HMAC 签名 cookie，HttpOnly / SameSite=Lax，生产加 Secure
+- [x] `SessionGuard` + `@CurrentSession()`
+- [x] `AppExceptionFilter` —— `AppError` → 状态码 + `code`；非预期异常一律 500「内部错误」，只记 method/path/code（**不记 body**）
+- [x] `scripts/http-smoke.ts` —— 对运行中的服务发真实请求的 14 项检查
 
-**验收**：`docs/SECURITY.md` 第 8 节剩余条目（HTTP 层那几条）逐条通过，尤其是「superadmin 抓遍所有接口只看得到 `sk-****a1b2`」。
+**验收**：`scripts/http-smoke.ts` 全部通过（对照真服务、真 SQLite）：
 
-**注意**：`resetPasswordSelf` 目前只到服务层。它**绝不能**挂成未认证的 HTTP 接口，否则等于给任何人一个账号接管入口——要挂就只挂在本地控制台/运维脚本后面。
+- 未登录 401；错误密码与不存在用户**文案一致**（防枚举）
+- 登录下发 HttpOnly cookie，cookie 里不含任何密钥材料
+- 改密后当前会话仍可用，旧密码立刻失效，新密码可重新解锁
+- `GET /api/admin/users` 不含 `wrappedDek` / `keySalt` / `passwordHash` / `apiKeyEnc`
+- 重置自己 403；二次确认用户名不匹配 403
+- 审计列表动作齐全且不含密码/密文；`audit/verify` 返回 `ok: true`
+- 锁定后会话失效；伪造 cookie 401（签名校验生效）
+- **每个响应体都断言过不含 `sk-` 明文与 `dek:v1:` / `wrap:v1:` 密文**
+
+**实现补充（后续不要改）**：
+
+- **会话不带 JWT**：cookie 里只有 `sessionId.hmac`。会话状态在服务端内存，撤销（改密/重置/锁定）能立即生效；代价是进程重启要重新登录（与 D005 一致）。
+- **`BOOTSTRAP_ADMIN_PASSWORD` 只在建号时用一次**，账号已存在就跳过。不要改成"配置里改密码就生效"，那是后门。
+- **启动顺序不能调换**：先自检再监听。反过来会让一个有问题的实例先对外服务几百毫秒。
+- `resetPasswordSelf`（忘记密码）**没有挂 HTTP 路由**，只到服务层。它是"无法证明身份"的路径，挂成未认证接口等于账号接管入口。
+- 构建：`pnpm build` 会**先构建 `packages/*`，再编译主服务**。契约包 `main` 指向 `dist/index.js`，所以直接 `tsc` 主服务而不构建包，运行时会 `ERR_MODULE_NOT_FOUND`。
+
+### 第 5 步：凭据管理 + 零知识验收（M0 收尾）← 现在做这个
+
+- [ ] `CredentialRepository`：只有 `createForUser` / `listForUser` / `findForUser(userId, id)` / `updateForUser` / `deleteForUser`，**没有 `findById` / `findMany`**
+- [ ] `CredentialService`：新增时用 owner 的 DEK 加密（`decryptApiKey` 之外**不允许**其他地方碰明文）、只存 `keyMasked`
+- [ ] 接口：`GET/POST /api/credentials`、`PATCH/DELETE /api/credentials/:id`
+- [ ] DTO 收窄：类型里没有 `apiKeyEnc`，列表只返回 `keyMasked`（`sk-****a1b2`）
+- [ ] 零知识验收：superadmin 抓遍所有接口 + 直查数据库，只看得到掩码
+
+**验收**：`docs/SECURITY.md` 第 8 节剩余 1/2/3/4 条全部打勾；写一条"跨用户查询返回空"的测试（CONVENTIONS 要求）。
+
+**注意**：`decryptApiKey` 的调用方最终只应有 `ModelGateway.dispatch()` 一处（`SECURITY.md` 5.3）。第 5 步写加密侧时**先不要写解密函数**，等 M2 的 Gateway 一起加，避免提前长出多个调用点。
 
 ---
 
@@ -182,6 +214,7 @@
 - [x] 2026-10-23 **密码学底座** `src/common/crypto/`（argon2 / envelope / random / errors + 13 个测试用例）
 - [x] 2026-10-23 依赖安装与测试链路打通（`vitest.config.ts` 别名、`pnpm test` 可跑、`pnpm typecheck` 全绿）
 - [x] 2026-10-23 **认证与密钥库** `src/modules/auth/`（RuntimeKeyStore / PasswordService / UnlockService / AuditService / Bootstrap + Prisma 仓储 + 启动自检）
+- [x] 2026-10-23 **HTTP 层**：NestJS(Fastify) 启动装配、会话与签名 cookie、6 个认证/管理接口、全局异常过滤器、14 项 HTTP 冒烟
 - [x] 2026-10-23 Prisma 首次迁移 `20261023145901_init`，`scripts/auth-smoke.ts` 真实库冒烟通过
 
 ---
@@ -205,4 +238,5 @@
 | 2026-10-23 | 项目初始化：完成需求调研、架构、数据模型、模型接入、安全模型设计与交接文档 |
 | 2026-10-23 | 完成密码学底座：Argon2id KEK 派生、DEK 信封加解密、AAD 绑定前缀、13 个测试用例；依赖已安装 |
 | 2026-10-23 | 追加 D014：KDF 库固定 `@node-rs/argon2`（实测 `argon2` 亦可用，依据是"无编译回退路径"而非"跑不起来"）；并补「依赖类取舍写在哪」的判定标准 |
+| 2026-10-23 | 完成 HTTP 层：登录即解锁、签名 cookie 会话、管理端重置/审计接口、启动自检接入；14 项 HTTP 冒烟通过 |
 | 2026-10-23 | 完成认证与密钥库服务层：DEK 内存库、改密/重置双路径、解锁、审计哈希链、启动自检、Prisma 仓储、superadmin 种子；50 个单测 + 真实库冒烟通过 |
