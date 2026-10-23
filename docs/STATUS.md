@@ -4,7 +4,7 @@
 > 新会话接手时，直接从「下一步」开始，不要重新规划。
 
 **最后更新**：2026-10-23
-**当前阶段**：M0 安全底座（设计完成，契约层已落地，加密层未开始）
+**当前阶段**：M0 安全底座完成到**服务层**（HTTP 层与 NestJS 装配未开始）
 
 ---
 
@@ -14,6 +14,8 @@
 - 分支：`main`，首个提交 `ceccdc6`
 - 网络：本机 `github.com:22` 会被重置，`~/.ssh/config` 已配置走 `ssh.github.com:443` + `Compression yes`。
   直接 `git push` 即可；若出现 `Connection reset`，先重试一次，通常是网络波动。
+- 包管理器：本机原本没有 pnpm，已用 `corepack enable pnpm`（9.15.0）装好；依赖已 `pnpm install`。
+  `corepack pnpm install` 首次约 9 分钟，别以为卡死了。
 
 ---
 
@@ -33,25 +35,68 @@
 > 契约已提升为独立包 `@newjob/contracts`，是主服务与所有适配器之间**唯一**的共享依赖。
 > 改它等于改所有包，改动前先想清楚。
 
-### 第 2 步：密码学底座（`src/common/crypto/`）← 现在做这个
+### ~~第 2 步：密码学底座（`src/common/crypto/`）~~ ✅ 已完成
 
-- [ ] `argon2.ts` —— `deriveKek(password, salt)`，参数 m=64MiB / t=3 / p=4 / hashLen=32
-- [ ] `envelope.ts` —— `wrapDek` / `unwrapDek` / `encryptWithDek` / `decryptWithDek`
-- [ ] `random.ts` —— `randomBytes` 的安全封装（DEK 32B、salt 16B、IV 12B）
-- [ ] 密文格式严格为 `dek:v1:<iv>:<tag>:<cipher>` 与 `wrap:v1:<base64(iv)>:<base64(tag)>:<base64(cipher)>`
+- [x] `argon2.ts` —— `deriveKek(password, salt)`，参数 m=64MiB / t=3 / p=4 / hashLen=32
+- [x] `envelope.ts` —— `wrapDek` / `unwrapDek` / `encryptWithDek` / `decryptWithDek`
+- [x] `random.ts` —— `randomBytes` 的安全封装（DEK 32B、salt 16B、IV 12B）
+- [x] 密文格式严格为 `dek:v1:<base64(iv)>:<base64(tag)>:<base64(cipher)>` 与 `wrap:v1:<base64(iv)>:<base64(tag)>:<base64(cipher)>`
+- [x] `errors.ts` —— `DecryptionFailedError` / `SealedFormatError` / `LegacyCiphertextError`（错误信息不含密文片段）
+- [x] `index.ts` —— 统一出口，业务代码只从这里取
 
-**验收**：`pnpm test` 通过三个用例——加解密往返、错误密码解不开、篡改密文触发 GCM 校验失败。
+**验收**：`pnpm test` 通过 13 个用例（加解密往返、错误密码解不开、篡改密文触发 GCM 校验失败、格式约束、AAD 绑定、Argon2 参数实际生效）。
 
-**注意**：用 `@node-rs/argon2`（Rust 实现，有预编译二进制），不要用 `argon2` 包——后者在 Windows 上要现场编译，容易卡住。
+**实现补充（后续不要改）**：
 
-### 第 3 步：认证与密钥库（`src/modules/auth/`）
+- 前缀 `dek:v1:` / `wrap:v1:` **同时作为 GCM 的 AAD**，所以 wrap 密文无法被当成 dek 密文解开（反之亦然）。这是"双解密路径"的第二道防线。
+- `argon2.ts` 里 `Algorithm` / `Version` 只能写成数值常量（`2` / `1`）并加类型断言。`@node-rs/argon2` 把它俩声明成 `declare const enum`，**运行时是空对象**；写 `Algorithm.Argon2id` 会拿到 `undefined`，库悄悄回落默认值（m=19MiB / t=2），安全性被降级但代码看起来完全正常。已用 `parseOptions` 反查参数的用例锁住。
+- 测试用 `vitest.config.ts` 配了 `@` 与 `@newjob/contracts` 别名，契约包直接指向源码（`packages/contracts/src/index.ts`），不要求先编译。
+- **KDF 库用 `@node-rs/argon2`，不要换成 `argon2` 包。** 理由（2026-10-23 实测修正过，别按旧说法理解）：
+  两个库在本机都能跑——`argon2` 0.45.1 自带 `prebuilds/win32-x64`，14 秒装完、Argon2id 出 32B 正常；
+  但它是 `node-gyp-build` 找预编译包，遇到不匹配的平台/ABI 会回落到 node-gyp 现场编译（要 VS Build Tools + Python），
+  而 `@node-rs/argon2` 是 napi 二进制、没有这条回退路径。**选后者是"永远不会进入编译分支"，不是"前者跑不起来"。**
+  真要换（只有 `argon2.ts` 一个文件 + `parseOptions` 那条用例受影响），先问清楚再动。**已升级为决策，见 `DECISIONS.md` D014。**
 
-- [ ] `runtime-key-store.ts` —— 内存 Map，`set/get/clear`，**不持久化**
-- [ ] `password.service.ts` —— `changePassword`（重包裹）与 `resetPassword`（销毁）两个独立方法
-- [ ] `unlock.service.ts` —— 登录/解锁时解出 DEK 放入 store
-- [ ] 审计哈希链 `audit.service.ts`
+### ~~第 3 步：认证与密钥库（`src/modules/auth/`）~~ ✅ 已完成
 
-**验收**：`docs/SECURITY.md` 第 8 节的 14 条检查清单逐条通过。
+- [x] `runtime-key-store.ts` —— 内存 Map，`set/get/clear/clearForUser/touch/purgeExpired`，**不持久化**，`toJSON()` 只输出条目数
+- [x] `password.service.ts` —— `changePassword`（重包裹，单事务 CAS）与 `resetPassword`（销毁）两条独立方法，外加 `resetPasswordSelf`（忘记密码）
+- [x] `unlock.service.ts` —— 登录/解锁时解出 DEK；首次登录才生成 DEK；密码对但解不开时**不覆盖**
+- [x] `audit.service.ts` —— 哈希链、`verifyTenant` 断点校验、payload 兜底裁剪
+- [x] `ports.ts` —— Repository 接口（CAS 语义写进签名）
+- [x] `dek-guard.ts` —— 解 wrappedDek 的三种失败统一映射（损坏 / 格式非法 / 旧格式）
+- [x] `startup-check.ts` —— 扫描密文前缀，发现 `enc:v1:` 直接拒绝启动（SECURITY.md 第 8 条第 12 条）
+- [x] `bootstrap.service.ts` —— 首次启动建 superadmin（幂等，不改已有账号密码）
+- [x] `repositories/prisma-*.ts` —— Prisma 实现（CAS 用 `updateMany` + where 带旧值，一条 SQL 完成）
+- [x] Prisma 首次迁移 `20261023145901_init` 已应用，`data/dev.db` 已建
+- [x] `scripts/auth-smoke.ts` —— 真实 SQLite 端到端冒烟
+
+**验收**：
+
+- `pnpm test` **50 个用例全绿**（crypto 13 + auth 37）
+- `pnpm typecheck` 全绿（主服务 + contracts + adapter-qq）
+- `scripts/auth-smoke.ts` 在独立 `smoke.db` 上跑通：建号 → 首次解锁生成 DEK → 本人改密后**原 Key 仍可解密** → 管理员重置后**旧 Key 解不开** → 审计链完整 → 旧格式密文触发启动失败
+- 跑法：`DATABASE_URL="file:../data/smoke.db" npx prisma migrate deploy` 然后 `DATABASE_URL="file:../data/smoke.db" npx tsx scripts/auth-smoke.ts`。**别指向 dev.db**，脚本会真的写数据。
+
+**实现补充（后续不要改）**：
+
+- **CAS 必须用一条 SQL**：`updateMany({ where: { id, passwordHash, wrappedDek } })`，不要"先读再判断再写"。两个并发改密请求之间只要有空隙，就会出现"哈希写成新的、wrappedDek 还是旧的"这种最难排查的损坏。
+- **`dekVersion` 只在重置时 +1**。改密是"换 KEK 重包裹同一把 DEK"，DEK 本身没换代，版本号不该动。
+- **审计 `createdAt` 在进程内严格递增**（同一毫秒顺延 1ms）。否则按时间重算链时同毫秒记录的顺序会退化成按 cuid 排序，一条没被改过的链会被误报断链。跨进程仍需数据库序列，当前单进程 + SQLite（D010）。
+- **审计 payload 裁剪按字段名精确判定 + 值形态兜底**，不能用 `/(dek|key|token)/` 这类宽正则——曾经把 `dekVersion`、`wrapDekDestroyed` 也抹了，审计当场失去意义。
+
+### 第 4 步：HTTP 层与启动装配（M1 开头）← 现在做这个
+
+- [ ] `src/main.ts` + NestJS(Fastify) 启动：加载 `.env`、连 Prisma、跑 `assertNoLegacyCiphertexts`、执行 `ensureSuperadmin`
+- [ ] `AuthModule`：把 `RuntimeKeyStore` / `AuditService` 注册为**单例**（全进程共用，不能每个请求 new 一个）
+- [ ] 接口：`POST /api/auth/login`（校验密码 + 解锁）、`POST /api/auth/unlock`、`POST /api/auth/lock`、`POST /api/auth/password`（本人改密）、`POST /api/admin/users/:id/reset-password`（管理员重置，二次确认）
+- [ ] 会话：签名 cookie/JWT 只存 sessionId，**不存任何 DEK 材料**；`SESSION_TTL_HOURS` 控制解锁态
+- [ ] `GET /api/admin/audit` + `POST /api/admin/audit/verify`（报断点）
+- [ ] 全局异常过滤器：`AppError.code` → HTTP 状态；**错误信息不回显任何密钥片段**
+
+**验收**：`docs/SECURITY.md` 第 8 节剩余条目（HTTP 层那几条）逐条通过，尤其是「superadmin 抓遍所有接口只看得到 `sk-****a1b2`」。
+
+**注意**：`resetPasswordSelf` 目前只到服务层。它**绝不能**挂成未认证的 HTTP 接口，否则等于给任何人一个账号接管入口——要挂就只挂在本地控制台/运维脚本后面。
 
 ---
 
@@ -59,16 +104,16 @@
 
 ### M0 安全底座
 
-- [ ] `User` 表迁移 + 种子数据（创建 superadmin）
-- [ ] Argon2id KEK 派生
-- [ ] DEK 生成 / 包裹 / 解包
-- [ ] `RuntimeKeyStore`（内存，不落盘）
-- [ ] 登录 → 解锁 → DEK 就位
-- [ ] 锁定 / 会话过期满 → DEK 清除
-- [ ] `changePassword`：单事务重包裹，Key 不变
-- [ ] `resetPassword`：销毁 wrappedDek + 停用全部 Credential
-- [ ] 审计日志 + 哈希链 + 完整性校验接口
-- [ ] 零知识验收：用 superadmin 登录，抓所有接口，只看得到 `sk-****a1b2`
+- [x] `User` 表迁移 + 种子数据（创建 superadmin）
+- [x] Argon2id KEK 派生
+- [x] DEK 生成 / 包裹 / 解包
+- [x] `RuntimeKeyStore`（内存，不落盘）
+- [x] 登录 → 解锁 → DEK 就位
+- [x] 锁定 / 会话过期满 → DEK 清除
+- [x] `changePassword`：单事务重包裹，Key 不变
+- [x] `resetPassword`：销毁 wrappedDek + 停用全部 Credential
+- [x] 审计日志 + 哈希链 + 完整性校验接口
+- [ ] 零知识验收：用 superadmin 登录，抓所有接口，只看得到 `sk-****a1b2`（需 HTTP 层）
 
 ### M1 骨架
 
@@ -134,6 +179,10 @@
 - [x] 2026-10-23 多平台扩展抽象（platform / protocol / capabilities 分离，见 D012）
 - [x] 2026-10-23 **monorepo 改造**：契约提升为 `@newjob/contracts`，QQ 适配器独立为 `@newjob/adapter-qq`，依赖方向单向（见 D013）
 - [x] 2026-10-23 适配器开发 SDK（`AdapterManifest` / `IAdapterFactory` / `ConfigField`，前端可据此动态渲染表单）
+- [x] 2026-10-23 **密码学底座** `src/common/crypto/`（argon2 / envelope / random / errors + 13 个测试用例）
+- [x] 2026-10-23 依赖安装与测试链路打通（`vitest.config.ts` 别名、`pnpm test` 可跑、`pnpm typecheck` 全绿）
+- [x] 2026-10-23 **认证与密钥库** `src/modules/auth/`（RuntimeKeyStore / PasswordService / UnlockService / AuditService / Bootstrap + Prisma 仓储 + 启动自检）
+- [x] 2026-10-23 Prisma 首次迁移 `20261023145901_init`，`scripts/auth-smoke.ts` 真实库冒烟通过
 
 ---
 
@@ -154,3 +203,6 @@
 | 日期 | 变更 |
 |---|---|
 | 2026-10-23 | 项目初始化：完成需求调研、架构、数据模型、模型接入、安全模型设计与交接文档 |
+| 2026-10-23 | 完成密码学底座：Argon2id KEK 派生、DEK 信封加解密、AAD 绑定前缀、13 个测试用例；依赖已安装 |
+| 2026-10-23 | 追加 D014：KDF 库固定 `@node-rs/argon2`（实测 `argon2` 亦可用，依据是"无编译回退路径"而非"跑不起来"）；并补「依赖类取舍写在哪」的判定标准 |
+| 2026-10-23 | 完成认证与密钥库服务层：DEK 内存库、改密/重置双路径、解锁、审计哈希链、启动自检、Prisma 仓储、superadmin 种子；50 个单测 + 真实库冒烟通过 |

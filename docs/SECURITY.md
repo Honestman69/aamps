@@ -287,6 +287,7 @@ hash = sha256(prevHash + actorUserId + action + target + createdAt + payloadDige
 | `user.password_change` | 本人改密码（重包裹 DEK，Key 保留） |
 | `user.password_reset` | 管理员重置他人密码（销毁 wrappedDek，Key 报废） |
 | `user.password_reset_self` | 本人走忘记密码流程（同样销毁） |
+| `user.create` | 建号（首次启动种子 / 用户管理），记录用户名与角色，不记录密码 |
 | `admin.impersonate`（如果实现） | 管理员以他人身份操作，必须留痕 |
 
 `credential.unlock` 这条日志的价值：如果哪天怀疑 Key 泄露，它能告诉你哪些时间窗口内明文存在于内存中。
@@ -316,18 +317,20 @@ hash = sha256(prevHash + actorUserId + action + target + createdAt + payloadDige
 - [ ] 所有对外 DTO 类型中不含 `apiKeyEnc` 字段（靠 TypeScript 编译期保证）
 - [ ] `decryptApiKey` 全局只有 1 处调用
 - [ ] `change-password` 与 `reset-password` 是两个独立接口，前者强制校验旧密码
-- [ ] `change-password` 在**单事务**内同时更新 `passwordHash` 与 `wrappedDek`，任一失败整体回滚
-- [ ] `change-password` 不修改任何 `Credential` 记录（Key 必须原样保留）
-- [ ] `reset-password` 不校验旧密码，且必须销毁 `wrappedDek` 并停用该用户全部 Credential
-- [ ] 「是否销毁」的判定依据是 **操作者 ≠ 目标用户**，而不是操作者是否为 superadmin
-- [ ] 忘记密码流程复用 `reset-password` 的销毁语义，不复用重包裹逻辑
-- [ ] 审计 action 区分 `password_change` / `password_reset` / `password_reset_self`
-- [ ] 启动自检：扫描 `Credential.apiKeyEnc`，发现非 `dek:v1:` 前缀则拒绝启动并提示迁移
+- [x] `change-password` 在**单事务**内同时更新 `passwordHash` 与 `wrappedDek`，任一失败整体回滚（CAS 单条 SQL）
+- [x] `change-password` 不修改任何 `Credential` 记录（Key 必须原样保留）
+- [x] `reset-password` 不校验旧密码，且必须销毁 `wrappedDek` 并停用该用户全部 Credential
+- [x] 「是否销毁」的判定依据是 **操作者 ≠ 目标用户**，而不是操作者是否为 superadmin
+- [x] 忘记密码流程复用 `reset-password` 的销毁语义，不复用重包裹逻辑
+- [x] 审计 action 区分 `password_change` / `password_reset` / `password_reset_self`
+- [x] 启动自检：扫描 `Credential.apiKeyEnc`，发现非 `dek:v1:` 前缀则拒绝启动并提示迁移
 - [ ] 日志中间件白名单中不含任何密钥字段
-- [ ] 审计哈希链校验接口可用，且能报出断点
+- [x] 审计哈希链校验接口可用，且能报出断点（服务层 `AuditService.verifyTenant`，HTTP 接口待 M1）
 - [ ] 未解锁时机器人走预设话术 + 通知 owner，而不是静默不回
 
-第 7 条尤其重要：它防止"开发期用全局 KEK 存了几条数据，上线后忘了迁移"这类事故。宁可启动失败，也不要带着两种解密路径上线。
+> **2026-10-23 进度**：服务层条目已全部打勾（`src/modules/auth/`），并有 50 个单测 + 真实 SQLite 端到端冒烟兜底。
+> 剩下 6 条都依赖 HTTP 层或 M2 的消息链路，随第 4 步一起做。
+> 第 7 条尤其重要：它防止"开发期用全局 KEK 存了几条数据，上线后忘了迁移"这类事故。宁可启动失败，也不要带着两种解密路径上线。
 
 ---
 

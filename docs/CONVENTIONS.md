@@ -16,6 +16,7 @@
 | 前端 | Vue 3 + Vite + Element Plus + Pinia |
 | 包管理 | pnpm |
 | 测试 | Vitest |
+| KDF | `@node-rs/argon2`（**不要换 `argon2` 包**，见 D014） |
 
 ---
 
@@ -79,6 +80,20 @@ export type CredentialPublicDTO = {
 
 - 所有导出的函数写返回类型，不依赖推断。
 - 禁止 `@ts-ignore`，必要时用 `@ts-expect-error` 并附原因注释。
+
+### 第三方库的 `const enum`：运行时不存在
+
+`@node-rs/argon2` 把 `Algorithm` / `Version` 声明成 `declare const enum`。这类枚举**只活在类型里**，
+`require()` 出来是空对象，`Algorithm.Argon2id` 得到 `undefined`。而 esbuild / tsx / vitest 都不做
+const enum 内联，于是值被静默传给底层库、回落到库的默认参数——代码照常跑，安全参数却被降级了。
+
+遇到这类库，用带类型断言的数值常量，并写一条"反查参数"的测试：
+
+```ts
+const ALGORITHM_ARGON2ID = 2 as Algorithm;   // 不要写 Algorithm.Argon2id
+```
+
+判断标准：只要某个"配置项"影响安全等级（KDF 参数、加密算法、迭代次数），就必须有断言证明它真的生效。
 
 ---
 
