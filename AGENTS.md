@@ -32,6 +32,28 @@
 
 ---
 
+## 换机器 / 全新克隆（6 步，别跳）
+
+仓库里**没有** `.env`，也没有 `data/*.db`（都在 `.gitignore` 里）。新克隆的仓库直接 `pnpm dev` 会失败，按顺序来：
+
+```bash
+pnpm install                    # 首次约 9 分钟，别以为卡死了
+cp .env.example .env            # 然后改 DATABASE_URL="file:../data/dev.db"
+                                # 注意：相对路径按 prisma/ 解析，不是项目根
+pnpm prisma:migrate             # 或 DATABASE_URL=... npx prisma migrate deploy
+pnpm build                      # 先构建 packages/*，否则运行期 ERR_MODULE_NOT_FOUND
+pnpm test                       # 应为全绿（当前 51 个用例）
+pnpm dev                        # 或 node dist/src/main.js
+```
+
+两个自己踩过的坑：
+
+1. **`BOOTSTRAP_ADMIN_PASSWORD` 只在首次建号时生效**。换个空库跑会新建管理员；
+   账号已存在时会跳过并打印原因，不会改别名密码。
+2. **`SESSION_SECRET` 缺失或短于 32 字符会直接拒绝启动**。这是刻意的——给它默认值等于公开所有会话签名。
+
+---
+
 ## 硬性规则（违反即返工）
 
 1. **API Key 的明文只有上传者本人可见。** 部署者（superadmin）拥有全部系统权限，但**没有**读取 Key 明文的代码路径。这不是"暂不开放"，是架构级不可达。
