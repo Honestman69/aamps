@@ -281,11 +281,12 @@ export class AuditService {
   /** 进程内串行队列：保证 prevHash 读取与 append 之间不会插进另一条 */
   private tail: Promise<unknown> = Promise.resolve();
   /**
-   * 上一条的时间戳。用来保证 `createdAt` 在进程内**严格递增**。
+   * 上一条的时间戳（进程内快路径）。
    *
-   * 为什么必须这么做：校验时按 `createdAt` 升序重算链，如果两条记录落在同一毫秒，
-   * 排序就退化成按 id（cuid 是随机的）比较，顺序可能和写入顺序相反，
-   * 于是一条完全没被篡改的链会被误报成"掉链"。这是最难排查的假报警。
+   * 注意：**不能只依赖这个字段**。它活在内存里，进程重启就没了；
+   * 如果重启后系统时钟恰好比库里最后一条的时间还早（NTP 回拨、容器时区/时钟漂移），
+   * 新记录的 `createdAt` 就会排到历史记录前面，校验时会误报"断链"。
+   * 所以真正的时间下限取自**数据库最后一条**，内存字段只是省一次比较。
    */
   private lastCreatedAt: Date | null = null;
 
@@ -298,7 +299,7 @@ export class AuditService {
   async record(input: RecordAuditInput): Promise<AuditLogRow> {
     const run = async (): Promise<AuditLogRow> => {
       const last = await this.repo.lastForTenant(input.tenantId);
-      const createdAt = this.monotonicNow();
+      const createdAt = this.nextTimestamp(last?.createdAt ?? null);
       const draft: Omit<AuditLogRow, 'id'> = {
         tenantId: input.tenantId,
         actorUserId: input.actorUserId ?? null,
@@ -325,11 +326,17 @@ export class AuditService {
     return queued;
   }
 
-  /** 取当前时间；若与上一条相同或更早（时钟回拨），顺延 1ms */
-  private monotonicNow(): Date {
+  /**
+   * 取当前时间，并保证**严格晚于**上一条记录（同时参考数据库最后一条）。
+   * 时钟回拨或重启后时钟偏早都不会破坏链。
+   */
+  private nextTimestamp(lastInDb: Date | null): Date {
     const now = this.clock();
-    if (this.lastCreatedAt && now.getTime() <= this.lastCreatedAt.getTime()) {
-      return new Date(this.lastCreatedAt.getTime() + 1);
+    const floor = lastInDb && this.lastCreatedAt
+      ? new Date(Math.max(lastInDb.getTime(), this.lastCreatedAt.getTime()))
+      : (lastInDb ?? this.lastCreatedAt);
+    if (floor && now.getTime() <= floor.getTime()) {
+      return new Date(floor.getTime() + 1);
     }
     return now;
   }

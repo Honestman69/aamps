@@ -161,6 +161,24 @@ describe('审计哈希链', () => {
     expect(verifyAuditChain(rows).ok).toBe(true);
   });
 
+  it('进程重启（新实例）且时钟回拨时，链仍然完整', async () => {
+    const repo = new FakeAuditRepository();
+    const later = new Date('2026-10-23T12:00:00.000Z');
+    const first = new AuditService(repo, () => later);
+    await first.record({ tenantId: TEST_TENANT, actor: 'user', action: AuditAction.CredentialUnlock });
+    await first.record({ tenantId: TEST_TENANT, actor: 'user', action: AuditAction.CredentialLock });
+
+    // 模拟重启：新实例、时钟比库里最后一条还早（NTP 回拨 / 容器时钟漂移）
+    const earlier = new Date('2026-10-23T10:00:00.000Z');
+    const restarted = new AuditService(repo, () => earlier);
+    await restarted.record({ tenantId: TEST_TENANT, actor: 'user', action: AuditAction.CredentialUnlock });
+
+    const rows = await repo.listForVerify(TEST_TENANT, 100);
+    // 新记录必须排在历史记录之后，否则按时间重算链会误报断链
+    expect(rows[2]!.createdAt.getTime()).toBeGreaterThan(rows[1]!.createdAt.getTime());
+    expect(verifyAuditChain(rows).ok).toBe(true);
+  });
+
   it('并发追加不会让链分叉（进程内串行）', async () => {
     const { repo, service } = makeService();
     await Promise.all(
