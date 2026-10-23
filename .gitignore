@@ -1,0 +1,31 @@
+node_modules/
+dist/
+coverage/
+
+# 环境变量与密钥
+.env
+.env.local
+*.pem
+*.key
+
+# 数据库（含密文与用户数据，绝不入库）
+# 注意：data 目录本身要保留（SQLite 不会自动创建目录），
+# 只忽略目录内的文件，用 .gitkeep 占位。
+data/*
+!data/.gitkeep
+*.db
+*.db-shm
+*.db-wal
+
+# 日志
+*.log
+logs/
+
+# 编辑器
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# WorkBuddy 本地记忆（私有，不进版本库）
+.workbuddy/

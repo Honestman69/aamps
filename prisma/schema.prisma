@@ -1,0 +1,427 @@
+// AI 智能体接入多平台管理系统 · 数据模型
+// 目标库：SQLite（自用）→ PostgreSQL（迁移时仅改 datasource）
+// 说明：SQLite 下 JSON 统一用 String 存序列化结果，字段名带 Json 后缀；迁移 PG 时可改 Json 类型。
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────── 租户（自用阶段恒为 default） ───────────────────────────
+
+model Tenant {
+  id              String   @id @default(cuid())
+  slug            String   @unique @default("default")
+  name            String
+  plan            String   @default("self") // self | pro
+  quotaBots       Int      @default(1)
+  quotaTokensDay  BigInt   @default(0) // 0 = 不限
+  createdAt       DateTime @default(now())
+
+  users       User[]
+  instances   BotInstance[]
+  credentials Credential[]
+  ruleSets    RuleSet[]
+  auditLogs   AuditLog[]
+}
+
+// ─────────────────────────── 用户（权限与密钥隔离的核心） ───────────────────────────
+
+// 安全模型：部署者 = superadmin，拥有全部系统权限，但不具备任何用户 API Key 的
+// 明文读取能力。原因见 docs/SECURITY.md：每条 Key 由「用户私有的 DEK」加密，
+// 而 DEK 由用户密码派生的 KEK 包裹，服务端与部署者都不持有解开它所需的材料。
+model User {
+  id           String   @id @default(cuid())
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  username     String   @unique
+  displayName  String?
+  role         String   @default("user") // superadmin | user
+  passwordHash String // Argon2id，参数见 SECURITY.md
+
+  // 信封加密材料（零知识的关键三件套）
+  keySalt      String // 16B 随机盐，hex。与密码一起派生 KEK
+  wrappedDek   String? // 用 password-KEK 加密后的 DEK（AES-256-GCM）
+  dekVersion   Int      @default(1) // 改密时递增；重置密码会销毁 wrappedDek
+
+  status       String   @default("active") // active | disabled
+  lastLoginAt  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  credentials Credential[]
+  instances   BotInstance[]
+  auditLogs   AuditLog[]
+
+  @@index([tenantId, role])
+}
+
+// ─────────────────────────── 模型凭据 ───────────────────────────
+
+// 安全约束（硬性）：
+//   1. apiKeyEnc 必须用「ownerUserId 对应用户的 DEK」加密，禁止使用全局 KEK。
+//      否则部署者持有 KEK 即可解密全部用户的 Key。
+//   2. 任何查询都必须在 where 中带上 ownerUserId，不允许「先查出再过滤」。
+//   3. superadmin 在此表上没有任何读取明文的路径，只有停用权限。
+model Credential {
+  id                 String   @id @default(cuid())
+  tenantId           String
+  tenant             Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ownerUserId        String
+  owner              User     @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+
+  provider           String // deepseek|openai|anthropic|gemini|dashscope|zhipu|moonshot|siliconflow|volcengine|ollama|custom
+  label              String // 后台展示名，如「我的 DeepSeek」
+  ownerLabel         String? // 用途标注，仅本人可见
+  baseUrl            String? // 留空时用 provider 预设
+  authStyle          String   @default("bearer") // bearer | x-api-key | query
+  apiVersion         String? // 如 anthropic-version: 2023-06-01
+  apiKeyEnc          String // 用 owner 的 DEK 加密，前缀 dek:v1:
+  keyMasked          String   @default("") // sk-****a1b2，仅用于界面展示
+
+  defaultModel       String?
+  catalogJson        String   @default("[]") // [{id,name,contextWindow,priceInPerM,priceOutPerM}]
+
+  dailyBudgetCents   Int      @default(0) // 0 = 不限
+  monthlyBudgetCents Int      @default(0)
+  priority           Int      @default(100) // 同 provider 多 Key 时数字小的先用，用于轮换/降级
+
+  enabled            Boolean  @default(true) // superadmin 可置 false（紧急停用），但不可读取
+  disabledBy         String? // 记录是本人停用还是管理员停用
+  lastCheckedAt      DateTime?
+  lastCheckOk        Boolean?
+  lastError          String?
+
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  instances BotInstance[]
+  usages    ModelUsage[]
+
+  @@index([ownerUserId, provider, enabled])
+  @@index([tenantId])
+}
+
+// ─────────────────────────── QQ 机器人实例 ───────────────────────────
+
+model BotInstance {
+  id             String  @id @default(cuid())
+  tenantId       String
+  tenant         Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ownerUserId    String
+  owner          User    @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+
+  name           String // 后台展示名
+  platform       String  @default("qq") // qq | douyin | bilibili（多平台预留，见 D012）
+  accountId      String // 平台内账号标识：QQ 为 QQ 号，抖音为 uid，B站为 mid
+  adapterType    String  @default("onebot") // onebot | official | douyin-open | bili-open（后两者预留）
+
+  // 接入凭据（加密存储；official 用 appId/appSecret，onebot 用 endpoint/token）
+  endpoint       String? // 例：ws://127.0.0.1:6700/onebot/v11/ws
+  accessTokenEnc String?
+  appId          String?
+  appSecretEnc   String?
+
+  enabled        Boolean  @default(true)
+  status         String   @default("offline") // offline | connecting | online | risk | banned
+  healthScore    Int      @default(100) // 0-100，风控巡检更新
+  silentUntil    DateTime? // 全局静默截止时间
+  dailyMsgCap    Int      @default(800)
+  rateLimitPerMin Int     @default(20)
+  nightQuiet     String   @default("00:30-07:30") // 夜间静默时段，仅 @ 除外
+
+  // 模型路由
+  credentialId     String?
+  credential       Credential? @relation(fields: [credentialId], references: [id])
+  modelMain        String?     @default("deepseek-chat")
+  modelCheap       String?     @default("deepseek-chat") // 内心独白等轻任务
+  modelFallback    String?
+  modelTemperature Float       @default(0.85)
+
+  activePersonaId String?
+  activePersona   Persona? @relation("ActivePersona", fields: [activePersonaId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  personas      Persona[]     @relation("InstancePersonas")
+  sessions      Session[]
+  agentState    AgentState?
+  events        InstanceEvent[]
+  relationships Relationship[]
+  memories      MemoryItem[]
+  usages        ModelUsage[]
+
+  @@unique([platform, accountId])
+  @@index([ownerUserId])
+}
+
+// ─────────────────────────── 人设卡片 ───────────────────────────
+
+model Persona {
+  id         String      @id @default(cuid())
+  instanceId String
+  instance   BotInstance @relation("InstancePersonas", fields: [instanceId], references: [id], onDelete: Cascade)
+
+  name       String
+  avatar     String?
+  tagline    String? // 一句话定位
+
+  // 结构化设定，分块存以便单独启停与校验
+  identityJson    String @default("{}") // 名字/年龄/性别/身份/背景故事
+  promptBlocksJson String @default("[]") // [{key,title,content,enabled,order}]
+  examplesJson    String @default("[]") // few-shot [{user, assistant}]
+  openingJson     String @default("{}") // 私聊首句 / 群内首次被@ / 主动消息模板
+  boundariesJson  String @default("[]") // 红线话题、不可承诺、标准拒绝话术
+  variablesJson   String @default("{}") // 自定义变量
+  behaviorJson    String @default("{}") // 见下方 BehaviorConfig
+
+  version          Int     @default(1)
+  status           String  @default("draft") // draft | published | archived
+  publishedSnapshot String? // 发布时全量快照，用于回滚与灰度
+  publishedAt      DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  activeFor BotInstance[] @relation("ActivePersona")
+  sessions  Session[]
+
+  @@index([instanceId, status])
+}
+
+// BehaviorConfig（存于 Persona.behaviorJson）
+// {
+//   "attention": { "thresholdGroup": 0.55, "thresholdBusy": 0.78,
+//                  "weights": { "mention": 0.45, "topicMatch": 0.30,
+//                               "followUp": 0.20, "groupVibe": 0.15 } },
+//   "expression": { "splitChance": 0.7, "maxSegments": 3, "maxCharsPerSegment": 40,
+//                   "typingCps": 4.5, "typoChance": 0.02, "stickerChance": 0.08,
+//                   "recallChance": 0.01 },
+//   "rhythm": { "activeHours": [8, 24], "energyCurve": "day", "weekendBoost": 1.2 },
+//   "proactive": { "enabled": false, "perUserDaily": 1, "globalDaily": 3 }
+// }
+
+// ─────────────────────────── 规则引擎 ───────────────────────────
+
+model RuleSet {
+  id         String   @id @default(cuid())
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name       String
+  scope      String   @default("tenant") // platform | tenant | persona | session
+  personaId  String?
+  sessionId  String?
+  enabled    Boolean  @default(true)
+  priority   Int      @default(100) // 数字小的先执行
+  createdAt  DateTime @default(now())
+
+  rules Rule[]
+
+  @@index([tenantId, scope])
+}
+
+model Rule {
+  id        String  @id @default(cuid())
+  ruleSetId String
+  ruleSet   RuleSet @relation(fields: [ruleSetId], references: [id], onDelete: Cascade)
+
+  name      String
+  type      String // input | output | trigger | guidance
+  matchKind String // keyword | regex | prefix | length | rate | always
+  pattern   String @default("")
+  action    String // block | replace | rewrite | silent | reply | handoff
+  payloadJson String @default("{}") // 替换文本、固定回复、引导话术等
+  severity  String @default("normal") // normal | high | critical
+  enabled   Boolean @default(true)
+  priority  Int     @default(100)
+  hitCount  Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([ruleSetId, type, enabled])
+}
+
+// ─────────────────────────── 会话与消息 ───────────────────────────
+
+model Session {
+  id         String      @id @default(cuid())
+  instanceId String
+  instance   BotInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+
+  kind       String // private | group
+  peerId     String // 平台内会话标识：私聊为对方用户 id，群聊为群号，评论为内容 id（多平台通用）
+  peerName   String?
+  personaId  String?
+  persona    Persona? @relation(fields: [personaId], references: [id])
+
+  aiPaused     Boolean @default(false) // 人工接管
+  reviewMode   Boolean @default(false) // 回复先送审再发
+  muted        Boolean @default(false)
+
+  lastActiveAt DateTime @default(now())
+  messageCount Int      @default(0)
+
+  createdAt DateTime @default(now())
+
+  messages  Message[]
+  memories  MemoryItem[]
+
+  @@unique([instanceId, kind, peerId])
+  @@index([lastActiveAt])
+}
+
+model Message {
+  id        String  @id @default(cuid())
+  sessionId String
+  session   Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  role       String // user | assistant | system
+  senderId   String?
+  senderName String?
+  content    String // 纯文本视图（便于检索）
+  segmentsJson String @default("[]") // 原始消息段（含图片/表情/引用）
+
+  thinkJson  String? // 内心独白（仅 assistant 且有）
+  tokenIn    Int     @default(0)
+  tokenOut   Int     @default(0)
+  latencyMs  Int     @default(0)
+  model      String?
+
+  blocked     Boolean @default(false)
+  blockReason String? // rule:<id> | moderation | owner
+
+  createdAt DateTime @default(now())
+
+  @@index([sessionId, createdAt])
+  @@index([createdAt])
+}
+
+// ─────────────────────────── 记忆 ───────────────────────────
+
+model MemoryItem {
+  id         String      @id @default(cuid())
+  instanceId String
+  instance   BotInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+  sessionId  String?
+  session    Session?    @relation(fields: [sessionId], references: [id])
+
+  scope      String // episodic（每日摘要）| semantic（关于人的事实）
+  subjectId  String? // 关联的用户 QQ
+  kind       String // summary | fact | event | preference
+  content    String
+  keywords   String  @default("") // 空格分隔，供 FTS5 检索
+  importance Int     @default(3) // 1-5
+  sourceMsgIds String? // 溯源
+
+  expiresAt DateTime? // 情景记忆可设置过期
+  createdAt DateTime  @default(now())
+
+  @@index([instanceId, scope])
+  @@index([subjectId])
+}
+
+model Relationship {
+  id         String      @id @default(cuid())
+  instanceId String
+  instance   BotInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+
+  userId    String // 对方用户 id（平台内唯一标识）
+  nickname  String?
+  affinity  Int      @default(0) // 0-100 亲密度
+  trust     Int      @default(0) // 0-100 信任度（影响可聊深度）
+  isOwner   Boolean  @default(false) // 主人账号，权限更高
+  notes     String? // 人工备注
+  lastInteractionAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([instanceId, userId])
+}
+
+// ─────────────────────────── 心智状态 ───────────────────────────
+
+model AgentState {
+  id         String      @id @default(cuid())
+  instanceId String      @unique
+  instance   BotInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+
+  mood       Float    @default(0) // -1 ~ 1 效价
+  energy     Float    @default(0.8) // 0 ~ 1
+  busyUntil  DateTime?
+  lastDecayAt DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+// ─────────────────────────── 运行记录 ───────────────────────────
+
+model InstanceEvent {
+  id         String      @id @default(cuid())
+  instanceId String
+  instance   BotInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+
+  level   String // info | warn | error | risk
+  code    String // login_lost | send_blocked | rate_limited | key_invalid ...
+  message String
+  metaJson String @default("{}")
+
+  createdAt DateTime @default(now())
+
+  @@index([instanceId, createdAt])
+}
+
+model ModelUsage {
+  id           String      @id @default(cuid())
+  instanceId   String
+  instance     BotInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+  credentialId String?
+  credential   Credential? @relation(fields: [credentialId], references: [id])
+  ownerUserId  String // 按用户隔离用量明细，管理员只看聚合总量
+
+  provider  String
+  model     String
+  tokenIn   Int
+  tokenOut  Int
+  costCents Int @default(0)
+  sessionId String?
+  purpose   String @default("chat") // chat | think | reflection | summarize
+
+  createdAt DateTime @default(now())
+
+  @@index([instanceId, createdAt])
+  @@index([ownerUserId, createdAt])
+}
+
+// 审计日志：只增不改不删（应用层禁止 UPDATE / DELETE）。
+// prevHash + hash 构成哈希链，任何中间记录被删改都会导致后续校验失败，
+// 包括部署者在数据库层面直接动手。
+model AuditLog {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  actorUserId String? // 操作者；系统任务为 null
+  actorUser   User?   @relation(fields: [actorUserId], references: [id])
+  actor       String // superadmin | user | system | worker
+  action      String // credential.create | credential.decrypt | user.password_reset ...
+  target      String?
+  targetOwnerId String? // 被操作对象的归属人，用于"管理员动了我的东西"类查询
+  ip          String?
+  beforeJson  String? // 已脱敏，禁止写入任何明文密钥
+  afterJson   String?
+  prevHash    String? // 上一条的 hash
+  hash        String   @default("") // sha256(prevHash + 本行字段规范化序列化)
+
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@index([targetOwnerId, createdAt])
+}

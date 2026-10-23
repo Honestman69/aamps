@@ -1,0 +1,13 @@
+# 统一行尾，避免 Windows 上反复出现 LF/CRLF 警告
+* text=auto eol=lf
+
+# 二进制文件不做行尾转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.db binary
+*.woff binary
+*.woff2 binary
