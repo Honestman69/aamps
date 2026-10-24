@@ -4,8 +4,8 @@
 > 新会话接手时，直接从「下一步」开始，不要重新规划。
 
 **最后更新**：2026-10-24
-**当前阶段**：**M1 已完成并验收**（接入层 + 实例管理 + 接入安全兜底 + 反向 WS 鉴权 + 真机 pong）。
-下一步是 M2 最小闭环（接模型、私聊能对话）。
+**当前阶段**：**M1 已完成并验收**；云端常驻的前置（P0-1 启动自监听）已完成。
+下一步：P0-2 部署拓扑选型，或直接开 M2 最小闭环（接模型、私聊能对话）。
 
 ---
 
@@ -299,6 +299,21 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 - [x] 事件转换：OneBot 原始事件 → `InboundMessage`（禁止把原始结构往上抛）
 - [x] 收到消息 → 回 `pong`
 - [x] 发送节流（全局令牌桶）
+
+### ~~P0-1：反向实例启动自监听~~ ✅ 已完成（2026-10-24，见 D019）
+
+云端常驻的前提：服务重启后不需要任何人登录，反向实例能自己恢复监听。
+
+- [x] `BotInstance.accessTokenDigest` + 迁移；create/update 同步维护，清 token 时一起清
+- [x] 反向连接不再需要 DEK：主服务注入 `verifyPeerToken`（HMAC 摘要），适配器不接触明文
+- [x] `OneBotWsServer` 要求 `verifyToken` 必填——没有校验手段就拒绝监听
+- [x] `InstanceBootstrapService`：`onApplicationBootstrap` 恢复监听，fire-and-forget，失败只告警
+- [x] 老数据（无摘要）启动时跳过；用户手动连接一次自动回填摘要
+- [x] 真机验证：重启服务后**全程不登录** → 自监听恢复 → NapCat 自动连入 → `status=online`；
+      同时错误 token 仍被 HTTP 401 拒绝
+- [x] 测试：`token-digest` 7 个 + 服务层 5 个（无 DEK 连接 / 自监听 / 跳过与回填 / 清 token）
+
+**代价**：换 `SESSION_SECRET` 会让所有摘要失效 → 需要在后台重新保存一次 token（已写进 SECURITY）。
 
 ### M2 最小闭环 ← 现在做这个
 

@@ -44,3 +44,5 @@ export {
   randomSalt,
   wipe,
 } from './random';
+
+export { tokenDigest, verifyTokenDigest } from './token-digest';

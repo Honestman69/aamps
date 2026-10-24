@@ -23,7 +23,7 @@ import {
   type OutboundAction,
 } from '@newjob/contracts';
 
-import { decryptWithDek, encryptWithDek } from '../../common/crypto';
+import { decryptWithDek, encryptWithDek, tokenDigest, verifyTokenDigest } from '../../common/crypto';
 import { createAdapterLogger } from '../../common/logger/adapter-logger';
 import { AdapterRegistry } from '../adapter/adapter-registry';
 import { AuditAction, AuditService, type AuditActor } from '../auth/audit.service';
@@ -36,7 +36,12 @@ import {
 } from './dto';
 import { assertEndpointAllowed } from './endpoint-guard';
 import { InstanceRuntime } from './instance-runtime';
-import type { InstanceUpdatePatch, IInstanceRepository } from './ports';
+import type {
+  InstanceConnectConfig,
+  InstanceResidentConfig,
+  InstanceUpdatePatch,
+  IInstanceRepository,
+} from './ports';
 
 export type InstanceActor = {
   sessionId: string;
@@ -74,9 +79,17 @@ export class InstanceService {
   constructor(private readonly deps: InstanceDeps) {}
 
   async create(actor: InstanceActor, input: CreateInstanceInput): Promise<InstancePublicDTO> {
-    // 先拦地址：指向公网 NapCat 等于把 QQ 登录态交给对方，不该只靠"记得别填"
+    const mode = input.adapterMode ?? 'server';
+
+    // 先拦地址：指向公网 NapCat 等于把 QQ 登录态交给对方，不该只靠"记得别填"。
+    // 顺序放在 token 校验之前：地址填错是更常见的错误，先报那个更有用。
     if (input.endpoint) {
       assertEndpointAllowed(input.endpoint, input.adapterMode);
+    }
+
+    if (mode === 'server' && !input.accessToken) {
+      // 反向端是我们自己开的端口，没有 token 就等于对任何能连上的进程开放
+      throw new BadRequestError('反向模式必须配置 Access Token（由本服务在握手阶段校验）');
     }
 
     // 只有配了 token 才需要 DEK；不配 token 的部署（内网 NapCat）不该被要求先解锁
@@ -84,6 +97,9 @@ export class InstanceService {
       input.accessToken !== undefined
         ? encryptWithDek(input.accessToken, this.deps.keyStore.get(actor.sessionId))
         : null;
+    // 摘要与密文同时写：反向模式靠摘要就能在服务重启后自动监听，不需要 DEK
+    const accessTokenDigest =
+      input.accessToken !== undefined ? tokenDigest(input.accessToken) : null;
 
     const row = await this.deps.instances.createForUser({
       tenantId: actor.tenantId,
@@ -94,9 +110,10 @@ export class InstanceService {
       accountId: input.accountId,
       adapterType: input.adapterType ?? 'onebot',
       // 默认反向：token 由我们自己校验，且云端部署不需要开入站端口
-      adapterMode: input.adapterMode ?? 'server',
+      adapterMode: mode,
       endpoint: input.endpoint ?? null,
       accessTokenEnc,
+      accessTokenDigest,
       enabled: input.enabled ?? true,
     });
 
@@ -152,11 +169,14 @@ export class InstanceService {
     // accessToken 三态：不传=不变，null=清空，字符串=替换（替换要先解锁）
     if (input.accessToken === null) {
       patch.accessTokenEnc = null;
+      // 摘要必须跟着清：否则摘要还在、明文已经没了，会出现"能监听但没人知道 token 是什么"的怪状态
+      patch.accessTokenDigest = null;
     } else if (input.accessToken !== undefined) {
       patch.accessTokenEnc = encryptWithDek(
         input.accessToken,
         this.deps.keyStore.get(actor.sessionId),
       );
+      patch.accessTokenDigest = tokenDigest(input.accessToken);
     }
 
     const row = await this.deps.instances.updateForUser(actor.userId, id, patch);
@@ -241,26 +261,99 @@ export class InstanceService {
     // 落库时校验过一次，拨号前再校验一次：开关可能被关掉了，而旧记录还在
     assertEndpointAllowed(config.endpoint, config.adapterMode);
 
-    let accessToken: string | undefined;
-    if (config.accessTokenEnc) {
-      // 未解锁会在这里抛 KeyLockedError(401)，不会退化成"用空 token 连"
-      const dek = this.deps.keyStore.get(actor.sessionId);
-      try {
-        accessToken = decryptWithDek(config.accessTokenEnc, dek);
-      } catch {
-        throw new AppError(
-          'INSTANCE_TOKEN_UNREADABLE',
-          '实例令牌无法解密（密码可能被重置过），请重新填写 Access Token',
-          409,
+    const credentials = await this.resolveCredentials(actor, config);
+    const { status } = await this.spinUp({
+      config,
+      ownerUserId: actor.userId,
+      ...credentials,
+    });
+
+    await this.deps.audit.record({
+      tenantId: actor.tenantId,
+      actor: auditActor(actor.role),
+      actorUserId: actor.userId,
+      action: AuditAction.InstanceConnect,
+      target: id,
+      targetOwnerId: actor.userId,
+      ip: actor.ip ?? null,
+      after: {
+        platform: config.platform,
+        adapterType: config.adapterType,
+        accountMasked: maskAccount(config.accountId),
+        status,
+      },
+    });
+
+    return { status, accountId: config.accountId, platform: config.platform };
+  }
+
+  /**
+   * 把「该用哪把钥匙」和「怎么起适配器」分开。
+   *
+   * 反向模式只需要摘要：握手是**比对**，不是解密，所以服务重启后没有 DEK 也能监听。
+   * 正向模式必须明文：它要作为 `Authorization: Bearer` 发出去。
+   */
+  private async resolveCredentials(
+    actor: InstanceActor,
+    config: InstanceConnectConfig,
+  ): Promise<{ plainToken?: string; verifyPeerToken?: (provided: string) => boolean }> {
+    if (config.adapterMode === 'server') {
+      let digest = config.accessTokenDigest;
+      if (!digest && config.accessTokenEnc) {
+        // 老数据（加摘要列之前建的）：趁用户这次已解锁，顺手把摘要补上，
+        // 下次服务重启就能自监听了。失败不影响这次连接。
+        const plain = this.decryptToken(actor.sessionId, config.accessTokenEnc);
+        digest = tokenDigest(plain);
+        await this.deps.instances
+          .updateForUser(actor.userId, config.id, { accessTokenDigest: digest })
+          .catch(() => undefined);
+      }
+      if (!digest) {
+        throw new BadRequestError(
+          '实例缺少 Access Token：反向模式需要它来校验连进来的 NapCat。请重新填写后再连接',
         );
       }
+      const expected = digest;
+      return { verifyPeerToken: (provided: string) => verifyTokenDigest(provided, expected) };
     }
 
+    // 正向：拿明文去拨号。未解锁会在这里抛 KeyLockedError(401)，不会退化成"用空 token 连"
+    if (!config.accessTokenEnc) {
+      return {};
+    }
+    return { plainToken: this.decryptToken(actor.sessionId, config.accessTokenEnc) };
+  }
+
+  private decryptToken(sessionId: string, encrypted: string): string {
+    const dek = this.deps.keyStore.get(sessionId);
+    try {
+      return decryptWithDek(encrypted, dek);
+    } catch {
+      throw new AppError(
+        'INSTANCE_TOKEN_UNREADABLE',
+        '实例令牌无法解密（密码可能被重置过），请重新填写 Access Token',
+        409,
+      );
+    }
+  }
+
+  /** 建适配器 → 接线 → connect → 落状态。connect 与启动自监听共用这一段 */
+  private async spinUp(input: {
+    config: InstanceConnectConfig;
+    ownerUserId: string;
+    plainToken?: string;
+    verifyPeerToken?: (provided: string) => boolean;
+  }): Promise<{ status: string }> {
+    const { config } = input;
+    const endpoint = config.endpoint;
+    if (!endpoint) {
+      throw new BadRequestError('实例缺少接入地址（WebSocket 地址）');
+    }
     const factory = this.deps.registry.get(config.platform, config.adapterType);
 
     // 已有连接先断，避免同一个号挂两条 WS（NapCat 侧会发重复消息）
-    if (this.deps.runtime.has(id)) {
-      await this.disconnectInternal(actor.userId, id, 'reconnect');
+    if (this.deps.runtime.has(config.id)) {
+      await this.disconnectInternal(input.ownerUserId, config.id, 'reconnect');
     }
 
     const adapter = factory.create({
@@ -271,10 +364,11 @@ export class InstanceService {
         // endpoint 在两种 mode 下含义不同：
         //   server = 本端监听地址（NapCat 连过来），client = 对方地址（我们连过去）
         mode: config.adapterMode,
-        wsUrl: config.endpoint,
+        wsUrl: endpoint,
         selfId: config.accountId,
-        ...(accessToken ? { accessToken } : {}),
+        ...(input.plainToken ? { accessToken: input.plainToken } : {}),
       },
+      ...(input.verifyPeerToken ? { verifyPeerToken: input.verifyPeerToken } : {}),
       logger: createAdapterLogger(`instance:${config.id}`),
     });
 
@@ -285,7 +379,7 @@ export class InstanceService {
     adapter.onAdapterEvent((event) => {
       if (event.kind === 'status') {
         void this.deps.instances
-          .setStatusForUser(actor.userId, id, event.status)
+          .setStatusForUser(input.ownerUserId, config.id, event.status)
           .catch(() => undefined);
       }
       if (event.kind === 'send-blocked') {
@@ -302,34 +396,63 @@ export class InstanceService {
       await adapter.connect();
     } catch (err) {
       await adapter.disconnect().catch(() => undefined);
-      await this.deps.instances.setStatusForUser(actor.userId, id, 'offline').catch(() => undefined);
-      throw new AppError(
-        'INSTANCE_CONNECT_FAILED',
-        `连接失败：${(err as Error).message}`,
-        502,
-      );
+      await this.deps.instances
+        .setStatusForUser(input.ownerUserId, config.id, 'offline')
+        .catch(() => undefined);
+      throw new AppError('INSTANCE_CONNECT_FAILED', `连接失败：${(err as Error).message}`, 502);
     }
 
-    this.deps.runtime.set(id, adapter);
-    await this.deps.instances.setStatusForUser(actor.userId, id, adapter.getStatus());
+    this.deps.runtime.set(config.id, adapter);
+    await this.deps.instances.setStatusForUser(input.ownerUserId, config.id, adapter.getStatus());
+    return { status: adapter.getStatus() };
+  }
 
-    await this.deps.audit.record({
-      tenantId: actor.tenantId,
-      actor: auditActor(actor.role),
-      actorUserId: actor.userId,
-      action: AuditAction.InstanceConnect,
-      target: id,
-      targetOwnerId: actor.userId,
-      ip: actor.ip ?? null,
-      after: {
-        platform: config.platform,
-        adapterType: config.adapterType,
-        accountMasked: maskAccount(config.accountId),
-        status: adapter.getStatus(),
-      },
-    });
+  /**
+   * 服务启动时恢复反向实例的监听。
+   *
+   * 这一步是"云端能常驻"的前提：反向模式下是我们监听、NapCat 连进来，
+   * 如果监听只能由 `connect()` 发起，那么服务每次重启都要有人登录解锁再点一次，
+   * 而 DEK 只在内存里（D005）——云端就等于必须有人值守。
+   *
+   * 为什么这里不需要 DEK：握手只需要判断 token 对不对，摘要足够（见 D019）。
+   * 失败不阻断启动，逐个记录后继续（一个实例的端口被占用不该拖垮别的实例）。
+   */
+  async resumeResidentListeners(): Promise<{ started: number; failed: number; skipped: number }> {
+    const rows: InstanceResidentConfig[] = await this.deps.instances.listResidentListenCandidates();
+    let started = 0;
+    let failed = 0;
+    let skipped = 0;
 
-    return { status: adapter.getStatus(), accountId: config.accountId, platform: config.platform };
+    for (const row of rows) {
+      if (this.deps.runtime.has(row.id)) {
+        skipped += 1;
+        continue;
+      }
+      try {
+        assertEndpointAllowed(row.endpoint!, row.adapterMode);
+        const expected = row.accessTokenDigest!;
+        await this.spinUp({
+          config: row,
+          ownerUserId: row.ownerUserId,
+          verifyPeerToken: (provided: string) => verifyTokenDigest(provided, expected),
+        });
+        started += 1;
+      } catch (err) {
+        failed += 1;
+        createAdapterLogger(`instance:${row.id}`).warn(
+          { event: 'instance.resume_failed', reason: (err as Error).message },
+          '启动自监听失败，已跳过该实例',
+        );
+      }
+    }
+
+    if (rows.length > 0) {
+      createAdapterLogger('instance:resume').info(
+        { event: 'instance.resume_done', candidates: rows.length, started, failed, skipped },
+        '反向实例自监听已恢复',
+      );
+    }
+    return { started, failed, skipped };
   }
 
   async disconnect(actor: InstanceActor, id: string): Promise<{ status: string }> {

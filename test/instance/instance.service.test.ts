@@ -29,6 +29,7 @@ import type {
   InstanceConnectConfig,
   InstanceCreateInput,
   InstancePublicRow,
+  InstanceResidentConfig,
   InstanceUpdatePatch,
 } from '@/modules/instance/ports';
 
@@ -89,7 +90,10 @@ class StubAdapter implements IAdapter {
 }
 
 class FakeInstanceRepository implements IInstanceRepository {
-  readonly rows = new Map<string, { row: InstancePublicRow; enc: string | null; ownerUserId: string }>();
+  readonly rows = new Map<
+    string,
+    { row: InstancePublicRow; enc: string | null; digest: string | null; ownerUserId: string }
+  >();
   readonly created: InstanceCreateInput[] = [];
   private seq = 0;
 
@@ -111,7 +115,12 @@ class FakeInstanceRepository implements IInstanceRepository {
       createdAt: now,
       updatedAt: now,
     };
-    this.rows.set(row.id, { row, enc: input.accessTokenEnc ?? null, ownerUserId: input.ownerUserId });
+    this.rows.set(row.id, {
+      row,
+      enc: input.accessTokenEnc ?? null,
+      digest: input.accessTokenDigest ?? null,
+      ownerUserId: input.ownerUserId,
+    });
     return { ...row };
   }
 
@@ -139,8 +148,26 @@ class FakeInstanceRepository implements IInstanceRepository {
       accountId: entry.row.accountId,
       endpoint: entry.row.endpoint,
       accessTokenEnc: entry.enc,
+      accessTokenDigest: entry.digest,
       enabled: entry.row.enabled,
     };
+  }
+
+  async listResidentListenCandidates(): Promise<InstanceResidentConfig[]> {
+    return [...this.rows.values()]
+      .filter((e) => e.row.enabled && e.row.adapterMode === 'server' && e.digest && e.row.endpoint)
+      .map((e) => ({
+        id: e.row.id,
+        platform: e.row.platform,
+        adapterType: e.row.adapterType,
+        adapterMode: e.row.adapterMode,
+        accountId: e.row.accountId,
+        endpoint: e.row.endpoint,
+        accessTokenEnc: e.enc,
+        accessTokenDigest: e.digest,
+        enabled: e.row.enabled,
+        ownerUserId: e.ownerUserId,
+      }));
   }
 
   async updateForUser(
@@ -156,7 +183,10 @@ class FakeInstanceRepository implements IInstanceRepository {
       entry.enc = patch.accessTokenEnc;
       entry.row.hasAccessToken = Boolean(patch.accessTokenEnc);
     }
-    const { accessTokenEnc: _ignored, ...rest } = patch;
+    if (patch.accessTokenDigest !== undefined) {
+      entry.digest = patch.accessTokenDigest;
+    }
+    const { accessTokenEnc: _ignored, accessTokenDigest: _ignoredDigest, ...rest } = patch;
     Object.assign(entry.row, rest);
     return { ...entry.row };
   }
@@ -238,6 +268,7 @@ describe('InstanceService 配置与隔离', () => {
     const dto = await service.create(actor(ALICE), {
       name: '主号',
       accountId: '10001',
+      adapterMode: 'client',
       endpoint: 'ws://127.0.0.1:6700/onebot/v11/ws',
       accessToken: TOKEN,
     });
@@ -258,6 +289,7 @@ describe('InstanceService 配置与隔离', () => {
     const dto = await service.create(actor(ALICE), {
       name: '内网无鉴权',
       accountId: '10002',
+      adapterMode: 'client',
       endpoint: 'ws://127.0.0.1:6700/onebot/v11/ws',
     });
     expect(dto.hasAccessToken).toBe(false);
@@ -268,8 +300,8 @@ describe('InstanceService 配置与隔离', () => {
     keyStore.set(SESSION_ALICE, ALICE, randomDek());
     keyStore.set(SESSION_BOB, BOB, randomDek());
 
-    await service.create(actor(ALICE), { name: 'A 的号', accountId: '10001' });
-    await service.create(actor(BOB), { name: 'B 的号', accountId: '20002' });
+    await service.create(actor(ALICE), { name: 'A 的号', accountId: '10001', adapterMode: 'client' });
+    await service.create(actor(BOB), { name: 'B 的号', accountId: '20002', adapterMode: 'client' });
 
     const aliceList = await service.list({ userId: ALICE });
     expect(aliceList).toHaveLength(1);
@@ -285,6 +317,7 @@ describe('InstanceService 配置与隔离', () => {
       service.create(actor(ALICE), {
         name: '别人的 NapCat',
         accountId: '10001',
+        adapterMode: 'client',
         endpoint: 'ws://bot.example.com:3001',
       }),
     ).rejects.toMatchObject({ code: 'REMOTE_ENDPOINT_BLOCKED' });
@@ -294,6 +327,7 @@ describe('InstanceService 配置与隔离', () => {
       const dto = await service.create(actor(ALICE), {
         name: '明确接受风险的远程实例',
         accountId: '10001',
+        adapterMode: 'client',
         endpoint: 'ws://bot.example.com:3001',
       });
       expect(dto.endpoint).toBe('ws://bot.example.com:3001');
@@ -306,7 +340,7 @@ describe('InstanceService 配置与隔离', () => {
     const { keyStore, service } = setup();
     keyStore.set(SESSION_BOB, BOB, randomDek());
 
-    const bobInstance = await service.create(actor(BOB), { name: 'B 的号', accountId: '20002' });
+    const bobInstance = await service.create(actor(BOB), { name: 'B 的号', accountId: '20002', adapterMode: 'client' });
     const superadmin = actor(ALICE, 'superadmin');
 
     await expect(service.connect(superadmin, bobInstance.id)).rejects.toMatchObject({
@@ -328,6 +362,7 @@ describe('InstanceService 连接链路', () => {
     const dto = await service.create(actor(ALICE), {
       name: '主号',
       accountId: '10001',
+      adapterMode: 'client',
       endpoint: 'ws://127.0.0.1:6700/onebot/v11/ws',
       accessToken: TOKEN,
     });
@@ -398,6 +433,7 @@ describe('InstanceService 连接链路', () => {
     const dto = await service.create(actor(ALICE), {
       name: '主号',
       accountId: '10001',
+      adapterMode: 'client',
       endpoint: 'ws://127.0.0.1:6700/onebot/v11/ws',
     });
 
@@ -415,12 +451,14 @@ describe('InstanceService 连接链路', () => {
     const dto = await service.create(actor(ALICE), {
       name: '主号',
       accountId: '10001',
+      adapterMode: 'client',
       endpoint: 'ws://127.0.0.1:6700/onebot/v11/ws',
     });
     await service.connect(actor(ALICE), dto.id);
     expect(runtime.get(dto.id)).not.toBeNull();
 
     const updated = await service.update(actor(ALICE), dto.id, {
+      adapterMode: 'client',
       endpoint: 'ws://10.0.0.2:6700/onebot/v11/ws',
     });
 
@@ -435,12 +473,106 @@ describe('InstanceService 连接链路', () => {
     const dto = await service.create(actor(ALICE), {
       name: '主号',
       accountId: '10001',
+      adapterMode: 'client',
       endpoint: 'ws://127.0.0.1:6700/onebot/v11/ws',
     });
     await service.connect(actor(ALICE), dto.id);
 
     await service.remove(actor(ALICE), dto.id);
     expect(runtime.get(dto.id)).toBeNull();
+  });
+});
+
+describe('反向实例：不需要解锁也能监听（D019）', () => {
+  /** 建一个反向实例，然后清掉 DEK —— 模拟服务重启后"没有任何人登录"的状态 */
+  async function reverseInstanceWithLockedVault() {
+    const ctx = setup();
+    const dek = randomDek();
+    ctx.keyStore.set(SESSION_ALICE, ALICE, dek);
+    const dto = await ctx.service.create(actor(ALICE), {
+      name: '反向实例',
+      accountId: '10001',
+      adapterMode: 'server',
+      endpoint: 'ws://127.0.0.1:3002',
+      accessToken: TOKEN,
+    });
+    ctx.keyStore.clear(SESSION_ALICE);
+    // 把 DEK 带出来：回填测试要用**同一把**，重新生成一把解不开旧密文
+    return { ...ctx, dto, dek };
+  }
+
+  it('refuses to create a reverse instance without a token', async () => {
+    const { service } = setup();
+    await expect(
+      service.create(actor(ALICE), {
+        name: '没有 token',
+        accountId: '10001',
+        adapterMode: 'server',
+        endpoint: 'ws://127.0.0.1:3002',
+      }),
+    ).rejects.toThrow(/Access Token/);
+  });
+
+  it('connects with the vault locked: the adapter gets a verifier, not the plaintext', async () => {
+    const { service, runtime, created, dto } = await reverseInstanceWithLockedVault();
+
+    const result = await service.connect(actor(ALICE), dto.id);
+
+    expect(result.status).toBe('online');
+    expect(runtime.get(dto.id)).not.toBeNull();
+    // 关键断言：反向路径不要求明文 token，主服务注入的是校验器
+    expect(created[0]!.deps.verifyPeerToken).toBeTypeOf('function');
+    expect(created[0]!.deps.config.accessToken).toBeUndefined();
+    // 校验器真的能区分对错
+    expect(created[0]!.deps.verifyPeerToken!(TOKEN)).toBe(true);
+    expect(created[0]!.deps.verifyPeerToken!('wrong-token')).toBe(false);
+  });
+
+  it('resumes reverse listeners at startup with no session at all', async () => {
+    const { service, runtime, repo, dto } = await reverseInstanceWithLockedVault();
+
+    // 重启后没有任何人登录：靠启动钩子自己把监听恢复起来
+    const result = await service.resumeResidentListeners();
+
+    expect(result).toMatchObject({ started: 1, failed: 0, skipped: 0 });
+    expect(runtime.get(dto.id)?.getStatus()).toBe('online');
+    expect(repo.rows.get(dto.id)!.row.status).toBe('online');
+  });
+
+  it('skips rows without a digest, then backfills it on the next manual connect', async () => {
+    const { service, runtime, repo, keyStore, dto, dek } = await reverseInstanceWithLockedVault();
+
+    // 模拟"加摘要列之前"的老数据：有密文、没有摘要
+    repo.rows.get(dto.id)!.digest = null;
+
+    const resumed = await service.resumeResidentListeners();
+    // 没有摘要就没有校验手段，宁可不起也不开一个不设防的端口
+    expect(resumed).toMatchObject({ started: 0, failed: 0, skipped: 0 });
+    expect(runtime.get(dto.id)).toBeNull();
+
+    // 用户解锁后手动连一次：顺手把摘要补上
+    keyStore.set(SESSION_ALICE, ALICE, dek);
+    await service.connect(actor(ALICE), dto.id);
+    expect(repo.rows.get(dto.id)!.digest).toBeTypeOf('string');
+  });
+
+  it('clears the digest when the token is cleared', async () => {
+    const { keyStore, service, repo } = setup();
+    keyStore.set(SESSION_ALICE, ALICE, randomDek());
+    const dto = await service.create(actor(ALICE), {
+      name: '反向实例',
+      accountId: '10001',
+      adapterMode: 'server',
+      endpoint: 'ws://127.0.0.1:3002',
+      accessToken: TOKEN,
+    });
+    expect(repo.rows.get(dto.id)!.digest).toBeTypeOf('string');
+
+    await service.update(actor(ALICE), dto.id, { accessToken: null });
+
+    // 摘要留着明文没了，会变成"能监听但没人知道 token"的怪状态
+    expect(repo.rows.get(dto.id)!.digest).toBeNull();
+    expect(repo.rows.get(dto.id)!.enc).toBeNull();
   });
 });
 

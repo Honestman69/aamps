@@ -85,7 +85,7 @@ function makeServer(
   const server = new OneBotWsServer({
     host: '127.0.0.1',
     port,
-    accessToken: TOKEN,
+    verifyToken: (provided) => provided === TOKEN,
     logger: silentLogger,
     onEvent: (event) => events.push(event),
     onStatusChange: (status) => statuses.push(status),
@@ -190,18 +190,18 @@ describe('OneBotWsServer 反向模式', () => {
     await expect(connecting).rejects.toThrow(/超时/);
   });
 
-  it('refuses to start without a token', () => {
-    // 反向端是我们自己开的端口：没有 token 就等于对任何能连上的进程开放
+  it('refuses to start without a token verifier', () => {
+    // 反向端是我们自己开的端口：没有校验器就等于对任何能连上的进程开放。
+    // 这里故意漏掉 verifyToken（类型上用 never 绕过），验证运行时的兜底。
     expect(
       () =>
         new OneBotWsServer({
           host: '127.0.0.1',
           port: 1,
-          accessToken: '',
           logger: silentLogger,
           onEvent: () => undefined,
-        }),
-    ).toThrow(/至少 8 位/);
+        } as unknown as ConstructorParameters<typeof OneBotWsServer>[0]),
+    ).toThrow(/校验器/);
   });
 
   it('routes peer events to onEvent and matches action echoes', async () => {

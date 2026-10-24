@@ -25,8 +25,15 @@ import type { OneBotTransport } from './transport';
 export type OneBotServerOptions = {
   host: string;
   port: number;
-  /** 必填：没有 token 的反向端等于把控制权交给任何能连上的人 */
-  accessToken: string;
+  /**
+   * 必填：对端 token 的校验器。
+   *
+   * 为什么不是一个 `accessToken` 字符串：反向监听发生在服务启动时，
+   * 那时用户还没登录、DEK 不在内存，拿不到明文 token。主服务手里有一份
+   * HMAC 摘要，足以回答"这个 token 对不对"，校验算法留在主服务侧。
+   * （适配器不读环境变量、不碰密钥，见 D013。）
+   */
+  verifyToken: (provided: string) => boolean;
   logger: ClientLogger;
   onEvent: (event: OneBotEvent) => void;
   onStatusChange?: (status: 'connecting' | 'online' | 'offline') => void;
@@ -44,7 +51,8 @@ const DEFAULTS = {
   heartbeatTimeoutMs: 10_000,
 };
 
-function constantTimeEqual(a: string, b: string): boolean {
+/** 字符串常量时间比较（导出给适配器做"明文兜底"用） */
+export function constantTimeEqualString(a: string, b: string): boolean {
   const bufA = Buffer.from(a, 'utf8');
   const bufB = Buffer.from(b, 'utf8');
   if (bufA.length !== bufB.length) {
@@ -70,8 +78,8 @@ export class OneBotWsServer implements OneBotTransport {
   private closedByUser = false;
 
   constructor(private readonly options: OneBotServerOptions) {
-    if (!options.accessToken || options.accessToken.length < 8) {
-      throw new Error('反向 WS 必须配置至少 8 位 access token');
+    if (typeof options.verifyToken !== 'function') {
+      throw new Error('反向 WS 必须提供 token 校验器：没有校验的监听等于对任何能连上的人开放');
     }
   }
 
@@ -149,7 +157,7 @@ export class OneBotWsServer implements OneBotTransport {
         host: this.options.host,
         port: this.options.port,
         verifyClient: (info, done) => {
-          const allowed = this.verifyToken(info.req as IncomingMessage);
+          const allowed = this.isPeerAllowed(info.req as IncomingMessage);
           if (!allowed) {
             this.options.logger.warn(
               { event: 'adapter.peer_rejected', reason: 'token_mismatch' },
@@ -219,13 +227,15 @@ export class OneBotWsServer implements OneBotTransport {
     }
   }
 
-  private verifyToken(req: IncomingMessage): boolean {
-    const expected = this.options.accessToken;
+  private isPeerAllowed(req: IncomingMessage): boolean {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? '127.0.0.1'}`);
     const fromQuery = url.searchParams.get('access_token') ?? '';
     const fromHeader = (req.headers.authorization ?? '').replace(/^Bearer\s+/i, '');
     const provided = fromQuery || fromHeader;
-    return provided.length > 0 && constantTimeEqual(provided, expected);
+    if (!provided) {
+      return false;
+    }
+    return this.options.verifyToken(provided);
   }
 
   private attach(socket: WebSocket): void {

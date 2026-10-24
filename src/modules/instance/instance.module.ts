@@ -18,6 +18,7 @@ import { AuditService } from '../auth/audit.service';
 import { RuntimeKeyStore } from '../auth/runtime-key-store';
 import { AUDIT_SERVICE } from '../auth/tokens';
 import { InstanceController } from './instance.controller';
+import { InstanceBootstrapService } from './instance-bootstrap.service';
 import { InstanceRuntime } from './instance-runtime';
 import { InstanceService } from './instance.service';
 import type { IInstanceRepository } from './ports';
@@ -46,6 +47,8 @@ import { INSTANCE_REPOSITORY, INSTANCE_SERVICE } from './tokens';
       ): InstanceService => new InstanceService({ instances, keyStore, registry, runtime, audit }),
       inject: [INSTANCE_REPOSITORY, RuntimeKeyStore, AdapterRegistry, InstanceRuntime, AUDIT_SERVICE],
     },
+    // 启动时恢复反向实例监听（D019）：不依赖用户解锁，失败也不阻断启动
+    InstanceBootstrapService,
   ],
   exports: [INSTANCE_SERVICE, InstanceRuntime],
 })

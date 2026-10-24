@@ -126,6 +126,9 @@ model BotInstance {
   // 接入凭据（加密存储；official 用 appId/appSecret，onebot 用 endpoint/token）
   endpoint       String? // 例：ws://127.0.0.1:6700/onebot/v11/ws
   accessTokenEnc String?
+  /// 反向模式握手校验用的 token 摘要（HMAC-SHA256，hex）。不存明文，
+  /// 这样服务重启后不需要用户解锁也能直接监听（见 D019）。
+  accessTokenDigest String?
   appId          String?
   appSecretEnc   String?
 

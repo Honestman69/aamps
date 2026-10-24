@@ -69,6 +69,16 @@ export interface AdapterDeps {
   instanceId: string;
   /** 已解密并校验过的配置值，只在内存中存活 */
   config: Record<string, unknown>;
+  /**
+   * 反向模式的对端 token 校验器，由**主服务**注入。
+   *
+   * 为什么不是让适配器自己比对明文：
+   *   反向监听发生在服务启动时，那时用户还没登录、DEK 不在内存里，
+   *   拿不到 token 明文。主服务手里有一份 HMAC 摘要（见 `token-digest.ts`），
+   *   足以回答"这个 token 对不对"。
+   * 边界：适配器负责"怎么比"（握手时调用），主服务负责"什么算对"（算法与密钥）。
+   */
+  verifyPeerToken?: (provided: string) => boolean;
   logger: {
     debug(obj: Record<string, unknown>, msg?: string): void;
     info(obj: Record<string, unknown>, msg?: string): void;
