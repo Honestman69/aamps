@@ -19,6 +19,7 @@ type Call = { method: string; args: Record<string, unknown> };
 
 const ROW = {
   id: 'inst-1',
+  agentId: 'agent-1',
   name: '主号',
   platform: 'qq',
   accountId: '10001',
@@ -57,6 +58,7 @@ function makePrisma() {
 const INPUT: InstanceCreateInput = {
   tenantId: 'tenant-1',
   ownerUserId: 'user-alice',
+  agentId: 'agent-1',
   name: '主号',
   platform: 'qq',
   accountId: '10001',
