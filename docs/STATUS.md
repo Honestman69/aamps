@@ -279,6 +279,8 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 
 ### M4 管理后台
 
+> 目标：M1~M3 阶段**没有页面**，操作一律走 HTTP 接口（`scripts/connect-instance.ts` 是临时的连接入口）。
+
 - [ ] Vue3 工程 + 登录页
 - [ ] 人设编辑器
 - [ ] 规则/约束词配置

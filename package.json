@@ -16,6 +16,7 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
+    "connect": "tsx scripts/connect-instance.ts",
     "check:local-data": "tsx scripts/check-local-data.ts"
   },
   "dependencies": {
