@@ -2,10 +2,18 @@
 
 > **这是唯一的进度真源。** 每次改动代码后必须更新本文件。
 > 新会话接手时，直接从「下一步」开始，不要重新规划。
+> **换机器 / 全新克隆先读 [`AGENTS.md`](../AGENTS.md) 的「换机器 / 全新克隆」**——
+> 仓库里没有 `.env`、没有数据库，直接 `pnpm dev` 会失败。
 
 **最后更新**：2026-10-24
-**当前阶段**：**M1 已完成并验收**；云端常驻的前置（P0-1 启动自监听）已完成。
-下一步：P0-2 部署拓扑选型，或直接开 M2 最小闭环（接模型、私聊能对话）。
+**当前阶段**：**M1 已完成并验收**；云端常驻前置（P0-1 反向实例启动自监听）已完成。
+
+**下一步（默认走这条）**：**M2 最小闭环** —— `AgentConfig`/`ConfigResolver` → `ModelGateway`
+→ `openai-compatible` Provider →（到 Persona 那步才碰未决问题 6）→ 私聊能对话。
+M2 不依赖任何部署决策，可以立刻开始。
+
+**另一条路（只在"准备上云"时才走）**：P0-2 部署拓扑选型（Tailscale 组网 vs 公网反代），
+它决定一键接入包的 URL/证书策略；不做它也不影响本地开发。
 
 ---
 
@@ -27,8 +35,14 @@
   `main` / `feat/m1-adapter-and-instance` / `feat/m1-reverse-ws` 三个分支，
   `m1-skeleton`（`9c933b9`）与 `m1-verified`（`57d37ca`）两个标签。
   GitHub 凭据已配置在 Git Credential Manager；之前的阻塞是缺凭据（非网络），见提交 `1c8667c`。
-  **网络会抖**：push / ls-remote 偶发 `Connection reset by 20.205.243.160 port 443`，
-  重试 2~3 次即可成功（本次 main 一次过，分支第三次过）。先重试，别急着改 SSH 配置。
+  **push 失败的真正原因（2026-10-24 排查过）**：git 走 SSH，**规则 / PAC 模式的代理管不到 SSH**，
+  只有「全局模式」或 TUN 才会接管。症状是 `Connection reset by 20.205.243.160 port 443`，
+  而同一时刻 `curl https://api.github.com` 可能仍是 200——别被"网是通的"误导。
+  处理办法：把代理切全局，一次就能推上去。**不要**去试 `https_proxy` 的各种组合
+  （HTTP / SOCKS5 / 换 OpenSSL 后端都试过，全无效，纯属浪费）。
+  另有一个坑：全局配置里有 `url.https://ghfast.top/https://github.com/.insteadOf`，
+  会把所有 HTTPS 地址重写成镜像，而镜像只能拉不能推。真要走 HTTPS 就写
+  `https://github.com:443/owner/repo`（带默认端口不匹配该前缀）。平时用 SSH 即可。
   若出现 `could not read Username`，先查 `git credential fill` 能不能返回用户名，不要先去折腾网络。
 
 ---
