@@ -310,6 +310,8 @@ hash = sha256(prevHash + actorUserId + action + target + createdAt + payloadDige
 | `user.password_reset` | 管理员重置他人密码（销毁 wrappedDek，Key 报废） |
 | `user.password_reset_self` | 本人走忘记密码流程（同样销毁） |
 | `user.create` | 建号（首次启动种子 / 用户管理），记录用户名与角色，不记录密码 |
+| `instance.create` / `.update` / `.delete` | 实例变更。记录 QQ 号**掩码**与是否配了 token，不记录 token |
+| `instance.connect` / `.disconnect` | 连接会**解密平台 token**，与 `credential.unlock` 同级的敏感事件：什么时候、哪个号上线过 |
 | `admin.impersonate`（如果实现） | 管理员以他人身份操作，必须留痕 |
 
 `credential.unlock` 这条日志的价值：如果哪天怀疑 Key 泄露，它能告诉你哪些时间窗口内明文存在于内存中。
@@ -328,16 +330,46 @@ hash = sha256(prevHash + actorUserId + action + target + createdAt + payloadDige
 | 备份 | 备份文件是密文，安全；但备份里含 `wrappedDek`，所以要提醒：**备份泄露 + 用户密码泄露 = Key 泄露** |
 | 内存 | 不防御。见第 1 节 |
 
+### 7.1 协议端（NapCat）的数据目录：不归我们加密，但归我们守
+
+必须分清一件事：**信封加密保护的是"用户上传的模型 Key"，不保护 QQ 登录态。**
+
+QQ 的登录会话存在 NapCat 自己的工作目录里（`napcat/`、`.config/QQ/`、`onebot_<QQ号>.json` 等），
+从来没有进过我们的数据库。它的性质是：**谁能读这个目录，谁就等价于"正登着这个号"**
+（能否被设备锁拦住取决于平台策略，不能当作防线）。
+
+因此四条硬规定：
+
+1. **不入版本库。** `.gitignore` 已覆盖相关路径，且提交前跑 `pnpm check:local-data` ——
+   它同时检查"已跟踪"与"未被忽略"的文件，因为 `git add -f` 和"漏写 ignore"才是真实事故来源。
+2. **不随迁移搬走。** 换服务器时 NapCat 的数据应**在新机器上重新扫码生成**，而不是打包带走。
+   搬过去等于把一个可复制的账号控制权放进压缩包、网盘、聊天记录。
+3. **不与其他数据混在一起备份。** `dev.db` 是业务数据，NapCat 目录是账号凭据，泄露影响不同，
+   处理手段也不同（前者靠 DEK，后者只能靠"没被拿走"）。
+4. **端口不出本机。** OneBot WS（常见 3001）与 WebUI（6099）默认只绑 `127.0.0.1`；
+   跨机用隧道，不开公网端口。WebUI 能直接操作登录，比 WS 更危险。
+
+配套的技术兜底（不是靠自觉）：
+
+- `POST/PATCH /api/instances` 与 `connect` 都会校验接入地址：**默认只允许回环 / 私网 / 组网地址
+  （含 Tailscale 的 100.64/10）**，公网地址返回 `REMOTE_ENDPOINT_BLOCKED`，
+  除非显式设置 `ALLOW_REMOTE_ADAPTER=true`（只认 `true`/`1`）。
+- 连接后调 `get_login_info` 核对实际登录的账号与实例填的 QQ 号是否一致，
+  不一致直接断开——填错号不会表现为"机器人不理人"，而是明确的报错。
+
+日志面：适配器的 logger 有字段白名单，`token` / `accountId` / 完整 QQ 号都不在白名单里；
+报错文案里的 QQ 号一律掩码（`10****01`）。
+
 ---
 
 ## 8. 落地检查清单
 
 实现时逐条打勾，缺一条就算没做完：
 
-- [ ] 权限枚举中不存在 `credential.read.plaintext` 及任何等价 action
-- [ ] `CredentialRepository` 无 `findById` / `findMany`，只有带 `userId` 的方法
-- [ ] 所有对外 DTO 类型中不含 `apiKeyEnc` 字段（靠 TypeScript 编译期保证）
-- [ ] `decryptApiKey` 全局只有 1 处调用
+- [x] 权限枚举中不存在 `credential.read.plaintext` 及任何等价 action
+- [x] `CredentialRepository` 无 `findById` / `findMany`，只有带 `userId` 的方法
+- [x] 所有对外 DTO 类型中不含 `apiKeyEnc` 字段（靠 TypeScript 编译期保证）
+- [x] `decryptApiKey` 全局只有 1 处调用
 - [x] `change-password` 与 `reset-password` 是两个独立接口，前者强制校验旧密码
 - [x] `change-password` 在**单事务**内同时更新 `passwordHash` 与 `wrappedDek`，任一失败整体回滚（CAS 单条 SQL）
 - [x] `change-password` 不修改任何 `Credential` 记录（Key 必须原样保留）
@@ -349,11 +381,24 @@ hash = sha256(prevHash + actorUserId + action + target + createdAt + payloadDige
 - [x] 日志中间件白名单中不含任何密钥字段（`AppExceptionFilter` 只记 method / path / code，**不记 body 与 headers**）
 - [x] 审计哈希链校验接口可用，且能报出断点（`POST /api/admin/audit/verify`）
 - [ ] 未解锁时机器人走预设话术 + 通知 owner，而不是静默不回
+- [x] 接入地址默认只允许本机/内网，公网需 `ALLOW_REMOTE_ADAPTER=true`（`REMOTE_ENDPOINT_BLOCKED`）
+- [x] 连接后 `get_login_info` 核验登录账号与实例配置一致，不一致即断开
+- [x] NapCat 数据目录不入版本库（`.gitignore` + `pnpm check:local-data` 双保险），迁移时本地重新扫码
 
-> **2026-10-23 进度**：除 1/2/3/4 与最后一条外全部打勾。
-> 1–4 依赖凭据模块（第 5 步），最后一条依赖 M2 的消息链路。
-> 认证链路已有 50 个单测 + 真实库冒烟 + 14 项 HTTP 冒烟三重复核。
-> 第 7 条尤其重要：它防止"开发期用全局 KEK 存了几条数据，上线后忘了迁移"这类事故。宁可启动失败，也不要带着两种解密路径上线。
+> **2026-10-24 进度**：第 1～4 条已打勾（凭据模块落地）。最后一条仍待 M2 的消息链路。
+>
+> - 第 1 条：系统里不存在权限枚举这种东西，也没有任何"读明文"的 action；凭据接口只有 `list / create / update / delete`。
+> - 第 2 条：`ICredentialRepository` 的每个方法都带 `userId`，`test/credential/credential.repository.test.ts` 里断言了 `findById` / `findMany` **不存在**，并验证 `ownerUserId` 真的进了 Prisma 的 `where`。
+> - 第 3 条：`CredentialPublicDTO` 与仓储的 `PUBLIC_SELECT` 都是白名单，密文不在其中。
+> - 第 4 条：**目前是 0 处** —— `decryptApiKey` 还没写，凭据模块刻意 `import` 都不 import `decryptWithDek`。等 M2 写 Gateway 时才会出现唯一的那个调用点，到时要回来把这条改成"1 处"。
+> - 第 12 条（启动自检）早已生效，`zk.db` 验收里也复验过：全库不存在 `enc:v1:` 旧格式。
+>
+> 认证链路 50 个单测 + 凭据链路 16 个单测 + 真实库冒烟 + 23 项 HTTP 冒烟 + 零知识直查库，四重复核。
+>
+> **2026-10-24 追加（M1 接入层）**：新增 7.1 节。落地了三条技术兜底——接入地址默认拒绝公网、
+> 连接后核验登录账号、NapCat 数据目录的提交闸门（`pnpm check:local-data`）。
+> 测试覆盖：地址护栏 8 个单测（`test/instance/endpoint-guard.test.ts`）；
+> 适配器端到端 8 个用例，其中 3 个专测"账号不一致 / 账号离线 / 连不上就快速失败"。
 
 ---
 

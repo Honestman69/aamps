@@ -9,7 +9,7 @@
 
 ### 1.1 走第三方协议，所以"接入层"必须是一个可替换的边界
 
-NapCat 提供的是 OneBot 11 协议（WebSocket 反向连接）。这一点决定了：
+NapCat 提供的是 OneBot 11 协议（WebSocket）。**当前实现是"我们主动连 NapCat 的 WS 服务端"**（`BotInstance.endpoint` 就是那个地址）；NapCat 的"反向 WS"（由它连我们）尚未实现，真机联调时若只能用反连模式，需要给适配器加一个 server 模式。这一点决定了：
 
 - 业务代码**不许直接知道** OneBot 的存在，只认内部统一的 `InboundMessage` / `OutboundAction` 结构；
 - 未来若切官方 Bot 通道、或 NapCat 挂掉要换 Lagrange / LLONEOneBot，只改一个 Adapter 实现；
@@ -154,10 +154,10 @@ newjob/
 │  │  │  ├─ session/           # 登录、会话、解锁态（DEK 是否在位）
 │  │  │  └─ runtime-key-store  # 内存中的 DEK，不持久化、不进日志
 │  │  ├─ tenancy/              # 租户上下文（预留）
-│  │  ├─ instance/             # QQ 机器人实例与生命周期
-│  │  ├─ adapter/
-│  │  │  ├─ onebot/            # OneBot 11 WS 反向连接实现
-│  │  │  └─ official/          # 预留：官方 Bot 通道
+│  │  ├─ instance/             # QQ 机器人实例与生命周期（QQ 号/地址/token 存库，见 D016）
+│  │  ├─ adapter/              # 【接入边界】只放主服务侧：AdapterRegistry + 清单接口
+│  │  │                        #   具体协议实现已拆包：packages/adapter-qq（D013）
+│  │  ├─ credential/           # 模型 API Key 托管（加密写入、掩码、4 个接口）
 │  │  ├─ pipeline/
 │  │  │  ├─ inbound/           # 入站管道（各 Pipe）
 │  │  │  └─ outbound/          # 出站管道

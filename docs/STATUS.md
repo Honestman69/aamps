@@ -3,8 +3,8 @@
 > **这是唯一的进度真源。** 每次改动代码后必须更新本文件。
 > 新会话接手时，直接从「下一步」开始，不要重新规划。
 
-**最后更新**：2026-10-23
-**当前阶段**：M0 收尾（认证 + HTTP 层已完成，剩凭据管理与零知识验收）
+**最后更新**：2026-10-24
+**当前阶段**：M1 骨架完成（接入层 + 实例管理 + 接入安全兜底），差 NapCat 真机联调；联调通过即进 M2 最小闭环
 
 ---
 
@@ -12,6 +12,9 @@
 
 - 远程：`git@github.com:Honestman69/aamps.git`（网页：https://github.com/Honestman69/aamps）
 - 分支：`main`，首个提交 `ceccdc6`
+- **里程碑标签**（回档锚点，见 `AGENTS.md`「分支与合并纪律」）：
+  - `m1-skeleton` —— M1 骨架完成（适配器 + 实例管理 + 接入安全兜底）
+  - 合并一律 `git merge --no-ff`，分支保留不删；回档首选 `git revert -m 1 <merge>`
 - 网络：本机 `github.com:22` 会被重置，`~/.ssh/config` 已配置走 `ssh.github.com:443` + `Compression yes`。
   直接 `git push` 即可；若出现 `Connection reset`，先重试一次，通常是网络波动。
 - 包管理器：本机原本没有 pnpm，已用 `corepack enable pnpm`（9.15.0）装好；依赖已 `pnpm install`。
@@ -122,17 +125,84 @@
 - `resetPasswordSelf`（忘记密码）**没有挂 HTTP 路由**，只到服务层。它是"无法证明身份"的路径，挂成未认证接口等于账号接管入口。
 - 构建：`pnpm build` 会**先构建 `packages/*`，再编译主服务**。契约包 `main` 指向 `dist/index.js`，所以直接 `tsc` 主服务而不构建包，运行时会 `ERR_MODULE_NOT_FOUND`。
 
-### 第 5 步：凭据管理 + 零知识验收（M0 收尾）← 现在做这个
+### ~~第 5 步：凭据管理 + 零知识验收（M0 收尾）~~ ✅ 已完成
 
-- [ ] `CredentialRepository`：只有 `createForUser` / `listForUser` / `findForUser(userId, id)` / `updateForUser` / `deleteForUser`，**没有 `findById` / `findMany`**
-- [ ] `CredentialService`：新增时用 owner 的 DEK 加密（`decryptApiKey` 之外**不允许**其他地方碰明文）、只存 `keyMasked`
-- [ ] 接口：`GET/POST /api/credentials`、`PATCH/DELETE /api/credentials/:id`
-- [ ] DTO 收窄：类型里没有 `apiKeyEnc`，列表只返回 `keyMasked`（`sk-****a1b2`）
-- [ ] 零知识验收：superadmin 抓遍所有接口 + 直查数据库，只看得到掩码
+- [x] `CredentialRepository`：只有 `createForUser` / `listForUser` / `findForUser(userId, id)` / `updateForUser` / `deleteForUser` / `countForUser`，**没有 `findById` / `findMany`**
+- [x] `CredentialService`：新增时用 owner 的 DEK 加密、只存 `keyMasked`，**模块内没有任何解密函数**
+- [x] 接口：`GET/POST /api/credentials`、`PATCH/DELETE /api/credentials/:id`
+- [x] DTO 收窄：类型里没有 `apiKeyEnc`，列表只返回 `keyMasked`（`sk-****a1b2`）
+- [x] 零知识验收：superadmin 抓遍所有接口 + 直查数据库，只看得到掩码
 
-**验收**：`docs/SECURITY.md` 第 8 节剩余 1/2/3/4 条全部打勾；写一条"跨用户查询返回空"的测试（CONVENTIONS 要求）。
+**验收**：
 
-**注意**：`decryptApiKey` 的调用方最终只应有 `ModelGateway.dispatch()` 一处（`SECURITY.md` 5.3）。第 5 步写加密侧时**先不要写解密函数**，等 M2 的 Gateway 一起加，避免提前长出多个调用点。
+- `pnpm test` **67 个用例全绿**（crypto 13 + auth 38 + credential 16）
+- `pnpm typecheck` 全绿
+- `scripts/http-smoke.ts` **23 项检查**全过（新增 8 项凭据检查 + 锁定后 401）
+- `scripts/zero-knowledge-check.ts` 通过：15 张表、124 个字符串值全扫一遍，明文命中 0
+- `docs/SECURITY.md` 第 8 节第 1/2/3/4 条已打勾
+
+**实现补充（后续不要改）**：
+
+- **归属隔离是 Index 级下推，不是内存过滤**：`findForUser` 的 `where` 是 `{ id, ownerUserId }`，`updateForUser` 用 Prisma 的扩展 `where`（唯一键 + 过滤条件）一条 SQL 完成，`P2025` 统一转成 `null`。别改成"先查再判断再写"。
+- **`PUBLIC_SELECT` 是白名单**，`apiKeyEnc` / `tenantId` / `ownerUserId` / `catalogJson` 都不在里面。仓储层拿不到密文，上层就没有漏的可能。
+- **凭据模块刻意不 import `decryptWithDek`**。M2 写 `ModelGateway` 时才会出现唯一的解密调用点，届时回来把 SECURITY 第 8 节第 4 条改成"1 处"。
+- **请求体用 `.strict()`**：客户端传 `apiKeyEnc` / `ownerUserId` 直接 400，而不是静默忽略。静默忽略会让人以为设置生效了。
+- **删除是物理删除**（D015），与「软删除优先」的例外关系已写进 `CONVENTIONS.md`。`enabled=false` 仍是"临时停用"，两条路径不要合并。
+- **轮换 Key 记 `credential.rotate`**，只改元数据记 `credential.update`；两者在审计里必须能分开，否则出事时看不出"Key 到底换没换"。
+- `list` 在未解锁时**也能用**（只返回掩码），`create` / `update(带 apiKey)` 必须先解锁 —— 没有 DEK 就没法加密，不存在"先存着"。
+
+### ~~第 6 步：M1 骨架（AdapterRegistry + QQ 适配器）~~ ✅ 已完成（待真机联调）
+
+- [x] `AdapterRegistry`：显式注册 `@newjob/adapter-qq` 的 factory，按 `manifest.protocol` 路由（键是 `platform:protocol`）
+- [x] `packages/adapter-qq`：OneBot 11 WS 连接（`connect` 只试一次 + 断线指数退避重连 + `get_status` 心跳探活）
+- [x] 事件转换：OneBot 原始事件 → `InboundMessage`（**不填 `raw`**，CQ 码字符串不解析）
+- [x] 收到消息 → 回 `pong`（带引用回复）
+- [x] 发送节流（令牌桶，参数取自 `capabilities.rateLimitHint`）
+- [x] 实例模块：QQ 号 / WS 地址 / token 全部存在 `BotInstance` 里，**没有任何写死的号或地址**
+- [x] 实例接口：`GET/POST /api/instances`、`PATCH/DELETE /api/instances/:id`、`POST /api/instances/:id/connect|disconnect`
+- [x] `GET /api/adapters`：返回 manifest，前端据此渲染配置表单
+- [x] 接入地址护栏：默认只允许回环/私网，公网需 `ALLOW_REMOTE_ADAPTER=true`
+- [x] 连接后核验登录账号（`get_login_info`）与账号在线（`get_status`）
+- [x] NapCat 数据目录的提交闸门：`pnpm check:local-data`
+
+**验收**：
+
+- `pnpm test` **112 个用例全绿**（crypto 13 + auth 38 + credential 16 + instance 20 + adapter 21 + registry 4）
+- `pnpm typecheck` 全绿（主服务 + contracts + adapter-qq，测试文件也在内）
+- `scripts/http-smoke.ts` **31 项检查**全过（新增 8 项实例检查：配置表单可读、QQ 号接口可填、token 不回显、NapCat 未启动时 502 且状态回落、公网地址 400 拦截）
+- `test/adapter-qq/onebot-e2e.test.ts`：**真的起一个 OneBot WS 服务端**，验证鉴权参数、事件转换、`pong` 回发、断线自动重连
+
+**实现补充（后续不要改）**：
+
+- **配置三个来源，别搞混**：QQ 号 / WS 地址 / token 存 `BotInstance`（数据库）；`SESSION_SECRET` 这类进程密钥存 `.env`；适配器只从 `AdapterDeps.config` 拿，**不读环境变量**。换号 = 新建一条记录，换服务器 = 改一条记录的 endpoint。
+- **连接必须先解锁**：token 用 owner 的 DEK 加密（与 API Key 同一套），而 DEK 只在解锁后存在于内存（D005）。所以**进程重启后实例不会自己上线**，要等用户登录后点连接。这是设计代价，不是 bug（见 D016）。
+- **`connect()` 只尝试一次**，失败立刻报 502。自动重连只发生在"已连上之后的意外断开"，避免后台点一次连接就陷入无限重试。
+- **重连退避**：1s 起、每次翻倍、上限 30s、连续 10 次放弃并落 error 日志。放弃后需要人再点一次连接——风控考虑，不想让一个掉线的号无限敲门。
+- **心跳是自己发 `get_status`**，不是等 NapCat 的 heartbeat。等对方的探活无法区分"对方挂了"和"对方不发心跳"。
+- **`message_sent` 一律丢弃**：否则机器人会把自己的回复当新消息，自问自答。
+- **原始结构不出包**：`InboundMessage.raw` 刻意不填。填了之后下游总有人读 `post_type`，铁律当天破。
+- **发送节流在适配器内部**，不是上层。多实例各自一个桶，不共享——共享会让一个号被限速拖累所有号。
+- **接入地址默认拒绝公网**（`endpoint-guard.ts`）：回环 / RFC1918 / 链路本地 / Tailscale 的 100.64/10 / 单标签主机名 / `.local` 放行，其余返回 `REMOTE_ENDPOINT_BLOCKED`。理由不是洁癖：指向别人的 NapCat 等于把 QQ 登录态交给对方。开关只认 `true`/`1`，写错字不会意外打开。**create / update / connect 三处都校验**，因为开关可能事后被关掉。
+- **连接成功 ≠ 登对了号**：`connect()` 之后必须 `get_login_info` 核对 `user_id === selfId`，不一致就断开并报错（错误信息里是掩码）。再加 `get_status` 判 `online`，`good === false` 只告警不阻断（表示接收链路不健康，消息可能不来）。
+  > 这条是对比 `D:\Projects\QQ-bot` 之后补的：那边明确记过「WS 通、进程活、控制台全绿，但 hook stale 导致群里一条消息都不来」，而且 `get_login_info` 拿不到健康度，必须用 `get_status`。
+- **连接失败必须真的 close**：早期版本在 `verifyLogin` 抛错时只把 `this.client = null`，socket 还开着，NapCat 侧会认为连接有效。现在 catch 里先 `client.close()` 再置空，测试里用 `openSockets === 0` 断言。
+- **NapCat 数据目录的闸门**：`.gitignore` 覆盖 `napcat/`、`napcat-data/`、`.config/QQ/`、`onebot_*.json`、`ntqq_*.json`；`pnpm check:local-data` 同时扫「已跟踪」与「未被忽略」两类文件（前者是已经出事了，后者是下次 `git add -A` 就出事），命中即非零退出。已用 `git add -f` 实际验证过它能拦住。
+
+### 第 7 步：NapCat 真机联调 ← 现在做这个
+
+代码层面 M1 已通，差一次真实环境验证。前置：装 NapCat、准备小号（`STATUS.md` 未决问题 1、2 已定：先本机、后云）。
+
+- [ ] NapCat 配置 WebSocket 服务端（记下端口与 token），本机先用 `ws://127.0.0.1:6700` 这一套
+- [ ] 后台建实例：填 QQ 号 + WS 地址 + token → 点连接 → 看服务日志出现 `adapter.connected`
+- [ ] 私聊发一条消息 → 应收到引用回复 `pong`
+- [ ] 群里 `@机器人` 一条 → 应收到 `pong`；不 @ 时不回复（`isMentioned` 生效）
+- [ ] 停掉 NapCat → 观察重连日志；重启 NapCat → 心跳自愈
+- [ ] 换小号测试"切换"：新建第二条实例、连上新的、断开旧的
+- [ ] 故意填错 QQ 号 → 应被"账号不一致"拦住（验证 `get_login_info` 核验真的生效）
+- [ ] `pnpm check:local-data` 通过；确认 `napcat/` 没有被 git 看到
+- [ ] 迁移演练：把 `napcat/` 目录复制到别处，确认**不搬数据**也能靠重新扫码跑起来
+
+**验收**：以上 9 项全过，且日志里没有任何 token / 完整 QQ 号。
 
 ---
 
@@ -149,18 +219,19 @@
 - [x] `changePassword`：单事务重包裹，Key 不变
 - [x] `resetPassword`：销毁 wrappedDek + 停用全部 Credential
 - [x] 审计日志 + 哈希链 + 完整性校验接口
-- [ ] 零知识验收：用 superadmin 登录，抓所有接口，只看得到 `sk-****a1b2`（需 HTTP 层）
+- [x] 凭据管理：信封加密写入 + 掩码 + 4 个接口 + 审计（create / update / rotate / delete）
+- [x] 零知识验收：用 superadmin 登录抓所有接口 + 直查全库，只看得到 `sk-****a1b2`
 
 ### M1 骨架
 
-- [ ] NestJS 工程初始化（Fastify adapter）
-- [ ] `.env` 加载与启动自检
-- [ ] Prisma 迁移跑通
-- [ ] **AdapterRegistry**：显式注册 `@newjob/adapter-qq` 的 factory，按 `manifest.protocol` 路由
-- [ ] `packages/adapter-qq`：OneBot 11 WS 反向连接（`connect` / 心跳 / 重连）
-- [ ] 事件转换：OneBot 原始事件 → `InboundMessage`（禁止把原始结构往上抛）
-- [ ] 收到消息 → 回 `pong`
-- [ ] 发送节流（全局令牌桶）
+- [x] NestJS 工程初始化（Fastify adapter）
+- [x] `.env` 加载与启动自检
+- [x] Prisma 迁移跑通
+- [x] **AdapterRegistry**：显式注册 `@newjob/adapter-qq` 的 factory，按 `manifest.protocol` 路由
+- [x] `packages/adapter-qq`：OneBot 11 WS 连接（`connect` / 心跳 / 重连）
+- [x] 事件转换：OneBot 原始事件 → `InboundMessage`（禁止把原始结构往上抛）
+- [x] 收到消息 → 回 `pong`
+- [x] 发送节流（全局令牌桶）
 
 ### M2 最小闭环
 
@@ -220,6 +291,11 @@
 - [x] 2026-10-23 **认证与密钥库** `src/modules/auth/`（RuntimeKeyStore / PasswordService / UnlockService / AuditService / Bootstrap + Prisma 仓储 + 启动自检）
 - [x] 2026-10-23 **HTTP 层**：NestJS(Fastify) 启动装配、会话与签名 cookie、6 个认证/管理接口、全局异常过滤器、14 项 HTTP 冒烟
 - [x] 2026-10-23 Prisma 首次迁移 `20261023145901_init`，`scripts/auth-smoke.ts` 真实库冒烟通过
+- [x] 2026-10-24 **凭据管理** `src/modules/credential/`：仓储归属隔离（`ownerUserId` 下推 SQL）、加密写入 + 掩码、4 个接口、`.strict()` 入参、审计四动作
+- [x] 2026-10-24 **零知识验收**：`scripts/zero-knowledge-check.ts` 全库 15 张表直查，明文命中 0；HTTP 冒烟扩到 23 项
+- [x] 2026-10-24 **接入层**：`AdapterRegistry` + `adapter-qq` 完整实现（WS 连接/心跳/退避重连/令牌桶/事件转换/发送）
+- [x] 2026-10-24 **实例管理**：QQ 号与 WS 地址存 `BotInstance` 并通过接口增删改启停，`pong` 闭环；101 个单测 + 30 项 HTTP 冒烟
+- [x] 2026-10-24 **接入安全兜底**：endpoint 默认拒绝公网、连接后核验登录账号、NapCat 数据目录提交闸门（`pnpm check:local-data`）；112 个单测
 
 ---
 
@@ -227,8 +303,8 @@
 
 | # | 问题 | 影响 | 何时需要决定 |
 |---|---|---|---|
-| 1 | NapCat 部署在哪（本机 / 服务器 / Docker） | 影响 Adapter 连接配置与 IP 白名单 | M1 开始前 |
-| 2 | 用哪个 QQ 号做机器人（小号储备） | 影响风控参数激进程度 | M1 开始前 |
+| ~~1~~ | ~~NapCat 部署在哪（本机 / 服务器 / Docker）~~ → **已定**：先本机测试，确认后再迁云 | 结论：接入地址必须是**数据**（`BotInstance.endpoint`），不能是环境变量，否则换机器要改 `.env` 重启 | — |
+| ~~2~~ | ~~用哪个 QQ 号做机器人（小号储备）~~ → **已定**：不写死，后台可增删/切换 | 结论：QQ 号存 `BotInstance.accountId`，一个号一条记录 | — |
 | 3 | 是否需要语音消息（TTS / ASR） | 影响表达层与模型路由 | M3 |
 | 4 | 人设是否要支持多套按时段切换 | 影响 Persona 与 Session 的绑定关系 | M4 |
 | 5 | 是否需要群管理能力（欢迎、关键词） | 影响 Adapter 权限与风控 | M6 |
@@ -244,3 +320,7 @@
 | 2026-10-23 | 追加 D014：KDF 库固定 `@node-rs/argon2`（实测 `argon2` 亦可用，依据是"无编译回退路径"而非"跑不起来"）；并补「依赖类取舍写在哪」的判定标准 |
 | 2026-10-23 | 完成 HTTP 层：登录即解锁、签名 cookie 会话、管理端重置/审计接口、启动自检接入；14 项 HTTP 冒烟通过 |
 | 2026-10-23 | 完成认证与密钥库服务层：DEK 内存库、改密/重置双路径、解锁、审计哈希链、启动自检、Prisma 仓储、superadmin 种子；50 个单测 + 真实库冒烟通过 |
+| 2026-10-24 | 完成凭据管理：加密写入 + 掩码 + 4 个接口 + 审计；67 个单测、23 项 HTTP 冒烟、零知识直查库全过；追加 D015（凭据物理删除） |
+| 2026-10-24 | 完成接入层与实例管理：`adapter-qq`（WS/心跳/重连/节流/事件转换）、`AdapterRegistry`、实例 CRUD + 连接接口、`pong` 闭环；101 个单测、30 项 HTTP 冒烟；追加 D016（实例配置来源与解锁依赖） |
+| 2026-10-24 | 补接入安全兜底：endpoint 护栏（`REMOTE_ENDPOINT_BLOCKED`）、`get_login_info` 账号核验、`check:local-data` 提交闸门；112 个单测；追加 D017（协议端地址与登录态边界） |
+| 2026-10-24 | 建立分支纪律：M0 收尾与 M1 骨架分两次提交到 `feat/m1-adapter-and-instance`，合并前 typecheck / 112 单测 / build / 31 项冒烟 / 数据闸门全绿，`--no-ff` 合并并打标签 `m1-skeleton` |

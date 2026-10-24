@@ -126,7 +126,8 @@ logger.info({ event: 'llm.call', provider, model, tokenIn, tokenOut }, 'model ca
 ## 数据库
 
 - 迁移用 `prisma migrate dev`，**不允许手改数据库**。
-- 软删除优先：`enabled = false` 而不是 `DELETE`（凭据、实例、人设）。
+- 软删除优先：`enabled = false` 而不是 `DELETE`（实例、人设）。
+  **凭据是例外**，走物理删除，理由见 `DECISIONS.md` D015（留着的密文是负债）。
 - 时间统一 UTC 存，展示时转本地。
 - JSON 字段命名后缀 `Json`，应用层负责 `JSON.parse`，并**必须有对应的 zod schema 校验**（防止历史数据格式漂移导致崩溃）。
 
