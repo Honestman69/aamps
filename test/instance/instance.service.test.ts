@@ -381,11 +381,14 @@ describe('InstanceService 连接链路', () => {
     });
 
     expect(adapter.sent).toHaveLength(1);
+    // 占位回声不带引用：真人不会对每句话都点引用（引用由 M3 表达层决定）
     expect(adapter.sent[0]).toMatchObject({
       kind: 'send',
       segments: [{ type: 'text', text: 'pong' }],
-      replyToMessageId: 'msg-1',
     });
+    const sent = adapter.sent[0]!;
+    expect(sent.kind).toBe('send');
+    expect(sent.kind === 'send' ? sent.replyToMessageId : 'unexpected').toBeUndefined();
   });
 
   it('reports a clear error when NapCat is unreachable and leaves no runtime behind', async () => {

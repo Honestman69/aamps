@@ -377,11 +377,14 @@ export class InstanceService {
     if (!message.plainText.trim()) {
       return;
     }
+    // 刻意**不带** replyToMessageId：引用回复是"这条消息需要指回上一条"的表达手段，
+    // 真人对每句话都点引用会显得很机械。协议层支持（OutboundAction.replyToMessageId
+    // → OneBot 的 reply 段）保留不动，什么时候引用由 M3 的表达层按语境决定，
+    // 不该在这个连 AI 都还没接上的占位回声里替它做决定。
     const action: OutboundAction = {
       kind: 'send',
       session: message.session,
       segments: [{ type: 'text', text: 'pong' }],
-      ...(message.id ? { replyToMessageId: message.id } : {}),
     };
     adapter.send(action).catch((err: Error) => {
       createAdapterLogger(`instance:${message.instanceId}`).warn(
