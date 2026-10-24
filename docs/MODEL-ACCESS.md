@@ -95,8 +95,9 @@ ModelRoute    某个 QQ 实例用哪条 Credential 的哪个模型（主 / 备 /
 | 名称 / 来源 | label + ownerLabel |
 | Provider | 带厂商标识 |
 | Key | `sk-****a1b2` |
-| 状态 | 可用 / 未验证 / 验证失败（悬停看 `lastError`） |
-| 今日用量 | token + 估算金额 / 日预算，进度条 |
+| 状态 | 可用 / 冷却中（悬停看 `unavailableReason`）/ 未验证 / 验证失败 |
+| 余额 | 厂商侧余额；查不到的显示「未知 · 去厂商后台」并给 `consoleUrl`（D025） |
+| 今日用量 | token + 估算金额；**预算不在这里**（预算在实例上，见 D024） |
 | 绑定实例 | 有几个 QQ 实例在用 |
 | 操作 | 测试、编辑、轮换、停用、删除 |
 
@@ -154,18 +155,68 @@ Gateway 内部 8 步：
 
 ## 7. 容错策略
 
+### 7.1 重试：只针对"可能自愈"的失败
+
 | 情况 | 处理 |
 |---|---|
 | 连接超时 | 5s，重试 2 次 |
 | 首 token 超时 | 15s，重试 1 次 |
-| 429 限流 | 退避 1s / 3s 重试，最多 2 次，仍失败则换同 Provider 的下一张 Key |
+| 429 限流 | 退避 1s / 3s 重试，最多 2 次，仍失败换同 Provider 下一张 Key |
 | 5xx / 网络错误 | 重试 2 次，再失败走 fallback 模型 |
-| 401 / 403 | **不重试**，立即标记 `lastCheckOk=false`，写 `InstanceEvent(level=error)`，推告警 |
-| 402 / 余额不足 | 不重试，标记并告警，切换 fallback |
-| 内容被厂商拒绝 | 不重试，把拒答原因交给规则引擎决定是否换话术重写 |
-| 连续失败 5 次 | 熔断 5 分钟，期间直接返回兜底话术 |
+| 401 / 403（`auth`） | **不重试**，标记 `cooldownUntil` 并推告警 |
+| 402 / `insufficient_quota` / `is_available=false`（`balance`） | **不重试**，标记并告警，切 fallback |
+| 内容被厂商拒绝 | 不重试，交给规则引擎决定是否换话术重写 |
 
-降级顺序：`主模型 → 备用模型（同 Key）→ 同 Provider 其他 Key → 兜底话术`。**任何一环都不能让机器人卡住不回**，宁可选一句预设的"我这边有点问题，等下再说"。
+降级顺序：`主模型 → 备用模型（同 Key）→ 同 Provider 其他 Key → 按 7.3 决定是否出声`。
+
+### 7.2 熔断：只暂停路由，不动配置
+
+熔断只写"健康层"，三层必须分清（D025）：
+
+| 层 | 字段 | 谁能改 |
+|---|---|---|
+| 配置 | `apiKeyEnc` / `label` / `priority` / `enabled` | **只有用户** |
+| 健康 | `cooldownUntil` / `unavailableReason` / `lastCheckOk` / `lastError` | 系统自动写，可自愈 |
+| 用户禁用 | `enabled=false` + `disabledBy='owner'` | 只有用户；系统不得覆盖 |
+
+- 路由条件：`enabled=true AND (cooldownUntil IS NULL OR cooldownUntil < now)`
+- 冷却到期后 **half-open**：放行一次试探请求，成功清标记，失败继续冷却
+- 恢复三条路径：① 余额巡检发现恢复 ② 用户点「重新检测」 ③ 冷却到期试探成功
+- **禁止**：删凭据行、清 `apiKeyEnc`、改 `enabled`、把 `balance` 写成 `auth`（那会让用户白换 Key）
+- 自动暂停写审计 `credential.auto_suspended`，后台展示「系统已暂停 · 余额不足 · 充值后点『重新检测』，无需重填 Key」
+
+### 7.3 兜底表现：按"故障预期时长"分级（不要所有失败都回一句话术）
+
+| 故障 | 预期时长 | 对端表现 | owner 通知 |
+|---|---|---|---|
+| 网络抖动 / 5xx | 分钟级 | 话术一次（同会话 1 小时最多 1 次、全天最多 3 次），之后静默 | 聚合后一条 |
+| 余额耗尽（`balance`） | 小时~天 | **静默**（群聊尤其）；私聊可选一次"我这边有点事" | 立即，写明原因 + 充值链接 |
+| Key 失效（`auth`） | 到用户重配 | 静默 | 立即 |
+| 我方预算 `block` | 到次日 0 点 | 话术一次（"今天有点累"是可接受的拟人） | 可选 |
+
+理由：**短时说"有点事"是拟人，长时说就是骗人。** 持续敷衍比不说话更伤关系——尤其群里，
+反复"等下再说"会被当成故意晾人。而"它突然安静了"配上 owner 收到的"余额不足"通知，一切都能对上。
+
+**绝不**把 `balance` 说成"Key 无效"或"我有点累"：误导性文案会让用户真的去重新申请 Key，白折腾。
+
+### 7.4 余额：三态，绝不估算
+
+| 状态 | 含义 | 后台展示 |
+|---|---|---|
+| `api` | 厂商有余额接口（如 DeepSeek `/user/balance`） | 显示金额 + 查询时间 |
+| `inferred` | 只能靠错误码事后确认（OpenAI / Anthropic / Gemini） | 「未知 · 该厂商不支持查询」+ 充值链接 |
+| `unsupported` / `unverified` | 未实现或未实测 | 同上，且提示"请自行关注账户" |
+| `na` | 本地模型 | 「不适用」 |
+
+- 主动查询：`POST /api/credentials/:id/refresh-balance`，按 `presets.ts` 的 `balance` 声明通用执行，**不写厂商分支**
+- 被动识别：402 / `insufficient_quota` / `credit balance is too low` / `RESOURCE_EXHAUSTED` → `availableReason='balance'`，`balanceSource='inferred'`
+- **查余额要明文 Key，而明文只在解锁后存在（D005）**：未解锁时只显示上次快照并标注时间，不报"查不到"为错误
+- 余额与预算**并排显示**：否则用户看到"还剩 110 元"却不懂为什么机器人不说话（其实是日限额到了）
+
+### 7.5 通知去重
+
+同一 `(instanceId, unavailableReason)` 在 30 分钟窗口内只发一条，文案带"已静默 N 次"。
+否则余额耗尽一晚上能推几十条，用户会把告警当噪音关掉——那比不告警更糟。
 
 ---
 

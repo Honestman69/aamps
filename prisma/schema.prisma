@@ -96,6 +96,19 @@ model Credential {
   lastCheckOk   Boolean?
   lastError     String?
 
+  // ── 余额（厂商侧，D025）：只有支持余额查询的 Provider 才有值；查不到留 null，**绝不估算** ──
+  balanceCents     Int? // 折算成"分"；原币种见 balanceCurrency
+  balanceCurrency  String? // CNY | USD
+  balanceCheckedAt DateTime?
+  /// api = 厂商接口查到；inferred = 由错误码推断（如 insufficient_quota）；unknown = 该厂商不支持
+  balanceSource    String?
+
+  // ── 熔断状态（D025）：**系统自动写，用户不可改**；与 enabled（用户开关）严格分开 ──
+  /// 冷却截止。期间路由跳过这张 Key，但记录、密文、enabled 一律不动
+  cooldownUntil     DateTime?
+  /// balance | auth | rate_limit | provider | network
+  unavailableReason String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

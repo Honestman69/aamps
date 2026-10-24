@@ -64,6 +64,12 @@ class FakeCredentialRepository implements ICredentialRepository {
       lastCheckedAt: null,
       lastCheckOk: null,
       lastError: null,
+      balanceCents: null,
+      balanceCurrency: null,
+      balanceCheckedAt: null,
+      balanceSource: null,
+      cooldownUntil: null,
+      unavailableReason: null,
       createdAt: now,
       updatedAt: now,
     };
