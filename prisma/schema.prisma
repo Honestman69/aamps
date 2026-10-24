@@ -87,9 +87,8 @@ model Credential {
   defaultModel String?
   catalogJson  String  @default("[]") // [{id,name,contextWindow,priceInPerM,priceOutPerM}]
 
-  dailyBudgetCents   Int @default(0) // 0 = 不限
-  monthlyBudgetCents Int @default(0)
   priority           Int @default(100) // 同 provider 多 Key 时数字小的先用，用于轮换/降级
+  // 预算不在这里：挂在 BotInstance（人格）上，见 D024。不要往凭据上加预算字段。
 
   enabled       Boolean   @default(true) // superadmin 可置 false（紧急停用），但不可读取
   disabledBy    String? // 记录是本人停用还是管理员停用
@@ -139,6 +138,13 @@ model BotInstance {
   dailyMsgCap     Int       @default(800)
   rateLimitPerMin Int       @default(20)
   nightQuiet      String    @default("00:30-07:30") // 夜间静默时段，仅 @ 除外
+
+  // 人格预算（D024）：预算挂在人格（= 这个社交账号）上，**不挂在 Key 上**。
+  // 否则换一把 Key 就等于刷新预算，等于没有预算。
+  dailyBudgetCents   Int    @default(0) // 0 = 不限
+  monthlyBudgetCents Int    @default(0) // 0 = 不限
+  /// 超限策略：downgrade = 降级到 modelCheap 继续聊；block = 直接不回复（通知 owner）
+  budgetPolicy       String @default("downgrade")
 
   // 模型路由（D021：Provider 可切换；切模型不动人格与记忆，因为它们是本账号的数据）
   credentialId     String?

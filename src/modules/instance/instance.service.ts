@@ -115,6 +115,9 @@ export class InstanceService {
       accessTokenEnc,
       accessTokenDigest,
       enabled: input.enabled ?? true,
+      dailyBudgetCents: input.dailyBudgetCents,
+      monthlyBudgetCents: input.monthlyBudgetCents,
+      budgetPolicy: input.budgetPolicy,
     });
 
     await this.deps.audit.record({
@@ -165,6 +168,10 @@ export class InstanceService {
       patch.endpoint = input.endpoint;
     }
     if (input.enabled !== undefined) patch.enabled = input.enabled;
+    // 预算是人格级配置（D024）：改它不需要重连，也不碰任何密钥
+    if (input.dailyBudgetCents !== undefined) patch.dailyBudgetCents = input.dailyBudgetCents;
+    if (input.monthlyBudgetCents !== undefined) patch.monthlyBudgetCents = input.monthlyBudgetCents;
+    if (input.budgetPolicy !== undefined) patch.budgetPolicy = input.budgetPolicy;
 
     // accessToken 三态：不传=不变，null=清空，字符串=替换（替换要先解锁）
     if (input.accessToken === null) {

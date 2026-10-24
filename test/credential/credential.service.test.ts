@@ -58,8 +58,6 @@ class FakeCredentialRepository implements ICredentialRepository {
       apiVersion: input.apiVersion ?? null,
       keyMasked: input.keyMasked,
       defaultModel: input.defaultModel ?? null,
-      dailyBudgetCents: input.dailyBudgetCents ?? 0,
-      monthlyBudgetCents: input.monthlyBudgetCents ?? 0,
       priority: input.priority ?? 100,
       enabled: input.enabled ?? true,
       disabledBy: null,

@@ -26,6 +26,11 @@ const accessTokenSchema = z.string().trim().min(1).max(512);
  */
 const adapterModeSchema = z.enum(['client', 'server']);
 
+/** 预算单位是"分"，0 表示不限。上限 1000 万分（10 万元）只是防手滑输入天文数字 */
+const budgetCentsSchema = z.number().int().min(0).max(10_000_000);
+/** 超限策略：降级继续聊，还是直接拒答 */
+const budgetPolicySchema = z.enum(['downgrade', 'block']);
+
 export const createInstanceSchema = z
   .object({
     name: nameSchema,
@@ -39,6 +44,9 @@ export const createInstanceSchema = z
     endpoint: endpointSchema.optional(),
     accessToken: accessTokenSchema.optional(),
     enabled: z.boolean().optional(),
+    dailyBudgetCents: budgetCentsSchema.optional(),
+    monthlyBudgetCents: budgetCentsSchema.optional(),
+    budgetPolicy: budgetPolicySchema.optional(),
   })
   .strict();
 
@@ -53,6 +61,9 @@ export const updateInstanceSchema = z
     endpoint: endpointSchema.nullable().optional(),
     accessToken: accessTokenSchema.nullable().optional(),
     enabled: z.boolean().optional(),
+    dailyBudgetCents: budgetCentsSchema.optional(),
+    monthlyBudgetCents: budgetCentsSchema.optional(),
+    budgetPolicy: budgetPolicySchema.optional(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, { message: '至少提供一个要修改的字段' });
@@ -76,6 +87,10 @@ export type InstancePublicDTO = {
   endpoint: string | null;
   hasAccessToken: boolean;
   enabled: boolean;
+  /** 人格预算（D024）：挂在社交账号上，换 Key 不会重置 */
+  dailyBudgetCents: number;
+  monthlyBudgetCents: number;
+  budgetPolicy: string;
   status: string;
   createdAt: string;
   updatedAt: string;
@@ -92,6 +107,9 @@ export function toInstanceDTO(row: InstancePublicRow): InstancePublicDTO {
     endpoint: row.endpoint,
     hasAccessToken: row.hasAccessToken,
     enabled: row.enabled,
+    dailyBudgetCents: row.dailyBudgetCents,
+    monthlyBudgetCents: row.monthlyBudgetCents,
+    budgetPolicy: row.budgetPolicy,
     status: row.status,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),

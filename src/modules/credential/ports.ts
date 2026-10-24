@@ -22,8 +22,6 @@ export type CredentialPublicRow = {
   /** `sk-****a1b2`，仅用于界面展示；由 Service 生成后写入 */
   keyMasked: string;
   defaultModel: string | null;
-  dailyBudgetCents: number;
-  monthlyBudgetCents: number;
   priority: number;
   enabled: boolean;
   disabledBy: string | null;
@@ -48,8 +46,6 @@ export type CredentialCreateInput = {
   keyMasked: string;
   defaultModel?: string | null;
   priority?: number;
-  dailyBudgetCents?: number;
-  monthlyBudgetCents?: number;
   enabled?: boolean;
 };
 
@@ -63,8 +59,6 @@ export type CredentialUpdatePatch = {
   apiVersion?: string | null;
   defaultModel?: string | null;
   priority?: number;
-  dailyBudgetCents?: number;
-  monthlyBudgetCents?: number;
   enabled?: boolean;
   apiKeyEnc?: string;
   keyMasked?: string;
