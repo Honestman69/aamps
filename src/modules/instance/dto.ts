@@ -68,7 +68,6 @@ export type UpdateInstanceInput = z.infer<typeof updateInstanceSchema>;
  */
 export type InstancePublicDTO = {
   id: string;
-  agentId: string;
   name: string;
   platform: string;
   accountId: string;
@@ -85,7 +84,6 @@ export type InstancePublicDTO = {
 export function toInstanceDTO(row: InstancePublicRow): InstancePublicDTO {
   return {
     id: row.id,
-    agentId: row.agentId,
     name: row.name,
     platform: row.platform,
     accountId: row.accountId,

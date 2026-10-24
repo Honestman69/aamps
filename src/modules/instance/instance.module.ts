@@ -13,9 +13,6 @@ import { Module } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { AdapterModule } from '../adapter/adapter.module';
 import { AdapterRegistry } from '../adapter/adapter-registry';
-import { AgentModule } from '../agent/agent.module';
-import type { IAgentRepository } from '../agent/ports';
-import { AGENT_REPOSITORY } from '../agent/tokens';
 import { AuthModule } from '../auth/auth.module';
 import { AuditService } from '../auth/audit.service';
 import { RuntimeKeyStore } from '../auth/runtime-key-store';
@@ -29,7 +26,7 @@ import { PrismaInstanceRepository } from './repositories/prisma-instance.reposit
 import { INSTANCE_REPOSITORY, INSTANCE_SERVICE } from './tokens';
 
 @Module({
-  imports: [AuthModule, AdapterModule, AgentModule],
+  imports: [AuthModule, AdapterModule],
   controllers: [InstanceController],
   providers: [
     { provide: InstanceRuntime, useFactory: (): InstanceRuntime => new InstanceRuntime() },
@@ -43,21 +40,12 @@ import { INSTANCE_REPOSITORY, INSTANCE_SERVICE } from './tokens';
       provide: INSTANCE_SERVICE,
       useFactory: (
         instances: IInstanceRepository,
-        agents: IAgentRepository,
         keyStore: RuntimeKeyStore,
         registry: AdapterRegistry,
         runtime: InstanceRuntime,
         audit: AuditService,
-      ): InstanceService =>
-        new InstanceService({ instances, agents, keyStore, registry, runtime, audit }),
-      inject: [
-        INSTANCE_REPOSITORY,
-        AGENT_REPOSITORY,
-        RuntimeKeyStore,
-        AdapterRegistry,
-        InstanceRuntime,
-        AUDIT_SERVICE,
-      ],
+      ): InstanceService => new InstanceService({ instances, keyStore, registry, runtime, audit }),
+      inject: [INSTANCE_REPOSITORY, RuntimeKeyStore, AdapterRegistry, InstanceRuntime, AUDIT_SERVICE],
     },
     // 启动时恢复反向实例监听（D019）：不依赖用户解锁，失败也不阻断启动
     InstanceBootstrapService,

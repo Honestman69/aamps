@@ -26,7 +26,6 @@ import {
 import { decryptWithDek, encryptWithDek, tokenDigest, verifyTokenDigest } from '../../common/crypto';
 import { createAdapterLogger } from '../../common/logger/adapter-logger';
 import { AdapterRegistry } from '../adapter/adapter-registry';
-import type { IAgentRepository } from '../agent/ports';
 import { AuditAction, AuditService, type AuditActor } from '../auth/audit.service';
 import { RuntimeKeyStore } from '../auth/runtime-key-store';
 import {
@@ -54,8 +53,6 @@ export type InstanceActor = {
 
 export type InstanceDeps = {
   instances: IInstanceRepository;
-  /** M1/M2 阶段实例自动挂用户的默认 Agent（D020） */
-  agents: IAgentRepository;
   keyStore: RuntimeKeyStore;
   registry: AdapterRegistry;
   runtime: InstanceRuntime;
@@ -104,14 +101,9 @@ export class InstanceService {
     const accessTokenDigest =
       input.accessToken !== undefined ? tokenDigest(input.accessToken) : null;
 
-    // 记忆与人格属于 Agent（D020）。还没有 Agent 管理页时，先保证存在一个默认 Agent，
-    // 让实例永远有归属，避免出现"这个号是谁的"这种孤儿数据。
-    const agent = await this.deps.agents.ensureDefaultForUser(actor.tenantId, actor.userId);
-
     const row = await this.deps.instances.createForUser({
       tenantId: actor.tenantId,
       ownerUserId: actor.userId,
-      agentId: agent.id,
       name: input.name,
       // 平台与接入方式给默认值：QQ + OneBot 是当前唯一实现，但代码里不写死平台判断
       platform: input.platform ?? 'qq',
@@ -135,7 +127,6 @@ export class InstanceService {
       ip: actor.ip ?? null,
       after: {
         name: row.name,
-        agentId: row.agentId,
         platform: row.platform,
         adapterType: row.adapterType,
         accountMasked: maskAccount(row.accountId),

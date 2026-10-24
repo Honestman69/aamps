@@ -103,6 +103,11 @@ pnpm check:local-data # NapCat 登录态没混进版本库
    - 接入地址默认只允许本机/内网，公网地址需显式 `ALLOW_REMOTE_ADAPTER=true`。
    详见 `SECURITY.md` 7.1。
 
+10. **人格与记忆挂 `BotInstance`，不挂用户、不挂 Provider。** 一个社交平台账号一份人格与记忆：
+    换社交平台 = 重新生成初始人格、从零演化（跨平台继承属另一个项目，见 D023）；
+    换模型 Provider = **只改 `credentialId` / `modelMain`，人格与记忆零迁移**。
+    `Persona` / `SelfState` / `MemoryItem` 里出现 provider / credential / model 字段，一律算错。
+
 ---
 
 ## 新会话最容易犯的 8 个错
