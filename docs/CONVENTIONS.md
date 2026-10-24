@@ -59,6 +59,10 @@ Controller  →  Service  →  Repository  →  Prisma
 | 会话、消息、连接事件 | `instanceId` | 同上 |
 | 模型/厂商 | **不落任何人格表** | Provider 只是执行器，换它不动人格（D021） |
 
+**绑定外部资源 id 必须校验归属**：接收 `credentialId` 这类"别人资源"的 id 时，
+先按 `ownerUserId` 查一次（`findForUser`），查不到就拒绝，错误文案合并"不存在/无权"。
+否则拿到别人的 id 就能用别人的额度——这是最容易被忽略的越权口子（D027）。
+
 两条容易写错的地方：
 
 - **不要把 provider / credentialId / model 写进 `Persona` / `SelfState` / `MemoryItem`**。写了，换模型就等于换人。

@@ -7,7 +7,7 @@
 
 **最后更新**：2026-10-24
 **当前阶段**：**M1 已完成并验收**；P0-1（反向实例自监听）已完成；人格归属已按 **D023** 定稿
-（挂 `BotInstance`，跨社交平台不共享、跨 Provider 必须继承）；人格预算已落到实例（D024）；余额可见与故障分级（D025）、兜底话术可配置（D026）已定稿。M2 尚未开始写代码。
+（挂 `BotInstance`，跨社交平台不共享、跨 Provider 必须继承）；人格预算已落到实例（D024）；余额可见与故障分级（D025）、兜底话术可配置（D026）已定稿。M2 已开始：配置解析与"切 Provider"的写路径已完成（第 12 步），下一步 `ModelGateway`。
 
 **下一步（默认走这条）**：**M2 最小闭环** —— `AgentConfig`/`ConfigResolver`（按 D020 的五级覆盖：
 租户 → Agent → 实例 → 角色 → 会话）→ `ModelGateway` → `openai-compatible` Provider
@@ -364,6 +364,32 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 
 ---
 
+### 第 12 步：M2-1 配置解析 + 切换 Provider 的写路径 ← 已完成一半
+
+**已完成的**：
+
+- [x] `src/modules/config/`：`types` / `resolver`（纯函数）/ `config.service`（30s 超时缓存 + 写路径失效）
+- [x] 覆盖链落地：租户默认（常量）→ 实例 → 人设（预留）→ 会话；每个字段带 `provenance`（这个值来自哪层）
+- [x] 非法值处理：温度越界、限流 ≤0、空白模型名一律回落默认，**且来源保持 `default`**（表示"设了但被拒"）
+- [x] 实例接口补齐 `credentialId` / `modelMain` / `modelCheap` / `modelFallback` / `modelTemperature`
+- [x] **绑定凭据校验归属**（D027）：只能绑自己的 Key，错误文案合并"不存在/无权"
+- [x] 只有接入参数变化才重连：改模型/温度/预算不再把连接踢掉
+- [x] 写路径主动失效配置缓存（update / delete）
+
+**还没做的**（M2 后续）：
+
+- [ ] `ModelGateway`：路由 + 超时 + 重试 + 记账 + 错误码识别（402 → `balance` 熔断）
+- [ ] `openai-compatible` Provider 适配器
+- [ ] Persona 拼装 system prompt（到这一步定未决问题 6）
+- [ ] 私聊能正常对话（Pipeline 接 ConfigService + Gateway）
+
+**验收**：`pnpm test` **185 个用例全绿**（新增 config 18 + 实例归属/缓存 3）；`typecheck` / `build` 通过。
+
+**一个设计取舍**：人设层（Persona）当前不覆盖任何配置字段——行为参数属于 M3 表达层，
+现在先保留分支与 provenance，等 M3 真正读取时再加字段，避免先造一堆没人消费的空壳。
+
+---
+
 ---
 
 ## 任务看板
@@ -410,7 +436,7 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 
 ### M2 最小闭环 ← 现在做这个
 
-- [ ] AgentConfig / ConfigResolver（四级覆盖）
+- [x] AgentConfig / ConfigResolver（四级覆盖 + provenance + 缓存失效）
 - [ ] `ModelGateway`：路由 + 超时 + 重试 + 记账
 - [ ] `openai-compatible` Provider
 - [ ] Persona 拼装 system prompt（**做到这一步必须定未决问题 6**）
@@ -480,6 +506,7 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 - [x] 2026-10-24 **人格预算（D024）**：预算与超限策略挂 `BotInstance`，`Credential` 不再有预算字段；实例接口可读写
 - [x] 2026-10-24 **余额与故障分级（D025）**：余额三态 + 熔断只暂停路由 + 兜底按故障时长分级；Provider 预设表落地
 - [x] 2026-10-24 **兜底话术（D026）**：`Persona.fallbacksJson` 三槽位 × 私聊/群聊，`null` = 不说；预存文本 + 规则校验
+- [x] 2026-10-24 **配置解析（M2-1）**：四级覆盖 + provenance + 30s 缓存与写路径失效；实例可切模型/Key（含归属校验，D027）
 
 ---
 
@@ -511,6 +538,7 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 | 2026-10-24 | 完成接入层与实例管理：`adapter-qq`（WS/心跳/重连/节流/事件转换）、`AdapterRegistry`、实例 CRUD + 连接接口、`pong` 闭环；101 个单测、30 项 HTTP 冒烟；追加 D016（实例配置来源与解锁依赖） |
 | 2026-10-24 | 补接入安全兜底：endpoint 护栏（`REMOTE_ENDPOINT_BLOCKED`）、`get_login_info` 账号核验、`check:local-data` 提交闸门；112 个单测；追加 D017（协议端地址与登录态边界） |
 | 2026-10-24 | 追加 D020/D021/D022（人格双层、模型可切换、重置分四档）；D007 曾按五级覆盖修订，同日撤回 |
+| 2026-10-24 | M2 开工：ConfigResolver（四级覆盖 + 来源追溯 + 缓存）与切换 Provider 的写路径（D027，含凭据归属校验）；185 单测 |
 | 2026-10-24 | 追加 **D026**：兜底话术由用户按人格配置，预存文本、`null` = 不说、群聊默认不说；新增 15 条规则用例 |
 | 2026-10-24 | 追加 **D025**：余额三态与熔断语义、兜底按故障时长分级、通知去重；`Credential` 加余额/冷却字段，新增 Provider 预设表；149 单测 |
 | 2026-10-24 | 追加 **D024**：预算挂人格（`BotInstance`），超限 `downgrade`/`block`；删除 `Credential` 上的预算字段；迁移 `budget_moves_to_instance`；144 单测全绿 |

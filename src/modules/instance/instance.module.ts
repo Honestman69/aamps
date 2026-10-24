@@ -15,6 +15,10 @@ import { AdapterModule } from '../adapter/adapter.module';
 import { AdapterRegistry } from '../adapter/adapter-registry';
 import { AuthModule } from '../auth/auth.module';
 import { AuditService } from '../auth/audit.service';
+import { ConfigModule } from '../config/config.module';
+import { CredentialModule } from '../credential/credential.module';
+import { CREDENTIAL_REPOSITORY } from '../credential/tokens';
+import { CONFIG_SERVICE } from '../config/tokens';
 import { RuntimeKeyStore } from '../auth/runtime-key-store';
 import { AUDIT_SERVICE } from '../auth/tokens';
 import { InstanceController } from './instance.controller';
@@ -26,7 +30,7 @@ import { PrismaInstanceRepository } from './repositories/prisma-instance.reposit
 import { INSTANCE_REPOSITORY, INSTANCE_SERVICE } from './tokens';
 
 @Module({
-  imports: [AuthModule, AdapterModule],
+  imports: [AuthModule, AdapterModule, ConfigModule, CredentialModule],
   controllers: [InstanceController],
   providers: [
     { provide: InstanceRuntime, useFactory: (): InstanceRuntime => new InstanceRuntime() },
@@ -44,8 +48,19 @@ import { INSTANCE_REPOSITORY, INSTANCE_SERVICE } from './tokens';
         registry: AdapterRegistry,
         runtime: InstanceRuntime,
         audit: AuditService,
-      ): InstanceService => new InstanceService({ instances, keyStore, registry, runtime, audit }),
-      inject: [INSTANCE_REPOSITORY, RuntimeKeyStore, AdapterRegistry, InstanceRuntime, AUDIT_SERVICE],
+        configCache: { invalidate(instanceId: string): number },
+        credentials: { findForUser(userId: string, id: string): Promise<unknown | null> },
+      ): InstanceService =>
+        new InstanceService({ instances, keyStore, registry, runtime, audit, configCache, credentials }),
+      inject: [
+        INSTANCE_REPOSITORY,
+        RuntimeKeyStore,
+        AdapterRegistry,
+        InstanceRuntime,
+        AUDIT_SERVICE,
+        CONFIG_SERVICE,
+        CREDENTIAL_REPOSITORY,
+      ],
     },
     // 启动时恢复反向实例监听（D019）：不依赖用户解锁，失败也不阻断启动
     InstanceBootstrapService,

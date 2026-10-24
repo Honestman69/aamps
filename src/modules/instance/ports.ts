@@ -24,6 +24,12 @@ export type InstancePublicRow = {
   dailyBudgetCents: number;
   monthlyBudgetCents: number;
   budgetPolicy: string;
+  /** 当前绑定的 Key（id，不是密钥材料）；换 Provider = 改这一项 */
+  credentialId: string | null;
+  modelMain: string | null;
+  modelCheap: string | null;
+  modelFallback: string | null;
+  modelTemperature: number;
   status: string;
   createdAt: Date;
   updatedAt: Date;
@@ -69,6 +75,11 @@ export type InstanceCreateInput = {
   dailyBudgetCents?: number;
   monthlyBudgetCents?: number;
   budgetPolicy?: string;
+  credentialId?: string | null;
+  modelMain?: string | null;
+  modelCheap?: string | null;
+  modelFallback?: string | null;
+  modelTemperature?: number;
 };
 
 export type InstanceUpdatePatch = {
@@ -84,6 +95,11 @@ export type InstanceUpdatePatch = {
   dailyBudgetCents?: number;
   monthlyBudgetCents?: number;
   budgetPolicy?: string;
+  credentialId?: string | null;
+  modelMain?: string | null;
+  modelCheap?: string | null;
+  modelFallback?: string | null;
+  modelTemperature?: number;
 };
 
 export interface IInstanceRepository {

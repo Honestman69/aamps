@@ -43,6 +43,21 @@ import type {
   IInstanceRepository,
 } from './ports';
 
+/**
+ * 改动这些字段会让"当前连着的适配器"失效：地址、鉴权、接入方式、账号、开关。
+ * 模型与预算不在此列——它们只影响下一条消息怎么处理。
+ */
+const CONNECTION_AFFECTING_FIELDS = [
+  'endpoint',
+  'accessTokenEnc',
+  'accessTokenDigest',
+  'adapterMode',
+  'adapterType',
+  'platform',
+  'accountId',
+  'enabled',
+] as const;
+
 export type InstanceActor = {
   sessionId: string;
   userId: string;
@@ -57,6 +72,16 @@ export type InstanceDeps = {
   registry: AdapterRegistry;
   runtime: InstanceRuntime;
   audit: AuditService;
+  /**
+   * 配置缓存失效器（可选）。写路径改完配置必须清缓存，
+   * 否则用户点保存后最多要等 30 秒才生效——那种"改了没反应"的体验会被当成 bug。
+   */
+  configCache?: { invalidate(instanceId: string): number };
+  /**
+   * 凭据归属校验。**必填**（模块里一定注入）：允许绑别人的 Key 等于开放盗用通道。
+   * 用 `Pick` 只取一个方法，避免整个凭据领域漏进实例模块。
+   */
+  credentials: { findForUser(userId: string, id: string): Promise<unknown | null> };
 };
 
 function instanceNotFound(): AppError {
@@ -101,6 +126,11 @@ export class InstanceService {
     const accessTokenDigest =
       input.accessToken !== undefined ? tokenDigest(input.accessToken) : null;
 
+    // 绑 Key 之前先确认这把 Key 是本人的：否则拿到别人的 credentialId 就能白嫖额度
+    if (input.credentialId) {
+      await this.assertCredentialOwned(actor.userId, input.credentialId);
+    }
+
     const row = await this.deps.instances.createForUser({
       tenantId: actor.tenantId,
       ownerUserId: actor.userId,
@@ -118,6 +148,11 @@ export class InstanceService {
       dailyBudgetCents: input.dailyBudgetCents,
       monthlyBudgetCents: input.monthlyBudgetCents,
       budgetPolicy: input.budgetPolicy,
+      credentialId: input.credentialId ?? null,
+      modelMain: input.modelMain ?? null,
+      modelCheap: input.modelCheap ?? null,
+      modelFallback: input.modelFallback ?? null,
+      modelTemperature: input.modelTemperature,
     });
 
     await this.deps.audit.record({
@@ -168,6 +203,18 @@ export class InstanceService {
       patch.endpoint = input.endpoint;
     }
     if (input.enabled !== undefined) patch.enabled = input.enabled;
+    // 模型与 Key（D021）：切换 Provider 就是改这两类字段，改完清缓存即可，不需要重连
+    if (input.credentialId !== undefined) {
+      if (input.credentialId !== null) {
+        await this.assertCredentialOwned(actor.userId, input.credentialId);
+      }
+      patch.credentialId = input.credentialId;
+    }
+    if (input.modelMain !== undefined) patch.modelMain = input.modelMain;
+    if (input.modelCheap !== undefined) patch.modelCheap = input.modelCheap;
+    if (input.modelFallback !== undefined) patch.modelFallback = input.modelFallback;
+    if (input.modelTemperature !== undefined) patch.modelTemperature = input.modelTemperature;
+
     // 预算是人格级配置（D024）：改它不需要重连，也不碰任何密钥
     if (input.dailyBudgetCents !== undefined) patch.dailyBudgetCents = input.dailyBudgetCents;
     if (input.monthlyBudgetCents !== undefined) patch.monthlyBudgetCents = input.monthlyBudgetCents;
@@ -190,10 +237,12 @@ export class InstanceService {
     if (!row) {
       throw instanceNotFound();
     }
+    this.deps.configCache?.invalidate(id);
 
-    // 改了接入参数就得重连，否则适配器还拿着旧地址 —— 静默继续跑比断开更糟
+    // 只有**接入参数**变了才需要重连：改模型/预算/话术不该把连接踢掉，
+    // 否则用户改个温度都要等一次重连，群里那几秒就是"机器人掉线"。
     const live = this.deps.runtime.get(id);
-    if (live) {
+    if (live && CONNECTION_AFFECTING_FIELDS.some((field) => field in patch)) {
       await this.disconnectInternal(actor.userId, id, 'config_changed');
     }
 
@@ -230,6 +279,8 @@ export class InstanceService {
     if (!deleted) {
       throw instanceNotFound();
     }
+    // 删掉的实例不该在缓存里留下幽灵配置
+    this.deps.configCache?.invalidate(id);
 
     await this.deps.audit.record({
       tenantId: actor.tenantId,
@@ -487,6 +538,16 @@ export class InstanceService {
    * 内部断连：**不写审计**（审计由调用方决定记什么原因），
    * 但一定要清运行时与库里的状态 —— 漏掉任何一处都会留下"幽灵连接"。
    */
+  /**
+   * 校验凭据归属。错误信息合并"不存在"与"无权"，避免靠报错探测别人的 credentialId。
+   */
+  private async assertCredentialOwned(userId: string, credentialId: string): Promise<void> {
+    const owned = await this.deps.credentials.findForUser(userId, credentialId);
+    if (!owned) {
+      throw new BadRequestError('凭据不存在或无权使用');
+    }
+  }
+
   private async disconnectInternal(userId: string, id: string, _reason: string): Promise<void> {
     const adapter = this.deps.runtime.get(id);
     if (adapter) {
