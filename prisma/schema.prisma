@@ -210,6 +210,9 @@ model Persona {
   /// 故障兜底话术（D026）：按 [槽位][渠道] 存，null = 不说。
   /// **必须是预存文本**，故障时不能调模型生成；`{}` 表示用代码里的默认值。
   fallbacksJson    String @default("{}")
+  /// 引用倾向（D030）：never | rare | normal | often。
+  /// 只影响"引不引用都不会歧义"的中间地带；**必要引用不受它控制**（否则群聊会答非所问）。
+  quoteTendency    String @default("normal")
 
   version           Int       @default(1)
   status            String    @default("draft") // draft | published | archived（重置人格时归档旧版本，不删除）

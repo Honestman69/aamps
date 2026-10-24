@@ -108,6 +108,11 @@ pnpm check:local-data # NapCat 登录态没混进版本库
     换模型 Provider = **只改 `credentialId` / `modelMain`，人格与记忆零迁移**。
     `Persona` / `SelfState` / `MemoryItem` 里出现 provider / credential / model 字段，一律算错。
 
+11. **出站形态由代码决定，模型只产出"说什么"。** 引用哪条、要不要引用、拆不拆条、延迟多久、
+    以及在故障时说不说兜底话术——全部在 `src/` 里判（D026/D028/D030）。
+    **不要让模型输出 `quoteHint` / `split` / `delay` 这类结构化动作字段**：它拿不到 message id、
+    看不到时序与人数，而且会被训练出来的"客服倾向"带偏，把人格抹平成客服。
+
 ---
 
 ## 新会话最容易犯的 8 个错
