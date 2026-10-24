@@ -19,6 +19,13 @@ const accountIdSchema = z.string().trim().min(1).max(64);
 const endpointSchema = z.string().trim().url('必须是合法地址').max(300);
 const accessTokenSchema = z.string().trim().min(1).max(512);
 
+/**
+ * 连接方向。
+ *   `server`（默认）= 对方连本服务：token 由我们在握手阶段校验，云端无需开入站端口
+ *   `client`        = 本服务连对方：NapCat 4.18.41 的 WS token 校验有缺陷，等于无鉴权
+ */
+const adapterModeSchema = z.enum(['client', 'server']);
+
 export const createInstanceSchema = z
   .object({
     name: nameSchema,
@@ -28,6 +35,7 @@ export const createInstanceSchema = z
     accountId: accountIdSchema,
     /** 接入方式，对应 registry 的 protocol */
     adapterType: z.string().trim().min(1).max(32).optional(),
+    adapterMode: adapterModeSchema.optional(),
     endpoint: endpointSchema.optional(),
     accessToken: accessTokenSchema.optional(),
     enabled: z.boolean().optional(),
@@ -40,6 +48,7 @@ export const updateInstanceSchema = z
     platform: z.string().trim().min(1).max(32).optional(),
     accountId: accountIdSchema.optional(),
     adapterType: z.string().trim().min(1).max(32).optional(),
+    adapterMode: adapterModeSchema.optional(),
     /** 传 null 表示清空（例如 NapCat 那边没开 token） */
     endpoint: endpointSchema.nullable().optional(),
     accessToken: accessTokenSchema.nullable().optional(),
@@ -63,6 +72,7 @@ export type InstancePublicDTO = {
   platform: string;
   accountId: string;
   adapterType: string;
+  adapterMode: string;
   endpoint: string | null;
   hasAccessToken: boolean;
   enabled: boolean;
@@ -78,6 +88,7 @@ export function toInstanceDTO(row: InstancePublicRow): InstancePublicDTO {
     platform: row.platform,
     accountId: row.accountId,
     adapterType: row.adapterType,
+    adapterMode: row.adapterMode,
     endpoint: row.endpoint,
     hasAccessToken: row.hasAccessToken,
     enabled: row.enabled,

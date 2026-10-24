@@ -14,7 +14,9 @@
 import WebSocket from 'ws';
 
 import type { AdapterDeps } from '@newjob/contracts';
+import { rejectAllPending as rejectPending, routeIncoming, type PendingEntry } from './incoming';
 import type { OneBotActionResponse, OneBotEvent } from './protocol';
+import type { OneBotTransport } from './transport';
 
 export type ClientLogger = AdapterDeps['logger'];
 
@@ -36,12 +38,6 @@ export type OneBotClientOptions = {
   reconnectMaxMs?: number;
 };
 
-type Pending = {
-  resolve: (value: OneBotActionResponse) => void;
-  reject: (err: Error) => void;
-  timer: NodeJS.Timeout;
-};
-
 const DEFAULTS = {
   heartbeatIntervalMs: 30_000,
   heartbeatTimeoutMs: 10_000,
@@ -51,14 +47,16 @@ const DEFAULTS = {
   reconnectMaxMs: 30_000,
 };
 
-export class OneBotWsClient {
+export class OneBotWsClient implements OneBotTransport {
+  readonly kind = 'client' as const;
+
   private ws: WebSocket | null = null;
   private closedByUser = false;
   private reconnectAttempts = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private seq = 0;
-  private readonly pending = new Map<string, Pending>();
+  private readonly pending = new Map<string, PendingEntry>();
 
   constructor(private readonly options: OneBotClientOptions) {}
 
@@ -101,7 +99,13 @@ export class OneBotWsClient {
     this.options.onStatusChange?.('online');
     this.options.logger.info({ event: 'adapter.connected' }, 'OneBot 连接已建立');
 
-    ws.on('message', (data) => this.handleRaw(data));
+    ws.on('message', (data) => {
+      routeIncoming(data, {
+        pending: this.pending,
+        onEvent: this.options.onEvent,
+        logger: this.options.logger,
+      });
+    });
     ws.on('close', (code) => this.handleClose(code));
     ws.on('error', (err) => {
       // 已连接后的错误：记一条就够，关闭事件会跟着来
@@ -119,7 +123,7 @@ export class OneBotWsClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    this.rejectAllPending(new Error('连接已关闭'));
+    rejectPending(this.pending, new Error('连接已关闭'));
     if (this.ws) {
       try {
         this.ws.close(1000, 'client disconnect');
@@ -171,38 +175,9 @@ export class OneBotWsClient {
     return `${this.options.url}${separator}access_token=${encodeURIComponent(this.options.accessToken)}`;
   }
 
-  private handleRaw(data: WebSocket.RawData): void {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(data.toString());
-    } catch {
-      this.options.logger.warn({ event: 'adapter.bad_json' }, '收到非 JSON 数据，已丢弃');
-      return;
-    }
-    if (typeof parsed !== 'object' || parsed === null) {
-      return;
-    }
-    const envelope = parsed as Record<string, unknown>;
-
-    // 带 echo = 某个 action 的响应
-    if (typeof envelope.echo === 'string') {
-      const entry = this.pending.get(envelope.echo);
-      if (entry) {
-        clearTimeout(entry.timer);
-        this.pending.delete(envelope.echo);
-        entry.resolve(envelope as OneBotActionResponse);
-      }
-      return;
-    }
-
-    if (typeof envelope.post_type === 'string') {
-      this.options.onEvent(envelope as OneBotEvent);
-    }
-  }
-
   private handleClose(code: number): void {
     this.stopHeartbeat();
-    this.rejectAllPending(new Error(`连接已关闭（code=${code}）`));
+    rejectPending(this.pending, new Error(`连接已关闭（code=${code}）`));
     this.options.onStatusChange?.('offline');
     if (this.closedByUser) {
       return;
@@ -266,11 +241,4 @@ export class OneBotWsClient {
     }
   }
 
-  private rejectAllPending(err: Error): void {
-    for (const [echo, entry] of this.pending) {
-      clearTimeout(entry.timer);
-      entry.reject(err);
-      this.pending.delete(echo);
-    }
-  }
 }

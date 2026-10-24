@@ -61,8 +61,12 @@ export function remoteEndpointsAllowed(): boolean {
  * 校验一个接入地址是否允许。不合法直接抛 400，并把"为什么"和"怎么改"一起说清楚。
  * 在 create / update / connect 三处都调用：存储时拦一次，真正拨号前再拦一次，
  * 防止"当时开关开着存进去、后来关掉了还照连"。
+ *
+ * `mode` 决定这段地址的**用途**，风险方向相反，所以文案也必须相反：
+ *   - `client`（拨号）：我们连过去 → 风险是"连到别人的 NapCat，登录态被对方拿走"
+ *   - `server`（监听）：对方连过来 → 风险是"在公网开了一个口子，谁扫到都能试"
  */
-export function assertEndpointAllowed(endpoint: string): void {
+export function assertEndpointAllowed(endpoint: string, mode?: string): void {
   let url: URL;
   try {
     url = new URL(endpoint);
@@ -75,6 +79,18 @@ export function assertEndpointAllowed(endpoint: string): void {
   if (isLocalOrPrivateHost(url.hostname) || remoteEndpointsAllowed()) {
     return;
   }
+
+  if (mode === 'server') {
+    throw new AppError(
+      'REMOTE_ENDPOINT_BLOCKED',
+      `拒绝在公网地址 ${url.hostname} 上监听：这会在公网上开一个 OneBot 端口，` +
+        `扫描到的人就能拿到这个 QQ 号的控制权。反向模式请填回环地址（ws://127.0.0.1:3002），` +
+        `让 NapCat 从本机或内网连进来；确实要跨公网时先建隧道（Tailscale / SSH），` +
+        `或显式设置 ${ALLOW_REMOTE_ADAPTER_ENV}=true 表示你清楚这个风险。`,
+      400,
+    );
+  }
+
   throw new AppError(
     'REMOTE_ENDPOINT_BLOCKED',
     `拒绝连接公网地址 ${url.hostname}：对方将持有该 QQ 号的登录态。` +

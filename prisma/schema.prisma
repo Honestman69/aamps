@@ -120,6 +120,8 @@ model BotInstance {
   platform       String  @default("qq") // qq | douyin | bilibili（多平台预留，见 D012）
   accountId      String // 平台内账号标识：QQ 为 QQ 号，抖音为 uid，B站为 mid
   adapterType    String  @default("onebot") // onebot | official | douyin-open | bili-open（后两者预留）
+  // 连接方向：client = 我们连协议端；server = 协议端连我们（token 由本服务校验，D018）
+  adapterMode    String  @default("client") // client | server
 
   // 接入凭据（加密存储；official 用 appId/appSecret，onebot 用 endpoint/token）
   endpoint       String? // 例：ws://127.0.0.1:6700/onebot/v11/ws

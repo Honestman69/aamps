@@ -192,17 +192,45 @@
 
 代码层面 M1 已通，差一次真实环境验证。前置：装 NapCat、准备小号（`STATUS.md` 未决问题 1、2 已定：先本机、后云）。
 
-- [ ] NapCat 配置 WebSocket 服务端（记下端口与 token），本机先用 `ws://127.0.0.1:6700` 这一套
-- [ ] 后台建实例：填 QQ 号 + WS 地址 + token → 点连接 → 看服务日志出现 `adapter.connected`
-- [ ] 私聊发一条消息 → 应收到引用回复 `pong`
+**2026-10-24 联调结果**：环境就绪，`pong` 闭环跑通；随后发现上游 token 缺陷并改为反向 WS。
+
+| 项 | 结果 |
+|---|---|
+| NapCat / QQ | v4.18.41 / 9.9.33-52230（绿色版在 `D:\napcat`，仓库外） |
+| 登录 | 小号 **3194107669**；勾"记住设备"后 `-q` 快速登录，无需再扫码 |
+| 接入配置 | `onebot11_<uin>.json` → 反向 `ws://127.0.0.1:3002`（正向 3001 已停用）；`webui.json` → `127.0.0.1:6099` |
+| aamps 连接 | 建实例 → `connect` 返回 `online` → 发消息收到 `pong` ✅ |
+| 账号核验 | `get_login_info` 与实例配置一致（不一致会被拒） |
+| **token 鉴权** | 反向模式：错 token 握手 HTTP 401，正确 token 连入 `online`（真机验证 ✅） |
+
+- [x] NapCat 配置接入方向（反向 WS，`ws://127.0.0.1:3002`）
+- [x] 后台建实例：填 QQ 号 + WS 地址 + token → 点连接 → 看服务日志出现 `adapter.connected`
+- [x] 私聊发一条消息 → 应收到引用回复 `pong`
 - [ ] 群里 `@机器人` 一条 → 应收到 `pong`；不 @ 时不回复（`isMentioned` 生效）
 - [ ] 停掉 NapCat → 观察重连日志；重启 NapCat → 心跳自愈
 - [ ] 换小号测试"切换"：新建第二条实例、连上新的、断开旧的
 - [ ] 故意填错 QQ 号 → 应被"账号不一致"拦住（验证 `get_login_info` 核验真的生效）
-- [ ] `pnpm check:local-data` 通过；确认 `napcat/` 没有被 git 看到
+- [x] `pnpm check:local-data` 通过；确认 `napcat/` 没有被 git 看到
 - [ ] 迁移演练：把 `napcat/` 目录复制到别处，确认**不搬数据**也能靠重新扫码跑起来
+- [x] **WS token 鉴权（原阻塞项）**：改反向 WS 后由本服务在握手阶段校验，见 `SECURITY.md`
 
-**验收**：以上 9 项全过，且日志里没有任何 token / 完整 QQ 号。
+**验收**：除群里 @、断线自愈、换号切换三项外全过；日志里没有任何 token / 完整 QQ 号。
+
+**已知缺陷（NapCat 4.18.41）**：`websocketServers` 的 `token` 校验不生效。
+
+```
+UD.createServer → this.authorize(this.config.token, ws, req)
+authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
+  → i 为 undefined → 三个分支都抛 TypeError → async 回调吞掉 → 连接保持打开
+```
+
+同文件里存在正确的 `authorizeWS(e, n, r)`，但 WebSocket 适配器没用它。
+后果：本机任何进程都能连 `127.0.0.1:3001` 控制机器人，**唯一防线是端口绑定**。
+
+**待定方案**：
+- A 降级 NapCat 到校验正常的版本（要重新验证 QQ 版本兼容，下载慢）
+- **B 改反向 WS（推荐）**：NapCat 作客户端连我们，token 由我们校验；附带好处是云端部署不用开入站端口
+- C 接受现状：仅 `127.0.0.1` 防护，等上游修复
 
 ---
 

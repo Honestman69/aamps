@@ -76,7 +76,7 @@ export class InstanceService {
   async create(actor: InstanceActor, input: CreateInstanceInput): Promise<InstancePublicDTO> {
     // 先拦地址：指向公网 NapCat 等于把 QQ 登录态交给对方，不该只靠"记得别填"
     if (input.endpoint) {
-      assertEndpointAllowed(input.endpoint);
+      assertEndpointAllowed(input.endpoint, input.adapterMode);
     }
 
     // 只有配了 token 才需要 DEK；不配 token 的部署（内网 NapCat）不该被要求先解锁
@@ -93,6 +93,8 @@ export class InstanceService {
       platform: input.platform ?? 'qq',
       accountId: input.accountId,
       adapterType: input.adapterType ?? 'onebot',
+      // 默认反向：token 由我们自己校验，且云端部署不需要开入站端口
+      adapterMode: input.adapterMode ?? 'server',
       endpoint: input.endpoint ?? null,
       accessTokenEnc,
       enabled: input.enabled ?? true,
@@ -138,9 +140,10 @@ export class InstanceService {
     if (input.platform !== undefined) patch.platform = input.platform;
     if (input.accountId !== undefined) patch.accountId = input.accountId;
     if (input.adapterType !== undefined) patch.adapterType = input.adapterType;
+    if (input.adapterMode !== undefined) patch.adapterMode = input.adapterMode;
     if (input.endpoint !== undefined) {
       if (input.endpoint !== null) {
-        assertEndpointAllowed(input.endpoint);
+        assertEndpointAllowed(input.endpoint, input.adapterMode);
       }
       patch.endpoint = input.endpoint;
     }
@@ -236,7 +239,7 @@ export class InstanceService {
       throw new BadRequestError('实例缺少接入地址（WebSocket 地址）');
     }
     // 落库时校验过一次，拨号前再校验一次：开关可能被关掉了，而旧记录还在
-    assertEndpointAllowed(config.endpoint);
+    assertEndpointAllowed(config.endpoint, config.adapterMode);
 
     let accessToken: string | undefined;
     if (config.accessTokenEnc) {
@@ -265,6 +268,9 @@ export class InstanceService {
       // 列名 → 适配器配置字段名。这是唯一一处"平台配置"的映射，
       // 不同协议需要不同字段时，在这里按 manifest.configFields 演化。
       config: {
+        // endpoint 在两种 mode 下含义不同：
+        //   server = 本端监听地址（NapCat 连过来），client = 对方地址（我们连过去）
+        mode: config.adapterMode,
         wsUrl: config.endpoint,
         selfId: config.accountId,
         ...(accessToken ? { accessToken } : {}),
