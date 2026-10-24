@@ -8,12 +8,13 @@
 **最后更新**：2026-10-24
 **当前阶段**：**M1 已完成并验收**；P0-1（反向实例自监听）已完成；人格归属已按 **D023** 定稿
 （挂 `BotInstance`，跨社交平台不共享、跨 Provider 必须继承）；人格预算已落到实例（D024）；余额可见与故障分级（D025，兜底已按 D028 修订）、兜底话术可配置（D026）已定稿。M2 已开始：配置解析（第 12 步）、ModelGateway（第 13 步）、故障→话术映射（第 14 步）、
-预算拦截（第 15 步）、引用决策（第 16 步）已完成，下一步：接 Pipeline，让私聊真的能对话。
+预算拦截（第 15 步）、引用决策（第 16 步）、会话窗口（第 17 步）已完成，下一步：接 Pipeline，
+让私聊真的能对话（未决问题 6 已由 D030 定稿，不再阻塞）。
 
 **下一步（默认走这条）**：**M2 收尾** —— 把 Pipeline 接起来：
-入站消息 → `ConfigService` → Persona 拼 system prompt → `ModelGateway` → 出站。
+入站消息 → `ConfigService` → `buildWindow`（D031）→ Persona 拼 system prompt → `ModelGateway` → 出站。
 配置覆盖是**四级**（租户 → 实例 → 人设 → 会话，D023 已撤回 Agent 层）。
-到 Persona 那步会碰到未决问题 6（"引不引用上一条"由谁决定）。
+引用决策与窗口组装都已就位（D030/D031），Pipeline 直接调用即可。
 
 **另一条路（只在"准备上云"时才走）**：P0-2 部署拓扑选型（Tailscale 组网 vs 公网反代），
 它决定一键接入包的 URL/证书策略；不做它也不影响本地开发。
@@ -482,6 +483,25 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 
 ---
 
+### ~~第 17 步：会话窗口（D031）~~ ✅ 已完成
+
+- [x] `src/modules/session/window.ts`：`buildWindow` / `flattenWindow` / `windowQuoteFacts`（纯函数）
+- [x] 三重约束取交集：`maxMessages` / `maxAgeMs` / `maxChars`（私聊 20/2h/4000，群聊 40/2h/6000）
+- [x] **target 必须在窗口里**，哪怕它很老、后面刷了几十条
+- [x] **after 优先于 before**：after 不按时间裁、只受条数/字符预算；before 才受 maxAgeMs
+- [x] **afterTotals 用未裁剪统计**：count 与发言人数在数据库端单独算，不随窗口裁剪失真
+- [x] 裁剪"整体停下"不挖洞；同毫秒兄弟消息宁可丢不硬救（cuid 不单调）
+- [x] `src/modules/session/ports.ts` + Prisma 取数：带 sessionId 查 target，跨会话返回 null
+- [x] `scripts/window-smoke.ts`：真实 SQLite 六项全过
+
+**验收**：`pnpm test` **275 个用例全绿**（新增 16 条窗口用例）；
+`window-smoke` 通过（before/after 边界、afterTotals 全量 40 条、跨会话拒绝、multi_speaker 引用、私聊冗余不引用）。
+
+**和 D030 的接缝**：`decideQuote` 增加 `afterTotals?` 入参，群里刷屏时引用判定依据全量统计，
+不因窗口裁剪而误判成"单人对话"。
+
+---
+
 ---
 
 ## 任务看板
@@ -603,6 +623,7 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 - [x] 2026-10-24 **故障→话术映射（D028）**：欠费走 `longOutage` 话术、不做主动通知；映射与限频独立成模块
 - [x] 2026-10-24 **预算拦截（D029）**：网关内判定、降无可降则拒绝、不做预扣；真实库冒烟覆盖聚合窗口
 - [x] 2026-10-24 **引用决策（D030）**：必要性硬判 + 人格倾向概率，模型不参与；未决问题 6 定稿
+- [x] 2026-10-24 **会话窗口（D031）**：target 必在窗口、after 优先、afterTotals 用未裁剪统计；真实库冒烟
 
 ---
 
@@ -638,6 +659,7 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 | 2026-10-24 | M2 开工：ConfigResolver（四级覆盖 + 来源追溯 + 缓存）与切换 Provider 的写路径（D027，含凭据归属校验）；185 单测 |
 | 2026-10-24 | 追加 **D026**：兜底话术由用户按人格配置，预存文本、`null` = 不说、群聊默认不说；新增 15 条规则用例 |
 | 2026-10-24 | 追加 **D025**：余额三态与熔断语义、兜底按故障时长分级、通知去重；`Credential` 加余额/冷却字段，新增 Provider 预设表；149 单测 |
+| 2026-10-24 | 会话窗口定稿（D031）：三重约束、after 优先、未裁剪统计；`session/window.ts` + Prisma 取数；275 单测 |
 | 2026-10-24 | 定稿未决问题 6（D030）：引用由代码判，必要性不交给概率；新增 `persona/quote.ts` 与 `Persona.quoteTendency`；259 单测 |
 | 2026-10-24 | M2-3：预算拦截（D029）+ 未定价告警；`budget-smoke` 真实库验证；240 单测 |
 | 2026-10-24 | 追加 **D028**（修订 D025）：欠费也走人格话术、**不做主动通知**；故障→槽位映射与限频落到 `persona/fault-slot.ts`；新增 12 条用例 |
