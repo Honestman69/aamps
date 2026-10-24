@@ -4,7 +4,8 @@
 > 新会话接手时，直接从「下一步」开始，不要重新规划。
 
 **最后更新**：2026-10-24
-**当前阶段**：M1 骨架完成（接入层 + 实例管理 + 接入安全兜底），差 NapCat 真机联调；联调通过即进 M2 最小闭环
+**当前阶段**：**M1 已完成并验收**（接入层 + 实例管理 + 接入安全兜底 + 反向 WS 鉴权 + 真机 pong）。
+下一步是 M2 最小闭环（接模型、私聊能对话）。
 
 ---
 
@@ -13,7 +14,8 @@
 - 远程：`git@github.com:Honestman69/aamps.git`（网页：https://github.com/Honestman69/aamps）
 - 分支：`main`，首个提交 `ceccdc6`
 - **里程碑标签**（回档锚点，见 `AGENTS.md`「分支与合并纪律」）：
-  - `m1-skeleton` —— M1 骨架完成（适配器 + 实例管理 + 接入安全兜底）
+  - `m1-skeleton` —— M1 骨架合并点（`9c933b9`，当时 token 鉴权还是坏的）
+  - `m1-verified` —— M1 真机验收通过点（反向 WS + token 401 + pong，见「第 7 步」）
   - 合并一律 `git merge --no-ff`，分支保留不删；回档首选 `git revert -m 1 <merge>`
 - 网络：本机 `github.com:22` 会被重置，`~/.ssh/config` 已配置走 `ssh.github.com:443` + `Compression yes`。
   直接 `git push` 即可；若出现 `Connection reset`，先重试一次，通常是网络波动。
@@ -188,21 +190,83 @@
 - **连接失败必须真的 close**：早期版本在 `verifyLogin` 抛错时只把 `this.client = null`，socket 还开着，NapCat 侧会认为连接有效。现在 catch 里先 `client.close()` 再置空，测试里用 `openSockets === 0` 断言。
 - **NapCat 数据目录的闸门**：`.gitignore` 覆盖 `napcat/`、`napcat-data/`、`.config/QQ/`、`onebot_*.json`、`ntqq_*.json`；`pnpm check:local-data` 同时扫「已跟踪」与「未被忽略」两类文件（前者是已经出事了，后者是下次 `git add -A` 就出事），命中即非零退出。已用 `git add -f` 实际验证过它能拦住。
 
-### 第 7 步：NapCat 真机联调 ← 现在做这个
+### ~~第 7 步：NapCat 真机联调~~ ✅ 已完成
 
-代码层面 M1 已通，差一次真实环境验证。前置：装 NapCat、准备小号（`STATUS.md` 未决问题 1、2 已定：先本机、后云）。
+代码层面 M1 已通，真机验证见下方「2026-10-24 应用层验证」。
 
-- [ ] NapCat 配置 WebSocket 服务端（记下端口与 token），本机先用 `ws://127.0.0.1:6700` 这一套
-- [ ] 后台建实例：填 QQ 号 + WS 地址 + token → 点连接 → 看服务日志出现 `adapter.connected`
-- [ ] 私聊发一条消息 → 应收到引用回复 `pong`
+**2026-10-24 联调结果**：环境就绪，`pong` 闭环跑通；随后发现上游 token 缺陷并改为反向 WS。
+
+| 项 | 结果 |
+|---|---|
+| NapCat / QQ | v4.18.41 / 9.9.33-52230（绿色版在 `D:\napcat`，仓库外） |
+| 登录 | 小号 **3194107669**；勾"记住设备"后 `-q` 快速登录，无需再扫码 |
+| 接入配置 | `onebot11_<uin>.json` → 反向 `ws://127.0.0.1:3002`（正向 3001 已停用）；`webui.json` → `127.0.0.1:6099` |
+| aamps 连接 | 建实例 → `connect` 返回 `online` → 发消息收到 `pong` ✅ |
+| 账号核验 | `get_login_info` 与实例配置一致（不一致会被拒） |
+| **token 鉴权** | 反向模式：错 token 握手 HTTP 401，正确 token 连入 `online`（真机验证 ✅） |
+
+- [x] NapCat 配置接入方向（反向 WS，`ws://127.0.0.1:3002`）
+- [x] 建实例：QQ 号 + 监听地址 + token → `POST /api/instances/:id/connect`（M4 前没有页面，
+      用 `pnpm connect`）→ 日志出现 `adapter.listening` + `adapter.peer_connected`
+- [x] 私聊发一条消息 → 收到引用回复 `pong`（正向模式真机 1 次；反向模式用对端脚本验过回包内容）
 - [ ] 群里 `@机器人` 一条 → 应收到 `pong`；不 @ 时不回复（`isMentioned` 生效）
-- [ ] 停掉 NapCat → 观察重连日志；重启 NapCat → 心跳自愈
+- [x] 停掉对端 → 观察重连；对端恢复后自愈（反向模式下 NapCat 每 5 秒重试，实测 1~5 秒回到 `online`）
 - [ ] 换小号测试"切换"：新建第二条实例、连上新的、断开旧的
 - [ ] 故意填错 QQ 号 → 应被"账号不一致"拦住（验证 `get_login_info` 核验真的生效）
-- [ ] `pnpm check:local-data` 通过；确认 `napcat/` 没有被 git 看到
+- [x] `pnpm check:local-data` 通过；确认 `napcat/` 没有被 git 看到
 - [ ] 迁移演练：把 `napcat/` 目录复制到别处，确认**不搬数据**也能靠重新扫码跑起来
+- [x] **WS token 鉴权（原阻塞项）**：改反向 WS 后由本服务在握手阶段校验，见 `SECURITY.md`
 
-**验收**：以上 9 项全过，且日志里没有任何 token / 完整 QQ 号。
+**2026-10-24 应用层验证**（走完整 HTTP 路径，不是只测适配器）：
+
+```
+POST /api/auth/login                → 200, unlocked=true
+POST /api/instances/<id>/connect    → 200 {"status":"online"}（2.6 秒，NapCat 自己连入）
+错误 token 连 3002                   → HTTP 401，日志 adapter.peer_rejected(token_mismatch)
+正确 token + 推一条私聊              → 服务回 send_msg：[reply(778899), text("pong")]
+对端断开                             → 5 秒内 NapCat 重连回来，status 回到 online
+```
+
+**验收**：除群里 @、换号切换两项外全过；日志里没有任何 token / 完整 QQ 号。
+
+**2026-10-24 合并前全量验证**（`AGENTS.md` 规定的四条 + 数据闸门，全绿才算可合并）：
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 类型 | `pnpm typecheck` | 通过 |
+| 单测 | `pnpm test` | **129 个全过**（新增反向 WS 16 个 + 仓储契约 3 个） |
+| 构建 | `pnpm build` | contracts + adapter-qq + 主服务均出产物 |
+| 端到端 | `scripts/http-smoke.ts`（独立库 `zk.db`、端口 3111） | `HTTP SMOKE PASSED`（26 项） |
+| 数据闸门 | `pnpm check:local-data` | `PASSED`（141 个已跟踪文件） |
+
+这轮端到端**抓到两个单测抓不到的问题**，都已修：
+
+1. **`adapterMode` 漏透传**：`POST /api/instances` 传 `server`，实际落库是 `client`。
+   `PrismaInstanceRepository.createForUser` 手写 `data: {...}` 时漏了这个字段，
+   Prisma 静默用 DB 默认值（`client`）补上；单测用的是假仓储所以全绿。
+   修法：把 `InstanceCreateInput.adapterMode` 改成**必填**（编译器强制所有创建路径显式给值），
+   仓储忠实透传；补 `test/instance/prisma-instance.repository.test.ts` 断言"每个入参字段都出现"。
+2. **冒烟用例语义漂移**：`实例：NapCat 没起来时连接 → 502` 在默认改成反向模式后，
+   实际测的是"等对端 20 秒超时"而不是"拨号失败"。修法：该用例显式 `adapterMode: 'client'`；
+   另加一条反向模式的失败用例（监听端口被占用 → 502 + offline）。
+
+顺带修了 `scripts/http-smoke.ts` 顶部注释（写 `ADMIN_PASSWORD`，代码读 `SMOKE_PASSWORD`，照注释抄会踩空）。
+
+**已知缺陷（NapCat 4.18.41）**：`websocketServers` 的 `token` 校验不生效（已改反向绕开，见 D018）。
+
+```
+UD.createServer → this.authorize(this.config.token, ws, req)
+authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
+  → i 为 undefined → 三个分支都抛 TypeError → async 回调吞掉 → 连接保持打开
+```
+
+同文件里存在正确的 `authorizeWS(e, n, r)`，但 WebSocket 适配器没用它。
+后果：本机任何进程都能连 `127.0.0.1:3001` 控制机器人，**唯一防线是端口绑定**。
+
+**待定方案**：
+- A 降级 NapCat 到校验正常的版本（要重新验证 QQ 版本兼容，下载慢）
+- **B 改反向 WS（推荐）**：NapCat 作客户端连我们，token 由我们校验；附带好处是云端部署不用开入站端口
+- C 接受现状：仅 `127.0.0.1` 防护，等上游修复
 
 ---
 
@@ -233,12 +297,12 @@
 - [x] 收到消息 → 回 `pong`
 - [x] 发送节流（全局令牌桶）
 
-### M2 最小闭环
+### M2 最小闭环 ← 现在做这个
 
 - [ ] AgentConfig / ConfigResolver（四级覆盖）
 - [ ] `ModelGateway`：路由 + 超时 + 重试 + 记账
 - [ ] `openai-compatible` Provider
-- [ ] Persona 拼装 system prompt
+- [ ] Persona 拼装 system prompt（**做到这一步必须定未决问题 6**）
 - [ ] 私聊能正常对话
 
 ### M3 拟人
@@ -246,10 +310,15 @@
 - [ ] 状态机（mood / energy / affinity）
 - [ ] 发言决策器
 - [ ] 双阶段生成（内心独白 → 外显）
-- [ ] 表达层（拆条 / 打字延迟 / 表情）
+- [ ] 表达层（拆条 / 打字延迟 / 表情 / **是否引用上一条**）
+      —— 引用不是默认行为：真人只在这一句需要指回上文时才引用。M1 的占位回声曾经
+      无条件引用（`replyToMessageId`），看着很机械，已去掉；协议层能力保留。
+      「由模型判断还是按规则」**待定，见未决问题 6**，不在这里先定。
 - [ ] 行为拟人（夜间静默 / 连续发送上限 / 相似内容拦截）
 
 ### M4 管理后台
+
+> 目标：M1~M3 阶段**没有页面**，操作一律走 HTTP 接口（`scripts/connect-instance.ts` 是临时的连接入口）。
 
 - [ ] Vue3 工程 + 登录页
 - [ ] 人设编辑器
@@ -308,6 +377,7 @@
 | 3 | 是否需要语音消息（TTS / ASR） | 影响表达层与模型路由 | M3 |
 | 4 | 人设是否要支持多套按时段切换 | 影响 Persona 与 Session 的绑定关系 | M4 |
 | 5 | 是否需要群管理能力（欢迎、关键词） | 影响 Adapter 权限与风控 | M6 |
+| **6** | **「引不引用上一条」由谁决定**：模型自己判断，还是表达层按规则 + 人格参数？<br>倾向做法（未定）：机制归代码（私聊永不引用、群聊隔 N 条/超过 T 秒才引用），倾向归人格卡（`quoteTendency: never/rare/normal` → 阈值），模型最多给一个受限提示。<br>反对"全靠模型"的理由：模型输出的是文本、引用需要 message id 与时序（在系统侧）、且不可回归测试。 | 影响出站消息结构、`Persona` 是否要加字段、system prompt 形态 | **M2 接 AI 并落 Persona 字段时**（那是第一次绕不开的时刻）<br>实现落在 M3 表达层 |
 
 ---
 

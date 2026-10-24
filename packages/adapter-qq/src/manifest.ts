@@ -19,12 +19,28 @@ export const manifest: AdapterManifest = {
 
   configFields: [
     {
+      key: 'mode',
+      label: '接入方向',
+      type: 'select',
+      required: true,
+      default: 'server',
+      options: [
+        { label: 'NapCat 连本服务（反向，推荐）', value: 'server' },
+        { label: '本服务连 NapCat（正向）', value: 'client' },
+      ],
+      help:
+        '反向模式由本服务校验 token（握手阶段拒绝），且云端部署无需开放入站端口；' +
+        'NapCat 4.18.41 的正向模式 token 校验存在缺陷，等于无鉴权',
+    },
+    {
       key: 'wsUrl',
       label: 'WebSocket 地址',
       type: 'text',
       required: true,
-      placeholder: 'ws://127.0.0.1:3001',
-      help: '以 NapCat WebUI「网络配置」里显示的 WebSocket 服务端地址为准（常见 3001，部分版本是 6700）。不要填公网地址',
+      placeholder: 'ws://127.0.0.1:3002',
+      help:
+        '反向模式填本端监听地址（如 ws://127.0.0.1:3002，需与 NapCat 的「反向 WebSocket」一致）；' +
+        '正向模式填 NapCat 的服务端地址（常见 3001）。不要填公网地址',
     },
     {
       key: 'accessToken',

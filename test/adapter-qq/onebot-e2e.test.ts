@@ -6,8 +6,8 @@
  * 真实 NapCat 联调放在最后一步（需要装 NapCat、有小号），那时的失败才更可能是协议差异。
  */
 
-import { AddressInfo } from 'node:net';
-import { WebSocketServer, type WebSocket } from 'ws';
+import { AddressInfo, createServer, connect as netConnect } from 'node:net';
+import { WebSocket, WebSocketServer } from 'ws';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { AdapterDeps, InboundMessage } from '@newjob/contracts';
@@ -130,7 +130,9 @@ function makeAdapter(
 ): { adapter: OneBotAdapter; messages: InboundMessage[] } {
   const deps: AdapterDeps = {
     instanceId: 'inst-e2e',
-    config: { wsUrl: url, selfId: '10001', accessToken: 'secret-token', ...overrides },
+    // 这一组用例验证的是**正向**（我们连 NapCat），所以显式指定 mode。
+    // 适配器默认是 server（反向），不写清楚会连不上假服务端。
+    config: { mode: 'client', wsUrl: url, selfId: '10001', accessToken: 'secret-token', ...overrides },
     logger: silentLogger,
   };
   const adapter = new OneBotAdapter(deps);
@@ -266,19 +268,195 @@ describe('OneBotAdapter 端到端', () => {
   });
 });
 
+describe('OneBotAdapter 反向模式（NapCat 连我们）', () => {
+  /** 拿一个空闲端口：监听 0 让内核分配，记下再释放 */
+  async function freePort(): Promise<number> {
+    const server = createServer();
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    return port;
+  }
+
+  /** 等端口就绪再让"NapCat"连，否则 listen 还没完成会 ECONNREFUSED */
+  async function waitUntilListening(port: number, timeoutMs = 3000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const reachable = await new Promise<boolean>((resolve) => {
+        const socket = netConnect({ port, host: '127.0.0.1' });
+        socket.once('connect', () => {
+          socket.destroy();
+          resolve(true);
+        });
+        socket.once('error', () => {
+          socket.destroy();
+          resolve(false);
+        });
+      });
+      if (reachable) {
+        return;
+      }
+      if (Date.now() > deadline) {
+        throw new Error(`端口 ${port} 没有开始监听`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
+  /** 模拟 NapCat 的反向连接：自动应答 action，并记录我们发出去的东西 */
+  async function connectFakeNapCat(port: number, token: string) {
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/onebot/v11/ws?access_token=${token}`);
+    cleanup.push(async () => socket.terminate());
+    const received: Array<Record<string, unknown>> = [];
+    socket.on('message', (raw) => {
+      const envelope = JSON.parse(raw.toString()) as Record<string, unknown>;
+      received.push(envelope);
+      if (typeof envelope.echo === 'string') {
+        const action = String(envelope.action ?? '');
+        socket.send(
+          JSON.stringify({
+            status: 'ok',
+            retcode: 0,
+            data:
+              action === 'get_login_info'
+                ? { user_id: '10001', nickname: 'bot' }
+                : action === 'get_status'
+                  ? { online: true, good: true }
+                  : { message_id: 601 },
+            echo: envelope.echo,
+          }),
+        );
+      }
+    });
+    await new Promise<void>((resolve, reject) => {
+      socket.once('open', () => resolve());
+      socket.once('error', reject);
+      socket.once('unexpected-response', (_req, res) =>
+        reject(new Error(`握手被拒绝：HTTP ${res.statusCode}`)),
+      );
+    });
+    return { socket, received };
+  }
+
+  it('comes online once NapCat dials in, then converts events and replies pong', async () => {
+    const port = await freePort();
+    const deps: AdapterDeps = {
+      instanceId: 'inst-reverse',
+      // 只配监听地址：谁连进来由 token 决定
+      config: {
+        mode: 'server',
+        wsUrl: `ws://127.0.0.1:${port}`,
+        selfId: '10001',
+        accessToken: 'reverse-token-123456',
+      },
+      logger: silentLogger,
+    };
+    const adapter = new OneBotAdapter(deps);
+    const messages: InboundMessage[] = [];
+    adapter.onMessage((message) => messages.push(message));
+    cleanup.push(() => adapter.disconnect());
+
+    const connecting = adapter.connect();
+    await waitUntilListening(port);
+    const napcat = await connectFakeNapCat(port, 'reverse-token-123456');
+    await connecting;
+
+    expect(adapter.getStatus()).toBe('online');
+    // 连上之后仍要核验登录身份（反向模式也不能省）
+    expect(napcat.received.some((item) => item.action === 'get_login_info')).toBe(true);
+
+    napcat.socket.send(
+      JSON.stringify({
+        post_type: 'message',
+        message_type: 'private',
+        message_id: 601,
+        user_id: 20002,
+        message: [{ type: 'text', data: { text: 'ping' } }],
+        sender: { user_id: 20002, nickname: '小明' },
+      }),
+    );
+
+    await waitFor(() => messages.length === 1);
+    expect(messages[0]!.plainText).toBe('ping');
+
+    const sent = await adapter.send({
+      kind: 'send',
+      session: { kind: 'private', peerId: '20002' },
+      segments: [{ type: 'text', text: 'pong' }],
+    });
+    expect(sent.messageId).toBe('601');
+    expect(
+      napcat.received.some(
+        (item) =>
+          item.action === 'send_msg' &&
+          (item.params as Record<string, unknown> | undefined)?.message_type === 'private',
+      ),
+    ).toBe(true);
+  }, 20_000);
+
+  it('does not come online when the peer presents a wrong token', async () => {
+    const port = await freePort();
+    const deps: AdapterDeps = {
+      instanceId: 'inst-reverse-bad',
+      config: {
+        mode: 'server',
+        wsUrl: `ws://127.0.0.1:${port}`,
+        selfId: '10001',
+        accessToken: 'reverse-token-123456',
+      },
+      logger: silentLogger,
+    };
+    const adapter = new OneBotAdapter(deps);
+    cleanup.push(() => adapter.disconnect());
+
+    const connecting = adapter.connect();
+    await waitUntilListening(port);
+    await expect(connectFakeNapCat(port, 'wrong-token-000000')).rejects.toThrow(
+      /握手被拒绝|401/,
+    );
+
+    // 对端被拒 → 适配器仍在等，状态不能是 online
+    expect(adapter.getStatus()).toBe('connecting');
+    await adapter.disconnect();
+    await expect(connecting).rejects.toThrow();
+  }, 20_000);
+});
+
 describe('parseOneBotConfig', () => {
   it('requires a WebSocket url and a QQ number', () => {
-    expect(() => parseOneBotConfig({ selfId: '10001' })).toThrow(/wsUrl/);
-    expect(() => parseOneBotConfig({ wsUrl: 'ws://127.0.0.1:6700/onebot/v11/ws' })).toThrow(/selfId/);
-    expect(() => parseOneBotConfig({ wsUrl: 'http://x', selfId: '1' })).toThrow(/ws:\/\//);
+    expect(() => parseOneBotConfig({ mode: 'client', selfId: '10001' })).toThrow(/wsUrl/);
+    expect(() => parseOneBotConfig({ mode: 'server', selfId: '10001' })).toThrow(/监听地址/);
+    expect(() =>
+      parseOneBotConfig({ mode: 'client', wsUrl: 'ws://127.0.0.1:6700/onebot/v11/ws' }),
+    ).toThrow(/selfId/);
+    expect(() =>
+      parseOneBotConfig({ mode: 'client', wsUrl: 'http://x', selfId: '1' }),
+    ).toThrow(/ws:\/\//);
   });
 
-  it('treats a blank token as "no auth" instead of an empty token', () => {
+  it('treats a blank token as "no auth" in client mode', () => {
     const config = parseOneBotConfig({
+      mode: 'client',
       wsUrl: 'ws://127.0.0.1:6700/onebot/v11/ws',
       selfId: '10001',
       accessToken: '   ',
     });
     expect(config.accessToken).toBeUndefined();
+  });
+
+  it('defaults to reverse mode (server) when mode is missing or unknown', () => {
+    // 默认值必须落在安全的一侧：正向模式在 NapCat 4.18.41 上等于无鉴权
+    const base = { wsUrl: 'ws://127.0.0.1:3002', selfId: '10001', accessToken: 'token-123456' };
+    expect(parseOneBotConfig(base).mode).toBe('server');
+    expect(parseOneBotConfig({ ...base, mode: 'nginx' }).mode).toBe('server');
+    expect(parseOneBotConfig({ ...base, mode: 'CLIENT' }).mode).toBe('client');
+  });
+
+  it('refuses reverse mode without a token', () => {
+    // 反向模式是我们自己开的端口，没有 token 就等于对任何能连上的进程开放
+    expect(() =>
+      parseOneBotConfig({ mode: 'server', wsUrl: 'ws://127.0.0.1:3002', selfId: '10001' }),
+    ).toThrow(/Access Token/);
   });
 });

@@ -23,9 +23,20 @@ import { OneBotWsClient } from './onebot/client';
 import { toInboundMessage, toPlatformEvent } from './onebot/convert';
 import { toOneBotCall } from './onebot/outbound';
 import { idToString, type OneBotEvent } from './onebot/protocol';
+import { OneBotWsServer } from './onebot/server';
+import type { OneBotTransport } from './onebot/transport';
 import { TokenBucket, bucketFromRateHint } from './throttle';
 
+export type OneBotMode = 'client' | 'server';
+
 export type OneBotConfig = {
+  /**
+   * 连接方向。
+   *   `server`（推荐）= NapCat 连我们，token 由我们校验
+   *   `client`         = 我们连 NapCat（NapCat 4.18.41 的 WS token 校验有 bug，等于无鉴权）
+   */
+  mode: OneBotMode;
+  /** client: 对方地址；server: 本端监听地址（如 ws://127.0.0.1:3002） */
   wsUrl: string;
   accessToken?: string;
   selfId: string;
@@ -33,9 +44,16 @@ export type OneBotConfig = {
 
 /** 校验并归一配置。错误信息里**不允许**出现 token */
 export function parseOneBotConfig(config: Record<string, unknown>): OneBotConfig {
+  const rawMode = typeof config.mode === 'string' ? config.mode.trim().toLowerCase() : '';
+  const mode: OneBotMode = rawMode === 'client' ? 'client' : 'server';
+
   const wsUrl = typeof config.wsUrl === 'string' ? config.wsUrl.trim() : '';
   if (!wsUrl) {
-    throw new Error('缺少 wsUrl：请填写 NapCat 的 WebSocket 地址');
+    throw new Error(
+      mode === 'server'
+        ? '缺少监听地址：请填写本端要监听的 ws:// 地址（如 ws://127.0.0.1:3002）'
+        : '缺少 wsUrl：请填写 NapCat 的 WebSocket 地址',
+    );
   }
   if (!/^wss?:\/\//i.test(wsUrl)) {
     throw new Error('wsUrl 必须以 ws:// 或 wss:// 开头');
@@ -48,7 +66,13 @@ export function parseOneBotConfig(config: Record<string, unknown>): OneBotConfig
     typeof config.accessToken === 'string' && config.accessToken.trim()
       ? config.accessToken.trim()
       : undefined;
-  return { wsUrl, accessToken, selfId };
+
+  // 反向模式必须带 token：这一端是我们自己校验，空 token 就等于对任何进程开放
+  if (mode === 'server' && !accessToken) {
+    throw new Error('反向模式必须配置 Access Token（由本服务在握手阶段校验）');
+  }
+
+  return { mode, wsUrl, accessToken, selfId };
 }
 
 /** QQ 号掩码：错误信息可能被写进日志，完整号不许出现 */
@@ -62,7 +86,7 @@ export class OneBotAdapter implements IAdapter {
   readonly capabilities = manifest.capabilities;
 
   private status: AdapterStatus = 'offline';
-  private client: OneBotWsClient | null = null;
+  private transport: OneBotTransport | null = null;
   private bucket: TokenBucket;
   private messageHandler: ((msg: InboundMessage) => void) | null = null;
   private platformEventHandler: ((evt: PlatformEvent) => void) | null = null;
@@ -74,35 +98,63 @@ export class OneBotAdapter implements IAdapter {
   }
 
   async connect(): Promise<void> {
-    if (this.client) {
+    if (this.transport) {
       await this.disconnect();
     }
     const config = parseOneBotConfig(this.deps.config);
+    const transport = this.createTransport(config);
 
-    const client = new OneBotWsClient({
-      url: config.wsUrl,
-      ...(config.accessToken ? { accessToken: config.accessToken } : {}),
-      logger: this.deps.logger,
-      onEvent: (event) => this.handleEvent(event, config.selfId),
-      onStatusChange: (status) => {
-        this.status = status === 'online' ? 'online' : status === 'connecting' ? 'connecting' : 'offline';
-        this.emit({ kind: 'status', status: this.status });
-      },
-    });
-
-    this.client = client;
+    this.transport = transport;
     try {
-      await client.connect();
+      await transport.connect();
       // 连上 ≠ 登对了。必须核对登录的是哪个号，否则填错号会表现为"接上了但没反应"
-      await this.verifyLogin(client, config.selfId);
+      await this.verifyLogin(transport, config.selfId);
     } catch (err) {
       // 关键：失败要真的断开，否则留下一条半开的 WS，NapCat 侧会认为是活连接
-      client.close();
-      this.client = null;
+      transport.close();
+      this.transport = null;
       this.status = 'offline';
       this.emit({ kind: 'status', status: 'offline' });
       throw err;
     }
+  }
+
+  /**
+   * 按 mode 建传输层。
+   *   server：我们监听，NapCat 连进来（token 由我们的 verifyClient 在握手阶段校验）
+   *   client：我们连 NapCat（注意 4.18.41 的 token 校验是坏的，只能靠 127.0.0.1 兜底）
+   */
+  private createTransport(config: OneBotConfig): OneBotTransport {
+    const onEvent = (event: OneBotEvent): void => this.handleEvent(event, config.selfId);
+    const onStatusChange = (status: 'connecting' | 'online' | 'offline'): void => {
+      this.status = status;
+      this.emit({ kind: 'status', status: this.status });
+    };
+
+    if (config.mode === 'server') {
+      const url = new URL(config.wsUrl);
+      const port = Number(url.port);
+      if (!Number.isInteger(port) || port <= 0) {
+        throw new Error('反向模式的监听地址必须带端口（如 ws://127.0.0.1:3002）');
+      }
+      return new OneBotWsServer({
+        // 只监听回环/内网地址：反向模式的绑定地址不应该出现在公网上
+        host: url.hostname || '127.0.0.1',
+        port,
+        accessToken: config.accessToken as string,
+        logger: this.deps.logger,
+        onEvent,
+        onStatusChange,
+      });
+    }
+
+    return new OneBotWsClient({
+      url: config.wsUrl,
+      ...(config.accessToken ? { accessToken: config.accessToken } : {}),
+      logger: this.deps.logger,
+      onEvent,
+      onStatusChange,
+    });
   }
 
   /**
@@ -116,8 +168,8 @@ export class OneBotAdapter implements IAdapter {
    * 用 `get_login_info` 拿实际登录的号（注意：它只有 user_id / nickname，没有在线状态），
    * 用 `get_status` 拿 online（部分实现还有 good，表示接收链路健康度）。
    */
-  private async verifyLogin(client: OneBotWsClient, expectedSelfId: string): Promise<void> {
-    const loginInfo = await client.call('get_login_info', {});
+  private async verifyLogin(transport: OneBotTransport, expectedSelfId: string): Promise<void> {
+    const loginInfo = await transport.call('get_login_info', {});
     const loginData = (loginInfo.data ?? {}) as Record<string, unknown>;
     const actualId = idToString(loginData.user_id);
 
@@ -132,7 +184,7 @@ export class OneBotAdapter implements IAdapter {
       );
     }
 
-    const statusResult = await client.call('get_status', {});
+    const statusResult = await transport.call('get_status', {});
     const statusData = (statusResult.data ?? {}) as Record<string, unknown>;
     if (statusData.online === false) {
       throw new Error('QQ 账号当前未登录（NapCat 在线但账号已离线），请在 NapCat 里重新登录');
@@ -147,21 +199,21 @@ export class OneBotAdapter implements IAdapter {
   }
 
   async disconnect(): Promise<void> {
-    this.client?.close();
-    this.client = null;
+    this.transport?.close();
+    this.transport = null;
     this.status = 'offline';
     this.emit({ kind: 'status', status: 'offline' });
   }
 
   async send(action: OutboundAction): Promise<{ messageId: string }> {
-    if (!this.client || !this.client.isOpen()) {
+    if (!this.transport || !this.transport.isOpen()) {
       throw new Error('未连接，无法发送');
     }
     // 节流放在最前面：连接层只管连通性，频率是业务约束
     await this.bucket.take();
 
     const call = toOneBotCall(action);
-    const response = await this.client.call(call.action, call.params);
+    const response = await this.transport.call(call.action, call.params);
     if (response.status === 'failed' || (response.retcode ?? 0) !== 0) {
       const code = response.retcode ?? -1;
       this.emit({ kind: 'send-blocked', code, message: `OneBot 返回失败（retcode=${code}）` });

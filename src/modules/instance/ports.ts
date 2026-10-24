@@ -14,6 +14,8 @@ export type InstancePublicRow = {
   platform: string;
   accountId: string;
   adapterType: string;
+  /** 连接方向：server = 对方连我们（反向），client = 我们连对方（正向） */
+  adapterMode: string;
   endpoint: string | null;
   /** 是否配置了 token（布尔，不是密文） */
   hasAccessToken: boolean;
@@ -28,6 +30,7 @@ export type InstanceConnectConfig = {
   id: string;
   platform: string;
   adapterType: string;
+  adapterMode: string;
   accountId: string;
   endpoint: string | null;
   accessTokenEnc: string | null;
@@ -41,6 +44,12 @@ export type InstanceCreateInput = {
   platform: string;
   accountId: string;
   adapterType: string;
+  /**
+   * 必填（不是可选）：默认值只允许存在于 service 层一处。
+   * 设成可选会让仓储有"漏传就落 DB 默认值"的空间，而 DB 的默认是 `client`，
+   * 与产品默认（`server`）相反 —— 这个不一致已经造成过一次真实 bug。
+   */
+  adapterMode: string;
   endpoint?: string | null;
   accessTokenEnc?: string | null;
   enabled?: boolean;
@@ -51,6 +60,7 @@ export type InstanceUpdatePatch = {
   platform?: string;
   accountId?: string;
   adapterType?: string;
+  adapterMode?: string;
   endpoint?: string | null;
   accessTokenEnc?: string | null;
   enabled?: boolean;

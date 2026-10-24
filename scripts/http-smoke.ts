@@ -6,14 +6,22 @@
  * 以及最关键的一条：**任何响应体里都不许出现 Key 明文或密文**。
  *
  * 用法：
- *   BASE_URL=http://127.0.0.1:3111 ADMIN_PASSWORD=... npx tsx scripts/http-smoke.ts
+ *   BASE_URL=http://127.0.0.1:3111 npx tsx scripts/http-smoke.ts
+ *
+ * 账号与密码要和**起服务时的 BOOTSTRAP_ADMIN_*** 对上：
+ *   SMOKE_USERNAME  默认 smoke_http_admin
+ *   SMOKE_PASSWORD  默认 smoke-http-pass-01（也认 ADMIN_PASSWORD）
  */
 
 import assert from 'node:assert/strict';
+import { createServer } from 'node:net';
+import type { AddressInfo } from 'node:net';
 
 const BASE = process.env.BASE_URL ?? 'http://127.0.0.1:3111';
 const ADMIN = process.env.SMOKE_USERNAME ?? 'smoke_http_admin';
-const PASSWORD = process.env.SMOKE_PASSWORD ?? 'smoke-http-pass-01';
+/** 两个名字都认：老文档里写的是 ADMIN_PASSWORD，脚本里一直是 SMOKE_PASSWORD */
+const PASSWORD =
+  process.env.SMOKE_PASSWORD ?? process.env.ADMIN_PASSWORD ?? 'smoke-http-pass-01';
 const NEW_PASSWORD = process.env.SMOKE_NEW_PASSWORD ?? 'smoke-http-pass-02';
 /** 留给 `zero-knowledge-check.ts` 当靶子的明文 Key，两边必须一致 */
 const ZK_PLAINTEXT = process.env.ZK_PLAINTEXT ?? 'sk-smoke-zk-marker-4c3b2a19';
@@ -181,11 +189,16 @@ async function main(): Promise<void> {
   res = await call('POST', '/api/instances', {
     name: '冒烟实例',
     accountId: '10001000',
+    // 显式声明正向模式：下面要验的是"拨号连不上 → 502"。
+    // 不写就会落到默认的反向模式，那时 connect 是**监听 + 等对端**，
+    // 失败原因变成"等待超时"，这条用例就不再测它名字说的那件事了（还会白等 20 秒）。
+    adapterMode: 'client',
     endpoint: 'ws://127.0.0.1:1/onebot/v11/ws',
   });
   assert.equal(res.status, 201, JSON.stringify(res.body));
   const instanceId = res.body.id as string;
   assert.equal(res.body.accountId, '10001000');
+  assert.equal(res.body.adapterMode, 'client');
   assert.equal(res.body.hasAccessToken, false);
   assert.ok(!('accessTokenEnc' in res.body), '实例响应里不允许有 accessTokenEnc');
 
@@ -214,6 +227,37 @@ async function main(): Promise<void> {
   });
   assert.equal(res.status, 400, JSON.stringify(res.body));
   assert.equal(res.body.code, 'REMOTE_ENDPOINT_BLOCKED');
+
+  step('实例：反向模式下监听端口被占用 → 502，且状态回到 offline');
+  {
+    // 反向模式是默认路径，冒烟里必须有它的失败分支。
+    // 用 EADDRINUSE 触发，比"等对端 20 秒超时"快得多，测的还是同一件事：起不来就别报 online。
+    const blocker = createServer();
+    await new Promise<void>((resolve) => blocker.listen(0, '127.0.0.1', resolve));
+    const busyPort = (blocker.address() as AddressInfo).port;
+    try {
+      res = await call('POST', '/api/instances', {
+        name: '反向模式实例',
+        accountId: '10001002',
+        adapterMode: 'server',
+        endpoint: `ws://127.0.0.1:${busyPort}`,
+        accessToken: 'smoke-reverse-token',
+      });
+      assert.equal(res.status, 201, JSON.stringify(res.body));
+      assert.equal(res.body.adapterMode, 'server');
+      const reverseId = res.body.id as string;
+      res = await call('POST', `/api/instances/${reverseId}/connect`);
+      assert.equal(res.status, 502, JSON.stringify(res.body));
+      assert.equal(res.body.code, 'INSTANCE_CONNECT_FAILED');
+      const after = await call('GET', '/api/instances');
+      const row = (after.body as Array<Record<string, unknown>>).find((it) => it.id === reverseId);
+      assert.equal(row?.status, 'offline');
+      res = await call('DELETE', `/api/instances/${reverseId}`);
+      assert.equal(res.status, 200);
+    } finally {
+      await new Promise<void>((resolve) => blocker.close(() => resolve()));
+    }
+  }
 
   step('实例：改名字 → 200');
   res = await call('PATCH', `/api/instances/${instanceId}`, { name: '改过名的实例' });

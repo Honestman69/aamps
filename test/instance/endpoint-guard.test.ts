@@ -74,6 +74,29 @@ describe('assertEndpointAllowed', () => {
   it('allows public endpoints only when the switch is explicitly on', () => {
     process.env[ENV_KEY] = 'true';
     expect(() => assertEndpointAllowed('ws://bot.example.com:3001')).not.toThrow();
+    expect(() => assertEndpointAllowed('ws://bot.example.com:3002', 'server')).not.toThrow();
+  });
+
+  it('explains listening risk, not dial-out risk, in reverse mode', () => {
+    // 反向模式下这段地址是**我们自己要监听的**，风险方向相反：
+    // 不是"连到别人的 NapCat"，而是"在公网上开了一个口子"
+    delete process.env[ENV_KEY];
+    try {
+      assertEndpointAllowed('ws://203.0.113.9:3002', 'server');
+      throw new Error('应当被拒绝');
+    } catch (err) {
+      const error = err as { code: string; message: string };
+      expect(error.code).toBe('REMOTE_ENDPOINT_BLOCKED');
+      expect(error.message).toContain('监听');
+      expect(error.message).toContain('127.0.0.1');
+    }
+  });
+
+  it('blocks 0.0.0.0 for listening by default (that would be every interface)', () => {
+    delete process.env[ENV_KEY];
+    expect(() => assertEndpointAllowed('ws://0.0.0.0:3002', 'server')).toThrowError(/公网|监听/);
+    // 回环地址才是反向模式的正常填法
+    expect(() => assertEndpointAllowed('ws://127.0.0.1:3002', 'server')).not.toThrow();
   });
 
   it('only treats true / 1 (after trim, case-insensitive) as consent', () => {

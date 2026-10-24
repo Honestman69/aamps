@@ -103,6 +103,7 @@ class FakeInstanceRepository implements IInstanceRepository {
       platform: input.platform,
       accountId: input.accountId,
       adapterType: input.adapterType,
+      adapterMode: input.adapterMode ?? 'server',
       endpoint: input.endpoint ?? null,
       hasAccessToken: Boolean(input.accessTokenEnc),
       enabled: input.enabled ?? true,
@@ -134,6 +135,7 @@ class FakeInstanceRepository implements IInstanceRepository {
       id: entry.row.id,
       platform: entry.row.platform,
       adapterType: entry.row.adapterType,
+      adapterMode: entry.row.adapterMode,
       accountId: entry.row.accountId,
       endpoint: entry.row.endpoint,
       accessTokenEnc: entry.enc,
@@ -343,6 +345,7 @@ describe('InstanceService 连接链路', () => {
     const dto = await service.create(actor(ALICE), {
       name: '主号',
       accountId: '10001',
+      adapterMode: 'client',
       endpoint: 'ws://127.0.0.1:6700/onebot/v11/ws',
       accessToken: TOKEN,
     });
@@ -353,6 +356,7 @@ describe('InstanceService 连接链路', () => {
     const adapter = created[0]!;
     // 列名 → 适配器配置字段名，且 token 是解密后的明文
     expect(adapter.deps.config).toEqual({
+      mode: 'client',
       wsUrl: 'ws://127.0.0.1:6700/onebot/v11/ws',
       selfId: '10001',
       accessToken: TOKEN,
@@ -377,11 +381,14 @@ describe('InstanceService 连接链路', () => {
     });
 
     expect(adapter.sent).toHaveLength(1);
+    // 占位回声不带引用：真人不会对每句话都点引用（引用由 M3 表达层决定）
     expect(adapter.sent[0]).toMatchObject({
       kind: 'send',
       segments: [{ type: 'text', text: 'pong' }],
-      replyToMessageId: 'msg-1',
     });
+    const sent = adapter.sent[0]!;
+    expect(sent.kind).toBe('send');
+    expect(sent.kind === 'send' ? sent.replyToMessageId : 'unexpected').toBeUndefined();
   });
 
   it('reports a clear error when NapCat is unreachable and leaves no runtime behind', async () => {

@@ -73,6 +73,27 @@ pnpm dev
 
 首次启动需要创建一个 superadmin 账号，见 `docs/STATUS.md` 的 M0 任务。
 
+### 现在还没有管理后台
+
+管理页面（Vue 3）排在 **M4**，M1~M3 阶段所有操作都走 HTTP 接口。为了不手拼 cookie，常用动作有脚本：
+
+```bash
+# 登录（= 验密码 + 解锁 DEK）→ 列出实例 → 连接选中的实例
+ADMIN_USERNAME=你的用户名 ADMIN_PASSWORD=你的密码 pnpm tsx scripts/connect-instance.ts
+
+# 接口自检（自己建账号、跑完整鉴权与实例流程，不碰真实数据）
+BASE_URL=http://127.0.0.1:3000 pnpm tsx scripts/http-smoke.ts
+```
+
+**账号从哪来**：首次启动时，服务会用 `.env` 里的 `BOOTSTRAP_ADMIN_USERNAME` /
+`BOOTSTRAP_ADMIN_PASSWORD` 创建一个 superadmin；账号已存在则跳过（不会覆盖密码）。
+所以"我没注册过账号"不代表没有账号——先看这两行。
+如果密码写成 `BOOTSTRAP_ADMIN_PASSWORD="xxx"`，命令行里要连引号一起去掉，或者交给
+`scripts/connect-instance.ts`，它会自己剥一层引号（引号带着传进去只会得到一个莫名的 401）。
+
+接口清单看 `src/modules/*/*.controller.ts`，`GET /api/adapters` 会返回各适配器的 `configFields`，
+M4 的配置表单就是照着它渲染的。
+
 ---
 
 ## 风险提示
