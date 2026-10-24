@@ -17,8 +17,22 @@
  */
 
 const BASE = process.env.BASE_URL ?? 'http://127.0.0.1:3000';
-const USERNAME = process.env.ADMIN_USERNAME ?? '';
-const PASSWORD = process.env.ADMIN_PASSWORD ?? '';
+
+/**
+ * 去掉包裹的引号。
+ * 现实里有人的 `.env` 写成 `BOOTSTRAP_ADMIN_PASSWORD="xxx"`，
+ * 手动 `cp` 到命令行时会连引号一起带上 —— 那会得到一个"密码错误"的 401，
+ * 而真实原因只是多了两个字符。这里按 dotenv 的规则先剥一层。
+ */
+function unquote(value: string): string {
+  const text = value.trim();
+  const quoted =
+    (text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"));
+  return quoted ? text.slice(1, -1) : text;
+}
+
+const USERNAME = unquote(process.env.ADMIN_USERNAME ?? '');
+const PASSWORD = unquote(process.env.ADMIN_PASSWORD ?? '');
 const WANTED_ID = process.env.INSTANCE_ID ?? '';
 
 type InstanceRow = {

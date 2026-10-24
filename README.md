@@ -85,6 +85,12 @@ ADMIN_USERNAME=你的用户名 ADMIN_PASSWORD=你的密码 pnpm tsx scripts/conn
 BASE_URL=http://127.0.0.1:3000 pnpm tsx scripts/http-smoke.ts
 ```
 
+**账号从哪来**：首次启动时，服务会用 `.env` 里的 `BOOTSTRAP_ADMIN_USERNAME` /
+`BOOTSTRAP_ADMIN_PASSWORD` 创建一个 superadmin；账号已存在则跳过（不会覆盖密码）。
+所以"我没注册过账号"不代表没有账号——先看这两行。
+如果密码写成 `BOOTSTRAP_ADMIN_PASSWORD="xxx"`，命令行里要连引号一起去掉，或者交给
+`scripts/connect-instance.ts`，它会自己剥一层引号（引号带着传进去只会得到一个莫名的 401）。
+
 接口清单看 `src/modules/*/*.controller.ts`，`GET /api/adapters` 会返回各适配器的 `configFields`，
 M4 的配置表单就是照着它渲染的。
 

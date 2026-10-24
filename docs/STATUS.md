@@ -204,19 +204,30 @@
 | **token 鉴权** | 反向模式：错 token 握手 HTTP 401，正确 token 连入 `online`（真机验证 ✅） |
 
 - [x] NapCat 配置接入方向（反向 WS，`ws://127.0.0.1:3002`）
-- [x] 后台建实例：填 QQ 号 + WS 地址 + token → 点连接 → 看服务日志出现 `adapter.connected`
-- [x] 私聊发一条消息 → 应收到引用回复 `pong`
+- [x] 建实例：QQ 号 + 监听地址 + token → `POST /api/instances/:id/connect`（M4 前没有页面，
+      用 `pnpm connect`）→ 日志出现 `adapter.listening` + `adapter.peer_connected`
+- [x] 私聊发一条消息 → 收到引用回复 `pong`（正向模式真机 1 次；反向模式用对端脚本验过回包内容）
 - [ ] 群里 `@机器人` 一条 → 应收到 `pong`；不 @ 时不回复（`isMentioned` 生效）
-- [ ] 停掉 NapCat → 观察重连日志；重启 NapCat → 心跳自愈
+- [x] 停掉对端 → 观察重连；对端恢复后自愈（反向模式下 NapCat 每 5 秒重试，实测 1~5 秒回到 `online`）
 - [ ] 换小号测试"切换"：新建第二条实例、连上新的、断开旧的
 - [ ] 故意填错 QQ 号 → 应被"账号不一致"拦住（验证 `get_login_info` 核验真的生效）
 - [x] `pnpm check:local-data` 通过；确认 `napcat/` 没有被 git 看到
 - [ ] 迁移演练：把 `napcat/` 目录复制到别处，确认**不搬数据**也能靠重新扫码跑起来
 - [x] **WS token 鉴权（原阻塞项）**：改反向 WS 后由本服务在握手阶段校验，见 `SECURITY.md`
 
-**验收**：除群里 @、断线自愈、换号切换三项外全过；日志里没有任何 token / 完整 QQ 号。
+**2026-10-24 应用层验证**（走完整 HTTP 路径，不是只测适配器）：
 
-**已知缺陷（NapCat 4.18.41）**：`websocketServers` 的 `token` 校验不生效。
+```
+POST /api/auth/login                → 200, unlocked=true
+POST /api/instances/<id>/connect    → 200 {"status":"online"}（2.6 秒，NapCat 自己连入）
+错误 token 连 3002                   → HTTP 401，日志 adapter.peer_rejected(token_mismatch)
+正确 token + 推一条私聊              → 服务回 send_msg：[reply(778899), text("pong")]
+对端断开                             → 5 秒内 NapCat 重连回来，status 回到 online
+```
+
+**验收**：除群里 @、换号切换两项外全过；日志里没有任何 token / 完整 QQ 号。
+
+**已知缺陷（NapCat 4.18.41）**：`websocketServers` 的 `token` 校验不生效（已改反向绕开，见 D018）。
 
 ```
 UD.createServer → this.authorize(this.config.token, ws, req)
