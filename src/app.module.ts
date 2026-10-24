@@ -28,6 +28,8 @@ class PrismaModule {}
     AuthModule,
     AdapterModule,
     CredentialModule,
+    AgentConfigModule,
+    ModelModule,
     InstanceModule,
   ],
 })

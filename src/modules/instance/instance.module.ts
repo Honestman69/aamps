@@ -21,6 +21,8 @@ import { CREDENTIAL_REPOSITORY } from '../credential/tokens';
 import { CONFIG_SERVICE } from '../config/tokens';
 import { RuntimeKeyStore } from '../auth/runtime-key-store';
 import { AUDIT_SERVICE } from '../auth/tokens';
+import { PipelineModule } from '../pipeline/pipeline.module';
+import { PIPELINE_SERVICE } from '../pipeline/tokens';
 import { InstanceController } from './instance.controller';
 import { InstanceBootstrapService } from './instance-bootstrap.service';
 import { InstanceRuntime } from './instance-runtime';
@@ -30,7 +32,7 @@ import { PrismaInstanceRepository } from './repositories/prisma-instance.reposit
 import { INSTANCE_REPOSITORY, INSTANCE_SERVICE } from './tokens';
 
 @Module({
-  imports: [AuthModule, AdapterModule, ConfigModule, CredentialModule],
+  imports: [AuthModule, AdapterModule, ConfigModule, CredentialModule, PipelineModule],
   controllers: [InstanceController],
   providers: [
     { provide: InstanceRuntime, useFactory: (): InstanceRuntime => new InstanceRuntime() },
@@ -50,8 +52,9 @@ import { INSTANCE_REPOSITORY, INSTANCE_SERVICE } from './tokens';
         audit: AuditService,
         configCache: { invalidate(instanceId: string): number },
         credentials: { findForUser(userId: string, id: string): Promise<unknown | null> },
+        pipeline: { handle(message: unknown, send: unknown): Promise<void> },
       ): InstanceService =>
-        new InstanceService({ instances, keyStore, registry, runtime, audit, configCache, credentials }),
+        new InstanceService({ instances, keyStore, registry, runtime, audit, configCache, credentials, pipeline }),
       inject: [
         INSTANCE_REPOSITORY,
         RuntimeKeyStore,
@@ -60,6 +63,7 @@ import { INSTANCE_REPOSITORY, INSTANCE_SERVICE } from './tokens';
         AUDIT_SERVICE,
         CONFIG_SERVICE,
         CREDENTIAL_REPOSITORY,
+        PIPELINE_SERVICE,
       ],
     },
     // 启动时恢复反向实例监听（D019）：不依赖用户解锁，失败也不阻断启动
