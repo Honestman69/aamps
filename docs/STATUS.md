@@ -7,7 +7,7 @@
 
 **最后更新**：2026-10-24
 **当前阶段**：**M1 已完成并验收**；P0-1（反向实例自监听）已完成；人格归属已按 **D023** 定稿
-（挂 `BotInstance`，跨社交平台不共享、跨 Provider 必须继承）；人格预算已落到实例（D024）；余额可见与故障分级（D025）、兜底话术可配置（D026）已定稿。M2 已开始：配置解析与"切 Provider"的写路径已完成（第 12 步），下一步：预算拦截 + 事件通知，然后接 Pipeline。
+（挂 `BotInstance`，跨社交平台不共享、跨 Provider 必须继承）；人格预算已落到实例（D024）；余额可见与故障分级（D025，兜底已按 D028 修订）、兜底话术可配置（D026）已定稿。M2 已开始：配置解析（第 12 步）、ModelGateway（第 13 步）、故障→话术映射（第 14 步）已完成，下一步：预算拦截，然后接 Pipeline。
 
 **下一步（默认走这条）**：**M2 最小闭环** —— `AgentConfig`/`ConfigResolver`（按 D020 的五级覆盖：
 租户 → Agent → 实例 → 角色 → 会话）→ `ModelGateway` → `openai-compatible` Provider
@@ -411,9 +411,24 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 **还没接的（下一步）**：
 
 - [ ] 预算检查：调用前按当日/当月用量判断 `downgrade` / `block`（D024）——现在只记账、不拦
-- [ ] 402/欠费后的实例事件与 owner 通知（D025 分级），以及 `balanceSource='inferred'` 回写
+- [ ] 402/欠费后的 `balanceSource='inferred'` 回写（**不做 owner 推送**，见 D028）
 - [ ] 流式响应（M3 表达层需要逐字/分段）
 - [ ] `anthropic` / `gemini` 协议适配（现在遇到会明确标 `unsupported_protocol` 并跳过，不假装能调）
+
+---
+
+### ~~第 14 步：故障 → 话术槽位映射（D028）~~ ✅ 已完成
+
+- [x] `src/modules/persona/fault-slot.ts`：`faultToSlot(reason)`，7 种原因全覆盖（新增原因时编译期报错）
+- [x] `FALLBACK_SPEAK_LIMITS`：`shortOutage` 1h/3 次、`longOutage` 6h/2 次、`budgetLimit` 12h/1 次
+- [x] `decideSpeak(slot, { spokenAt, hasTemplate, now })`：先查日额度再查间隔；用户配 `null` → 必静默
+- [x] 本地零点算"一天"（用 UTC 会让额度在凌晨 8 点重置）
+- [x] **欠费不再需要通知模块**：D025 的 owner 推送与去重窗口取消（D028）
+
+**验收**：`pnpm test` **214 个用例全绿**（新增 12 条：槽位映射、跨天重置、时钟漂移、用户 `null` 优先）。
+
+**为什么必须先做这一步**：M2 接 Pipeline 时最省事的写法是 `if (reason === 'balance') 回话术`。
+一旦这样写，限频、`null` 处理、槽位区分都会散落成 if 分支，之后改一次要翻遍代码。
 
 ---
 
@@ -535,6 +550,7 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 - [x] 2026-10-24 **兜底话术（D026）**：`Persona.fallbacksJson` 三槽位 × 私聊/群聊，`null` = 不说；预存文本 + 规则校验
 - [x] 2026-10-24 **配置解析（M2-1）**：四级覆盖 + provenance + 30s 缓存与写路径失效；实例可切模型/Key（含归属校验，D027）
 - [x] 2026-10-24 **ModelGateway（M2-2）**：错误分类 + openai-compatible 适配 + 选路/重试/熔断/记账；202 单测
+- [x] 2026-10-24 **故障→话术映射（D028）**：欠费走 `longOutage` 话术、不做主动通知；映射与限频独立成模块
 
 ---
 
@@ -570,6 +586,7 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 | 2026-10-24 | M2 开工：ConfigResolver（四级覆盖 + 来源追溯 + 缓存）与切换 Provider 的写路径（D027，含凭据归属校验）；185 单测 |
 | 2026-10-24 | 追加 **D026**：兜底话术由用户按人格配置，预存文本、`null` = 不说、群聊默认不说；新增 15 条规则用例 |
 | 2026-10-24 | 追加 **D025**：余额三态与熔断语义、兜底按故障时长分级、通知去重；`Credential` 加余额/冷却字段，新增 Provider 预设表；149 单测 |
+| 2026-10-24 | 追加 **D028**（修订 D025）：欠费也走人格话术、**不做主动通知**；故障→槽位映射与限频落到 `persona/fault-slot.ts`；新增 12 条用例 |
 | 2026-10-24 | 追加 **D024**：预算挂人格（`BotInstance`），超限 `downgrade`/`block`；删除 `Credential` 上的预算字段；迁移 `budget_moves_to_instance`；144 单测全绿 |
 | 2026-10-24 | 追加 **D023**：人格与记忆作用域 = 单个社交平台账号；撤回 `Agent` 层（迁移 `persona_scope_back_to_instance`），D020 归属段作废、四层结构与演化闸门保留；143 单测全绿 |
 | 2026-10-24 | 建立分支纪律：M0 收尾与 M1 骨架分两次提交到 `feat/m1-adapter-and-instance`，合并前 typecheck / 112 单测 / build / 31 项冒烟 / 数据闸门全绿，`--no-ff` 合并并打标签 `m1-skeleton` |
