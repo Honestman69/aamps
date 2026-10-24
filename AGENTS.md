@@ -34,28 +34,56 @@
 
 ## 换机器 / 全新克隆（6 步，别跳）
 
-仓库里**没有** `.env`，也没有 `data/*.db`（都在 `.gitignore` 里）。新克隆的仓库直接 `pnpm dev` 会失败，按顺序来：
+仓库里**没有** `.env`、也没有数据库文件（都在 `.gitignore` 里）。新克隆直接 `pnpm dev` 会失败，按顺序来：
 
 ```bash
-pnpm install                    # 首次约 9 分钟，别以为卡死了
-cp .env.example .env            # 然后改 DATABASE_URL="file:../data/dev.db"
-                                # 注意：相对路径按 prisma/ 解析，不是项目根
-pnpm prisma:migrate             # 或 DATABASE_URL=... npx prisma migrate deploy
-pnpm build                      # 先构建 packages/*，否则运行期 ERR_MODULE_NOT_FOUND
-pnpm test                       # 应为全绿（当前 51 个用例）
-pnpm dev                        # 或 node dist/src/main.js
+pnpm install                                   # 首次约 9 分钟，别以为卡死了
+cp .env.example .env                           # 模板里的 DATABASE_URL 已经是对的，本地可直接用
+pnpm prisma:generate                           # 生成 Prisma Client（缺它 tsc 会报找不到类型）
+DATABASE_URL="file:../data/dev.db" npx prisma migrate deploy
+pnpm build                                     # 先构建 packages/*，否则运行期 ERR_MODULE_NOT_FOUND
+pnpm test                                      # 全绿（用例数会随迭代增长，不写死数字）
+pnpm dev                                       # 或 node dist/src/main.js
 ```
 
-两个自己踩过的坑，加一条纪律：
+### 新机器上「不存在」的东西（换机器最容易漏）
 
-1. **`BOOTSTRAP_ADMIN_PASSWORD` 只在首次建号时生效**。换个空库跑会新建管理员；
-   账号已存在时会跳过并打印原因，不会改别名密码。
+| 东西 | 为什么不在 | 怎么办 |
+|---|---|---|
+| `.env` | 被 ignore | `cp .env.example .env`，里面已有可用的开发默认值 |
+| `data/dev.db` | 被 ignore（目录只有 `.gitkeep`） | `migrate deploy` 建空库 |
+| 管理员账号 | 存在库里 | 首次启动由 `BOOTSTRAP_ADMIN_*` 自动创建；**账号已存在则跳过，不会改密码** |
+| 实例（QQ 号 / token / 接入地址） | 存在库里 | 重新建一条。想搬数据就整库搬 `dev.db`，但注意里面是密文，换机器后 DEK 不同解不开 |
+| `.workbuddy/memory/` | 被 ignore | 读不到上一台机的本地日志 → **一切以 `docs/` 为准**，这也是为什么决策必须写进 DECISIONS |
+| NapCat 及其登录态 | 仓库外 | **不要搬**（SECURITY 7.1）；新机重新扫码生成 |
+
+### 只写代码不需要 NapCat
+
+单测里用的是假 OneBot 服务端（`test/adapter-qq/`），`scripts/http-smoke.ts` 也不连真机。
+只有"私聊收到 pong"这类真机联调才需要 NapCat，步骤见 `docs/STATUS.md` 第 7 步。
+
+真机联调的形态：**NapCat 主动连我们**（反向 WS），本服务监听 `ws://127.0.0.1:3002`，
+NapCat 的 `onebot11_<uin>.json` 里 `websocketClients[].url` 指向它、`token` 与实例一致。
+
+### 两个自己踩过的坑，加一条纪律
+
+1. **`BOOTSTRAP_ADMIN_PASSWORD` 只在首次建号时生效**。空库启动会新建管理员；
+   账号已存在时跳过并打印原因，不会改密码。忘了密码只能走"重置密码"（会销毁 DEK）。
 2. **`SESSION_SECRET` 缺失或短于 32 字符会直接拒绝启动**。这是刻意的——给它默认值等于公开所有会话签名。
-
-再加上一条不是"坑"而是纪律：
-
+   另外它派生 token 摘要，**换掉会让已保存的实例 token 失效**（D019）。
 3. **NapCat 的数据目录不要搬**。换机器时在新机器上重新扫码登录生成，而不是把 `napcat/` 或
    `.config/QQ/` 复制过去——那里面是 QQ 登录态，等同于账号控制权（`SECURITY.md` 7.1）。
+
+### 改完代码、提交之前（缺一条都不算完）
+
+```bash
+pnpm typecheck        # tsc --noEmit，含 packages/*
+pnpm test             # 全绿
+pnpm build            # 两个包 + 主服务都出产物
+pnpm check:local-data # NapCat 登录态没混进版本库
+```
+
+端到端冒烟（要真服务 + 独立库，别指向 `dev.db`）见本节下方「分支与合并纪律」第 3 条。
 
 ---
 
