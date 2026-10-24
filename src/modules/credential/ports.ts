@@ -28,6 +28,14 @@ export type CredentialPublicRow = {
   lastCheckedAt: Date | null;
   lastCheckOk: boolean | null;
   lastError: string | null;
+  /** 厂商余额（D025）。`null` 表示没查到或不支持，**不要用 0 代替** */
+  balanceCents: number | null;
+  balanceCurrency: string | null;
+  balanceCheckedAt: Date | null;
+  balanceSource: string | null;
+  /** 熔断冷却截止；期间路由跳过，但配置不动 */
+  cooldownUntil: Date | null;
+  unavailableReason: string | null;
   createdAt: Date;
   updatedAt: Date;
 };

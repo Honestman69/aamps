@@ -7,7 +7,7 @@
 
 **最后更新**：2026-10-24
 **当前阶段**：**M1 已完成并验收**；P0-1（反向实例自监听）已完成；人格归属已按 **D023** 定稿
-（挂 `BotInstance`，跨社交平台不共享、跨 Provider 必须继承）；人格预算已落到实例（D024）。M2 尚未开始写代码。
+（挂 `BotInstance`，跨社交平台不共享、跨 Provider 必须继承）；人格预算已落到实例（D024）；余额可见与故障分级已定稿（D025）。M2 尚未开始写代码。
 
 **下一步（默认走这条）**：**M2 最小闭环** —— `AgentConfig`/`ConfigResolver`（按 D020 的五级覆盖：
 租户 → Agent → 实例 → 角色 → 会话）→ `ModelGateway` → `openai-compatible` Provider
@@ -330,6 +330,24 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 
 ---
 
+### ~~第 10 步：余额可见 + 故障分级（D025）~~ ✅ 已完成
+
+- [x] `Credential` 加余额字段：`balanceCents` / `balanceCurrency` / `balanceCheckedAt` / `balanceSource`
+- [x] `Credential` 加熔断字段：`cooldownUntil` / `unavailableReason`（系统写，用户不可改）
+- [x] 凭据 DTO 暴露 `balance`（三态）与 `health`（available / reason / cooldownUntil）
+- [x] `src/modules/model/providers/presets.ts`：Provider 预设表，**余额接口用声明表达**
+      （DeepSeek `/user/balance` 已核实；OpenAI/Anthropic/Gemini 老实标 `inferred`，不编接口）
+- [x] `MODEL-ACCESS.md` 第 7 节重写：重试 / 熔断三层 / 兜底按故障时长分级 / 余额三态 / 通知去重
+- [x] 迁移 `20261024125311_credential_balance_and_cooldown`
+- [x] AGENTS 错题表补第 9 条（禁止所有失败回同一句话术）
+
+**验收**：`pnpm test` **149 个用例全绿**（新增 5 个预设契约测试）；`typecheck` / `build` 通过。
+
+**注意**：主动查询余额需要明文 Key（D005），所以**未解锁时只能显示上次快照并标注时间**；真正的
+`refresh-balance` 接口与错误码识别放在 M2 的 `ModelGateway` 里实现。
+
+---
+
 ---
 
 ## 任务看板
@@ -444,6 +462,7 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 - [x] 2026-10-24 **接入安全兜底**：endpoint 默认拒绝公网、连接后核验登录账号、NapCat 数据目录提交闸门（`pnpm check:local-data`）；112 个单测
 - [x] 2026-10-24 **人格归属定稿（D023）**：先做 Agent 层 → 用户澄清边界 → 当日回退；人格与记忆挂 `BotInstance`，跨社交平台不共享、跨 Provider 零迁移
 - [x] 2026-10-24 **人格预算（D024）**：预算与超限策略挂 `BotInstance`，`Credential` 不再有预算字段；实例接口可读写
+- [x] 2026-10-24 **余额与故障分级（D025）**：余额三态 + 熔断只暂停路由 + 兜底按故障时长分级；Provider 预设表落地
 
 ---
 
@@ -475,6 +494,7 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 | 2026-10-24 | 完成接入层与实例管理：`adapter-qq`（WS/心跳/重连/节流/事件转换）、`AdapterRegistry`、实例 CRUD + 连接接口、`pong` 闭环；101 个单测、30 项 HTTP 冒烟；追加 D016（实例配置来源与解锁依赖） |
 | 2026-10-24 | 补接入安全兜底：endpoint 护栏（`REMOTE_ENDPOINT_BLOCKED`）、`get_login_info` 账号核验、`check:local-data` 提交闸门；112 个单测；追加 D017（协议端地址与登录态边界） |
 | 2026-10-24 | 追加 D020/D021/D022（人格双层、模型可切换、重置分四档）；D007 曾按五级覆盖修订，同日撤回 |
+| 2026-10-24 | 追加 **D025**：余额三态与熔断语义、兜底按故障时长分级、通知去重；`Credential` 加余额/冷却字段，新增 Provider 预设表；149 单测 |
 | 2026-10-24 | 追加 **D024**：预算挂人格（`BotInstance`），超限 `downgrade`/`block`；删除 `Credential` 上的预算字段；迁移 `budget_moves_to_instance`；144 单测全绿 |
 | 2026-10-24 | 追加 **D023**：人格与记忆作用域 = 单个社交平台账号；撤回 `Agent` 层（迁移 `persona_scope_back_to_instance`），D020 归属段作废、四层结构与演化闸门保留；143 单测全绿 |
 | 2026-10-24 | 建立分支纪律：M0 收尾与 M1 骨架分两次提交到 `feat/m1-adapter-and-instance`，合并前 typecheck / 112 单测 / build / 31 项冒烟 / 数据闸门全绿，`--no-ff` 合并并打标签 `m1-skeleton` |

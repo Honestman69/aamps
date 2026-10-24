@@ -38,6 +38,12 @@ const PUBLIC_SELECT = {
   lastCheckedAt: true,
   lastCheckOk: true,
   lastError: true,
+  balanceCents: true,
+  balanceCurrency: true,
+  balanceCheckedAt: true,
+  balanceSource: true,
+  cooldownUntil: true,
+  unavailableReason: true,
   createdAt: true,
   updatedAt: true,
 } as const;

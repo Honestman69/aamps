@@ -98,6 +98,19 @@ export type CredentialPublicDTO = {
   lastCheckedAt: string | null;
   lastCheckOk: boolean | null;
   lastError: string | null;
+  /** 厂商余额（D025）：`null` = 未查到 / 该厂商不支持；不要在前端显示成 0 */
+  balance: {
+    cents: number | null;
+    currency: string | null;
+    checkedAt: string | null;
+    source: string | null;
+  };
+  /** 熔断视图：`available=false` 时 reason 说明为什么暂时不用它（配置仍在） */
+  health: {
+    available: boolean;
+    reason: string | null;
+    cooldownUntil: string | null;
+  };
   createdAt: string;
   updatedAt: string;
 };
@@ -119,6 +132,20 @@ export function toPublicDTO(row: CredentialPublicRow): CredentialPublicDTO {
     lastCheckedAt: row.lastCheckedAt ? row.lastCheckedAt.toISOString() : null,
     lastCheckOk: row.lastCheckOk,
     lastError: row.lastError,
+    balance: {
+      cents: row.balanceCents,
+      currency: row.balanceCurrency,
+      checkedAt: row.balanceCheckedAt ? row.balanceCheckedAt.toISOString() : null,
+      source: row.balanceSource,
+    },
+    health: {
+      // 可用 = 用户开着 && 不在冷却中。两者必须分开判断：enabled 是用户意图，冷却才是系统判断
+      available:
+        row.enabled &&
+        (row.cooldownUntil === null || row.cooldownUntil.getTime() <= Date.now()),
+      reason: row.unavailableReason,
+      cooldownUntil: row.cooldownUntil ? row.cooldownUntil.toISOString() : null,
+    },
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
