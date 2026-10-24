@@ -125,7 +125,7 @@ pnpm check:local-data # NapCat 登录态没混进版本库
 | 7 | 直接 `fetch('https://api.deepseek.com/...')` | 绕过重试、记账、降级、审计 | 走 `ModelGateway` |
 | 8 | 把 `napcat/`、`.config/QQ/`、`onebot_*.json` 复制到新机器或提交上去 | 那是 QQ 登录态 = 账号控制权，搬一次就多一份泄露面 | 新机器重新扫码生成；提交前 `pnpm check:local-data` |
 | 9 | 所有失败都回同一句话术，或者反过来"欠费时每条消息都回一句" | 前者让 owner 分不清是欠费、Key 坏了还是我们的 bug；后者在群里是刷屏、在私聊是持续敷衍，比不说话更伤关系 | 按原因分槽位并**限频**：`faultToSlot` + `decideSpeak`（D028）。欠费也走话术，不做主动通知；用户配了 `null` 就必须静默 |
-
+| 10 | 给实例设了预算，但凭据里没填目录价 | 每次调用都记 0 分，**预算永远不触发**；用户以为设了限额，实际一次都没拦住 | 建 Key 时填 `catalogJson` 价格；Gateway 有 warn，看到就补（D029） |
 ---
 
 ## 目录地图

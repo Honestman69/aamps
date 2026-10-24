@@ -43,4 +43,27 @@ export interface IGatewayRepository {
 
   /** 记账：一次调用一行 */
   recordUsage(input: UsageRecordInput): Promise<void>;
+
+  /**
+   * 预算用量：返回"今日已花"与"本月已花"（分），按 `instanceId` 聚合。
+   *
+   * 为什么按实例而不是按 Key：预算是人格的（D024），换 Key 不该刷新额度。
+   * 两个时间点由调用方给，仓储不猜时区——"今天"在哪个时区算是业务决定，不是存储决定。
+   */
+  usageTotals(
+    instanceId: string,
+    window: { dayStart: Date; monthStart: Date },
+  ): Promise<UsageTotals>;
 }
+
+export type UsageTotals = {
+  todayCents: number;
+  monthCents: number;
+  /**
+   * 本月"记了 0 分"的调用次数。
+   *
+   * 存在的意义：没配目录价的 Key 会把每次调用都记成 0 分，**预算就永远不会触发**。
+   * 这不是"省钱"，是限额静默失效。有了这个计数，网关能在发现时明确说出来。
+   */
+  unpricedCalls: number;
+};

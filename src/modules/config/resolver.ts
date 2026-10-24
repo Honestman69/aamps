@@ -15,6 +15,7 @@
 import {
   DEFAULT_AGENT_CONFIG,
   TEMPERATURE_RANGE,
+  isBudgetPolicy,
   type AgentConfig,
   type ConfigBundle,
   type ConfigLayer,
@@ -75,6 +76,20 @@ export function resolveConfig(bundle: ConfigBundle): ResolvedConfig {
   }
   if (hasText(instance.nightQuiet)) set('nightQuiet', instance.nightQuiet, 'instance');
   if (hasText(instance.activePersonaId)) set('personaId', instance.activePersonaId, 'instance');
+
+  // 预算：`0` 是**合法值**（表示不限），所以这里用 `>= 0` 而不是上面那种 `> 0`。
+  // 用 `> 0` 会让"我明确设成不限"被当成"没设"，回落到默认——而默认恰好也是 0，
+  // 表面上没区别，一旦将来默认值改成非 0 就会静默出错。
+  if (Number.isInteger(instance.dailyBudgetCents) && instance.dailyBudgetCents >= 0) {
+    set('dailyBudgetCents', instance.dailyBudgetCents, 'instance');
+  }
+  if (Number.isInteger(instance.monthlyBudgetCents) && instance.monthlyBudgetCents >= 0) {
+    set('monthlyBudgetCents', instance.monthlyBudgetCents, 'instance');
+  }
+  if (isBudgetPolicy(instance.budgetPolicy)) {
+    set('budgetPolicy', instance.budgetPolicy, 'instance');
+  }
+  // 预算只有实例层：人设和会话都不该改它。否则"换个会话"就能绕过限额。
 
   // ── 人设层 ──
   // 这一版人设层不改上面任何字段：行为参数属于 M3 表达层，现在透传只为了将来有落点。

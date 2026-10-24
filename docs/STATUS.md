@@ -7,11 +7,13 @@
 
 **最后更新**：2026-10-24
 **当前阶段**：**M1 已完成并验收**；P0-1（反向实例自监听）已完成；人格归属已按 **D023** 定稿
-（挂 `BotInstance`，跨社交平台不共享、跨 Provider 必须继承）；人格预算已落到实例（D024）；余额可见与故障分级（D025，兜底已按 D028 修订）、兜底话术可配置（D026）已定稿。M2 已开始：配置解析（第 12 步）、ModelGateway（第 13 步）、故障→话术映射（第 14 步）已完成，下一步：预算拦截，然后接 Pipeline。
+（挂 `BotInstance`，跨社交平台不共享、跨 Provider 必须继承）；人格预算已落到实例（D024）；余额可见与故障分级（D025，兜底已按 D028 修订）、兜底话术可配置（D026）已定稿。M2 已开始：配置解析（第 12 步）、ModelGateway（第 13 步）、故障→话术映射（第 14 步）、
+预算拦截（第 15 步）已完成，下一步：接 Pipeline，让私聊真的能对话。
 
-**下一步（默认走这条）**：**M2 最小闭环** —— `AgentConfig`/`ConfigResolver`（按 D020 的五级覆盖：
-租户 → Agent → 实例 → 角色 → 会话）→ `ModelGateway` → `openai-compatible` Provider
-→（到 Persona 那步才碰未决问题 6）→ 私聊能对话。
+**下一步（默认走这条）**：**M2 收尾** —— 把 Pipeline 接起来：
+入站消息 → `ConfigService` → Persona 拼 system prompt → `ModelGateway` → 出站。
+配置覆盖是**四级**（租户 → 实例 → 人设 → 会话，D023 已撤回 Agent 层）。
+到 Persona 那步会碰到未决问题 6（"引不引用上一条"由谁决定）。
 
 **另一条路（只在"准备上云"时才走）**：P0-2 部署拓扑选型（Tailscale 组网 vs 公网反代），
 它决定一键接入包的 URL/证书策略；不做它也不影响本地开发。
@@ -419,7 +421,7 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 
 **还没接的（下一步）**：
 
-- [ ] 预算检查：调用前按当日/当月用量判断 `downgrade` / `block`（D024）——现在只记账、不拦
+- [x] 预算检查：调用前按当日/当月用量判断 `downgrade` / `block`（第 15 步，D029）
 - [ ] 402/欠费后的 `balanceSource='inferred'` 回写（**不做 owner 推送**，见 D028）
 - [ ] 流式响应（M3 表达层需要逐字/分段）
 - [ ] `anthropic` / `gemini` 协议适配（现在遇到会明确标 `unsupported_protocol` 并跳过，不假装能调）
@@ -438,6 +440,28 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 
 **为什么必须先做这一步**：M2 接 Pipeline 时最省事的写法是 `if (reason === 'balance') 回话术`。
 一旦这样写，限频、`null` 处理、槽位区分都会散落成 if 分支，之后改一次要翻遍代码。
+
+---
+
+### ~~第 15 步：预算拦截（D029）~~ ✅ 已完成
+
+- [x] `metering/budget.ts`：`decideBudget` / `exceededLimit` / `usageRatio`，纯函数
+- [x] 配置层补 `dailyBudgetCents` / `monthlyBudgetCents` / `budgetPolicy`（**只有实例层**）
+- [x] `IGatewayRepository.usageTotals`：一次查询拿到今日/本月花费 + "未定价调用数"
+- [x] 网关接入：读配置 → 解锁 → 预算 → 候选 → 调用（顺序有理由，见 D029）
+- [x] `downgrade` 降无可降时按 `block` 处理（`cheap == main` / 已在用 cheap / cheap 为空）
+- [x] 未定价调用打告警（一小时内去重），预算判定时说"用量偏低"
+- [x] `GatewayFailedError` 的 reason 扩为 `GatewayFailureReason`，与 `fault-slot` 共用一份定义
+- [x] `scripts/budget-smoke.ts`：真实 SQLite 验证聚合窗口、空库返回 0、拦截与降级
+
+**验收**：`pnpm test` **240 个用例全绿**；`typecheck` / `build` 通过；
+`budget-smoke` 五项全部通过（今日 40 / 本月 90，不含上月 300；达到上限即拒绝且不出网；降级后实际调用 cheap）。
+
+**过程中抓到的真实缺口**：`presets.ts` 里**没有内置参考价**，所以新建 Key 若不填 `catalogJson`，
+每次调用都会记 0 分，**预算永远不会触发**。已加告警与"未定价调用数"统计，并写进
+`MODEL-ACCESS.md` 8.4 与 AGENTS 错题表第 10 条。这一条不做，预算功能等于假的。
+
+**为什么不做预扣**：见 D029 第 3 条。宁可超出几分钱才停，也不要估算偏差把正常对话拦掉。
 
 ---
 
@@ -560,6 +584,7 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 - [x] 2026-10-24 **配置解析（M2-1）**：四级覆盖 + provenance + 30s 缓存与写路径失效；实例可切模型/Key（含归属校验，D027）
 - [x] 2026-10-24 **ModelGateway（M2-2）**：错误分类 + openai-compatible 适配 + 选路/重试/熔断/记账；202 单测
 - [x] 2026-10-24 **故障→话术映射（D028）**：欠费走 `longOutage` 话术、不做主动通知；映射与限频独立成模块
+- [x] 2026-10-24 **预算拦截（D029）**：网关内判定、降无可降则拒绝、不做预扣；真实库冒烟覆盖聚合窗口
 
 ---
 
@@ -595,6 +620,7 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 | 2026-10-24 | M2 开工：ConfigResolver（四级覆盖 + 来源追溯 + 缓存）与切换 Provider 的写路径（D027，含凭据归属校验）；185 单测 |
 | 2026-10-24 | 追加 **D026**：兜底话术由用户按人格配置，预存文本、`null` = 不说、群聊默认不说；新增 15 条规则用例 |
 | 2026-10-24 | 追加 **D025**：余额三态与熔断语义、兜底按故障时长分级、通知去重；`Credential` 加余额/冷却字段，新增 Provider 预设表；149 单测 |
+| 2026-10-24 | M2-3：预算拦截（D029）+ 未定价告警；`budget-smoke` 真实库验证；240 单测 |
 | 2026-10-24 | 追加 **D028**（修订 D025）：欠费也走人格话术、**不做主动通知**；故障→槽位映射与限频落到 `persona/fault-slot.ts`；新增 12 条用例 |
 | 2026-10-24 | 追加 **D024**：预算挂人格（`BotInstance`），超限 `downgrade`/`block`；删除 `Credential` 上的预算字段；迁移 `budget_moves_to_instance`；144 单测全绿 |
 | 2026-10-24 | 追加 **D023**：人格与记忆作用域 = 单个社交平台账号；撤回 `Agent` 层（迁移 `persona_scope_back_to_instance`），D020 归属段作废、四层结构与演化闸门保留；143 单测全绿 |
