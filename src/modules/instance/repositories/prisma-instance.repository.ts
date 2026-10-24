@@ -24,6 +24,7 @@ import type {
  */
 const PUBLIC_SELECT = {
   id: true,
+  agentId: true,
   name: true,
   platform: true,
   accountId: true,
@@ -57,6 +58,7 @@ export class PrismaInstanceRepository implements IInstanceRepository {
       data: {
         tenantId: input.tenantId,
         ownerUserId: input.ownerUserId,
+        agentId: input.agentId,
         name: input.name,
         platform: input.platform,
         accountId: input.accountId,

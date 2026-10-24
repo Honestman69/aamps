@@ -8,6 +8,7 @@
  */
 
 import { KeyLockedError, PLATFORM_CAPABILITIES } from '@newjob/contracts';
+import type { IAgentRepository } from '@/modules/agent/ports';
 import type {
   AdapterDeps,
   AdapterStatus,
@@ -89,6 +90,19 @@ class StubAdapter implements IAdapter {
   }
 }
 
+class FakeAgentRepository implements IAgentRepository {
+  readonly ensured: Array<{ tenantId: string; ownerUserId: string }> = [];
+
+  async ensureDefaultForUser(tenantId: string, ownerUserId: string): Promise<{ id: string }> {
+    this.ensured.push({ tenantId, ownerUserId });
+    return { id: 'agent-default' };
+  }
+
+  async findForUser(): Promise<null> {
+    return null;
+  }
+}
+
 class FakeInstanceRepository implements IInstanceRepository {
   readonly rows = new Map<
     string,
@@ -103,6 +117,7 @@ class FakeInstanceRepository implements IInstanceRepository {
     const now = new Date();
     const row: InstancePublicRow = {
       id: `inst-${this.seq}`,
+      agentId: input.agentId,
       name: input.name,
       platform: input.platform,
       accountId: input.accountId,
@@ -248,18 +263,37 @@ function setup(options: { failConnect?: boolean } = {}) {
   });
 
   const runtime = new InstanceRuntime();
+  const agents = new FakeAgentRepository();
   const service = new InstanceService({
     instances: repo,
+    agents,
     keyStore,
     registry,
     runtime,
     audit: new AuditService(auditRepo),
   });
 
-  return { repo, auditRepo, keyStore, registry, runtime, service, created };
+  return { repo, agents, auditRepo, keyStore, registry, runtime, service, created };
 }
 
 describe('InstanceService 配置与隔离', () => {
+  it('创建实例时自动挂到用户的默认 Agent（D020：归属不挂在实例上）', async () => {
+    const { repo, agents, service } = setup();
+
+    const dto = await service.create(actor(ALICE), {
+      name: '主号',
+      accountId: '10001',
+      adapterMode: 'client',
+    });
+
+    // 只有一个默认 Agent，且被"保证存在"过一次
+    expect(agents.ensured).toHaveLength(1);
+    expect(agents.ensured[0]?.ownerUserId).toBe(ALICE);
+    // agentId 透传到仓储，并且出现在返回体里（前端要能看出这是哪个 AI 的号）
+    expect(repo.created[0]?.agentId).toBe('agent-default');
+    expect(dto.agentId).toBe('agent-default');
+  });
+
   it('encrypts the NapCat token with the owner DEK and never returns it', async () => {
     const { repo, keyStore, service } = setup();
     const dek = randomDek();

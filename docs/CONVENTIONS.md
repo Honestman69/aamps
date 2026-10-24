@@ -49,6 +49,19 @@ Controller  →  Service  →  Repository  →  Prisma
 - **Repository 是唯一能写 `where` 的地方**，凭据类必须带 `ownerUserId`。
 - **外部调用一律经过 Gateway / Adapter**，不允许在 Service 里直接 `fetch`。
 
+### 归属字段怎么选（D020）
+
+写任何带归属的表/查询前，先问一句：**"这是谁的经历"还是"从哪个口进来的"？**
+
+| 问题 | 字段 | 典型 |
+|---|---|---|
+| 这是谁的经历 | `agentId` | 人设、记忆、关系、情绪 |
+| 从哪个口进来的 | `instanceId` | 平台账号、会话、连接事件、限速/静默 |
+
+- 记忆类数据可以**两个都带**：`agentId` 是归属（必填），`instanceId` 是来源渠道（可空）。
+- 不要把"归属"写成"来源"：`where: { instanceId }` 查记忆 = 换个平台号就失忆，正是 D020 要避免的。
+- 心情/精力挂 `agentId`（同一个人的），静默/限流/在线状态挂 `instanceId`（账号级的）。
+
 ### 包边界（monorepo）
 
 ```

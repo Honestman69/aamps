@@ -6,11 +6,12 @@
 > 仓库里没有 `.env`、没有数据库，直接 `pnpm dev` 会失败。
 
 **最后更新**：2026-10-24
-**当前阶段**：**M1 已完成并验收**；云端常驻前置（P0-1 反向实例启动自监听）已完成。
+**当前阶段**：**M1 已完成并验收**；P0-1（反向实例自监听）与 **Agent 归属层（D020）** 已完成。
+M2 尚未开始写代码。
 
-**下一步（默认走这条）**：**M2 最小闭环** —— `AgentConfig`/`ConfigResolver` → `ModelGateway`
-→ `openai-compatible` Provider →（到 Persona 那步才碰未决问题 6）→ 私聊能对话。
-M2 不依赖任何部署决策，可以立刻开始。
+**下一步（默认走这条）**：**M2 最小闭环** —— `AgentConfig`/`ConfigResolver`（按 D020 的五级覆盖：
+租户 → Agent → 实例 → 角色 → 会话）→ `ModelGateway` → `openai-compatible` Provider
+→（到 Persona 那步才碰未决问题 6）→ 私聊能对话。
 
 **另一条路（只在"准备上云"时才走）**：P0-2 部署拓扑选型（Tailscale 组网 vs 公网反代），
 它决定一键接入包的 URL/证书策略；不做它也不影响本地开发。
@@ -285,6 +286,33 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 - **B 改反向 WS（推荐）**：NapCat 作客户端连我们，token 由我们校验；附带好处是云端部署不用开入站端口
 - C 接受现状：仅 `127.0.0.1` 防护，等上游修复
 
+### ~~第 8 步：Agent 归属层（D020）~~ ✅ 已完成
+
+**问题**：记忆与人格原本挂 `BotInstance`。用户会在多个社交平台各有账号，换个号就"失忆重开"，
+而这正是要避免的事。归属主体应该是**用户的 AI（Agent）**，实例只是它的出口。
+
+- [x] `Agent` 表：`ownerUserId` / `name` / `status` / 模型路由（`modelMain` / `modelCheap` / `modelFallback` + `credentialId`）/ `activePersonaId`
+- [x] 归属改挂 `agentId`：`Persona`、`MemoryItem`、`Relationship`、`AgentState`；`MemoryItem.instanceId` 降级为**来源渠道**（可空）
+- [x] `Relationship` 唯一键改 `[agentId, platform, peerId]`（原 `userId` 更名 `peerId`，与"平台内用户"语义对齐）
+- [x] `BotInstance.agentId` 必填；`Persona.archivedAt`（重置人格时归档旧版本，不删除）
+- [x] `AgentState` 搬到 Agent（心情是同一个人的）；`silentUntil` / `rateLimitPerMin` 仍留实例（账号级）
+- [x] `BotInstance` 的模型字段降级为**实例级覆盖**（为空则用 Agent 的）
+- [x] 迁移 `20261024115349_add_agent_layer`
+- [x] 实例创建自动挂用户的默认 Agent（M4 有页面后改为显式选择）
+- [x] `GET/POST /api/instances` 返回体带 `agentId`
+
+**验收**：
+
+- `pnpm test` **144 个用例全绿**（新增"创建实例自动挂默认 Agent"）
+- `pnpm typecheck` 全绿；`pnpm build` 三产物
+- 真实链路：登录 → 建实例 → 响应带 `agentId` → 列表一致 → 库里 Agent 1 条、实例归属正确
+- `scripts/http-smoke.ts` `HTTP SMOKE PASSED`
+
+**为什么现在做**：M2 的 `ConfigResolver` 要按 Agent 层读配置。等 M5 记忆落库后再改归属，
+就要写数据搬迁脚本，而且"记忆归属"搬错了极难发现。
+
+---
+
 ---
 
 ## 任务看板
@@ -397,6 +425,7 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 - [x] 2026-10-24 **接入层**：`AdapterRegistry` + `adapter-qq` 完整实现（WS 连接/心跳/退避重连/令牌桶/事件转换/发送）
 - [x] 2026-10-24 **实例管理**：QQ 号与 WS 地址存 `BotInstance` 并通过接口增删改启停，`pong` 闭环；101 个单测 + 30 项 HTTP 冒烟
 - [x] 2026-10-24 **接入安全兜底**：endpoint 默认拒绝公网、连接后核验登录账号、NapCat 数据目录提交闸门（`pnpm check:local-data`）；112 个单测
+- [x] 2026-10-24 **Agent 归属层（D020）**：新增 `Agent` 表，人设/记忆/关系/情绪改挂 `agentId`，实例自动挂默认 Agent；替换旧归属三条迁移
 
 ---
 
@@ -410,6 +439,8 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 | 4 | 人设是否要支持多套按时段切换 | 影响 Persona 与 Session 的绑定关系 | M4 |
 | 5 | 是否需要群管理能力（欢迎、关键词） | 影响 Adapter 权限与风控 | M6 |
 | **6** | **「引不引用上一条」由谁决定**：模型自己判断，还是表达层按规则 + 人格参数？<br>倾向做法（未定）：机制归代码（私聊永不引用、群聊隔 N 条/超过 T 秒才引用），倾向归人格卡（`quoteTendency: never/rare/normal` → 阈值），模型最多给一个受限提示。<br>反对"全靠模型"的理由：模型输出的是文本、引用需要 message id 与时序（在系统侧）、且不可回归测试。 | 影响出站消息结构、`Persona` 是否要加字段、system prompt 形态 | **M2 接 AI 并落 Persona 字段时**（那是第一次绕不开的时刻）<br>实现落在 M3 表达层 |
+| **7** | **同一个人在不同社交平台的记忆是否合并**：现在 `Relationship` 按 `[agentId, platform, peerId]` 存，`MemoryItem.subjectId` 是平台内 id，同一人在 QQ 和抖音是两条互不相认的记录。<br>要合并必须先定三件事：① 谁判断"是同一人"（用户手动绑定 / 手机号 / 聊天内容自证）② 合并粒度（亲密度取最大？记忆互相可见？）③ 隐私后果——把 A 平台的私事带到 B 平台会当场穿帮。<br>倾向：**先不合并**（D012 已定），但结构已经留门（`platform` 与 `peerId` 分离）。触发条件：M5 记忆真正落库后，出现"它不记得我在抖音说过的话"这类真实抱怨。 | 影响记忆检索、关系计算、隐私边界 | M5 |
+| **8** | **API Key 挂 User 还是挂 Agent**：现在是 `Credential` 挂 `User`（一个用户的多个 Key 组成池供降级链）。若一个用户要养多个 Agent 且**分开计费/隔离用量**，就得给 `Credential` 加 `agentId`，或改成多对多。 | 影响计费口径与密钥隔离边界 | M4 做 Agent 管理页时 |
 
 ---
 
@@ -425,4 +456,5 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 | 2026-10-24 | 完成凭据管理：加密写入 + 掩码 + 4 个接口 + 审计；67 个单测、23 项 HTTP 冒烟、零知识直查库全过；追加 D015（凭据物理删除） |
 | 2026-10-24 | 完成接入层与实例管理：`adapter-qq`（WS/心跳/重连/节流/事件转换）、`AdapterRegistry`、实例 CRUD + 连接接口、`pong` 闭环；101 个单测、30 项 HTTP 冒烟；追加 D016（实例配置来源与解锁依赖） |
 | 2026-10-24 | 补接入安全兜底：endpoint 护栏（`REMOTE_ENDPOINT_BLOCKED`）、`get_login_info` 账号核验、`check:local-data` 提交闸门；112 个单测；追加 D017（协议端地址与登录态边界） |
+| 2026-10-24 | 追加 D020/D021/D022（人格双层与 Agent 归属、模型可切换、重置分四档），修订 D007 为五级覆盖；schema 新增 `Agent` 并把 `Persona`/`MemoryItem`/`Relationship`/`AgentState` 归属改为 `agentId`；144 单测 + 真实链路验证 |
 | 2026-10-24 | 建立分支纪律：M0 收尾与 M1 骨架分两次提交到 `feat/m1-adapter-and-instance`，合并前 typecheck / 112 单测 / build / 31 项冒烟 / 数据闸门全绿，`--no-ff` 合并并打标签 `m1-skeleton` |
