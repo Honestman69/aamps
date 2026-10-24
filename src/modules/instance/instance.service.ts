@@ -82,6 +82,16 @@ export type InstanceDeps = {
    * 用 `Pick` 只取一个方法，避免整个凭据领域漏进实例模块。
    */
   credentials: { findForUser(userId: string, id: string): Promise<unknown | null> };
+  /**
+   * 消息主链路（M2）。实例只负责把入站消息交给它，出站回调绑定到当前 adapter。
+   * 用最小接口而非整个 PipelineService，避免实例模块反向依赖 pipeline 的细节。
+   */
+  pipeline: {
+    handle(
+      message: InboundMessage,
+      send: (action: OutboundAction) => Promise<{ messageId: string }>,
+    ): Promise<void>;
+  };
 };
 
 function instanceNotFound(): AppError {
@@ -558,30 +568,20 @@ export class InstanceService {
   }
 
   /**
-   * 入站消息处理（M1 临时）。
+   * 入站消息入口：转发给 Pipeline。
    *
-   * 只做一件事：回 `pong`。目的是让"NapCat → 主服务 → NapCat → QQ"这条链路
-   * 能在没有模型、没有人设、没有规则的情况下先跑通，把协议问题与业务问题分开。
-   * **M2 会把这一段整个替换成 Pipeline 入口**，不要在这上面加业务逻辑。
+   * 这里只负责"把消息交给主链路"，不再有任何回显/业务逻辑 —— 那条链在
+   * `PipelineService` 里（D020/D024/D025/D028/D030/D031 都在那里落地）。
+   *
+   * Pipeline 永不 throw：它内部把所有失败都转成"兜底话术或静默"，所以这里
+   * 不需要 try/catch，也不该再包一层。
    */
   private handleInbound(adapter: IAdapter, message: InboundMessage): void {
-    if (!message.plainText.trim()) {
+    const pipeline = this.deps.pipeline;
+    if (!pipeline) {
+      // 没有注入 Pipeline（理论上不该发生，装配时一定注入）—— 静默，别回 pong 误导
       return;
     }
-    // 刻意**不带** replyToMessageId：引用回复是"这条消息需要指回上一条"的表达手段，
-    // 真人对每句话都点引用会显得很机械。协议层支持（OutboundAction.replyToMessageId
-    // → OneBot 的 reply 段）保留不动，什么时候引用由 M3 的表达层按语境决定，
-    // 不该在这个连 AI 都还没接上的占位回声里替它做决定。
-    const action: OutboundAction = {
-      kind: 'send',
-      session: message.session,
-      segments: [{ type: 'text', text: 'pong' }],
-    };
-    adapter.send(action).catch((err: Error) => {
-      createAdapterLogger(`instance:${message.instanceId}`).warn(
-        { event: 'adapter.echo_failed', reason: err.message },
-        '回声发送失败',
-      );
-    });
+    void pipeline.handle(message, (action) => adapter.send(action));
   }
 }

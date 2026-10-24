@@ -6,15 +6,18 @@
 > 仓库里没有 `.env`、没有数据库，直接 `pnpm dev` 会失败。
 
 **最后更新**：2026-10-24
-**当前阶段**：**M1 已完成并验收**；P0-1（反向实例自监听）已完成；人格归属已按 **D023** 定稿
-（挂 `BotInstance`，跨社交平台不共享、跨 Provider 必须继承）；人格预算已落到实例（D024）；余额可见与故障分级（D025，兜底已按 D028 修订）、兜底话术可配置（D026）已定稿。M2 已开始：配置解析（第 12 步）、ModelGateway（第 13 步）、故障→话术映射（第 14 步）、
-预算拦截（第 15 步）、引用决策（第 16 步）、会话窗口（第 17 步）已完成，下一步：接 Pipeline，
-让私聊真的能对话（未决问题 6 已由 D030 定稿，不再阻塞）。
+**当前阶段**：**M2 已完成**（最小闭环打通：私聊能对话）。M1 已验收；P0-1（反向实例自监听）已完成。
+M2 各步：配置解析（12）、ModelGateway（13）、故障→话术映射（14）、预算拦截（15）、
+引用决策（16）、会话窗口（17）、Pipeline 主链路（18）。
 
-**下一步（默认走这条）**：**M2 收尾** —— 把 Pipeline 接起来：
-入站消息 → `ConfigService` → `buildWindow`（D031）→ Persona 拼 system prompt → `ModelGateway` → 出站。
-配置覆盖是**四级**（租户 → 实例 → 人设 → 会话，D023 已撤回 Agent 层）。
-引用决策与窗口组装都已就位（D030/D031），Pipeline 直接调用即可。
+**下一步（默认走这条）**：**M3 拟人** —— 状态机（mood/energy/affinity）、发言决策（attention）、
+双阶段生成（内心独白 → 外显）、表达层（拆条/打字延迟/表情）。M2 的 Pipeline 已经是完整的
+消息主链路，M3 是在它上面加 Pipe，不再推倒重来。
+
+**M2 已完成的完整链路**（`PipelineService.handle`）：
+入站消息 → upsert 会话 + 落库 → 取 owner + 人设 → `buildWindow`（D031）→ 拼 system prompt（D020）
+→ `ModelGateway.chat`（D024 预算 / D025 熔断 / 记账）→ `decideQuote`（D030）→ 出站 + 落库。
+失败走 `faultToSlot` + `decideSpeak` + `resolveFallback`（D028/D026），可能静默。
 
 **另一条路（只在"准备上云"时才走）**：P0-2 部署拓扑选型（Tailscale 组网 vs 公网反代），
 它决定一键接入包的 URL/证书策略；不做它也不影响本地开发。
@@ -392,8 +395,8 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 
 - [x] `ModelGateway`：路由 + 超时 + 重试 + 记账（+ 错误分类与熔断） + 错误码识别（402 → `balance` 熔断）
 - [x] `openai-compatible` Provider 适配器
-- [ ] Persona 拼装 system prompt（到这一步定未决问题 6）
-- [ ] 私聊能正常对话（Pipeline 接 ConfigService + Gateway）
+- [x] Persona 拼装 system prompt（未决问题 6 已由 D030 定稿）
+- [x] 私聊能正常对话（Pipeline 接 ConfigService + Gateway，第 18 步）
 
 **验收**：`pnpm test` **185 个用例全绿**（新增 config 18 + 实例归属/缓存 3）；`typecheck` / `build` 通过。
 
@@ -502,6 +505,27 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 
 ---
 
+### ~~第 18 步：Pipeline 主链路（M2 收尾）~~ ✅ 已完成
+
+- [x] `session/persistence.ts` + `prisma-session.repository.ts`：会话 upsert（`[instanceId,kind,peerId]` 唯一）+ 消息落库
+- [x] `persona/prompt.ts`：种子字段 → system prompt（D020 顺序：人 → 出生设定 → 对方 → 情境 → 软禁区）
+- [x] `pipeline/ports.ts` + `prisma-pipeline.repository.ts`：按 instanceId 取 owner + activePersona
+- [x] `pipeline/pipeline.service.ts`：完整链路 + 故障兜底（限频、可能静默）
+- [x] `pipeline/pipeline.module.ts` + tokens；替换 `instance.service` 的 pong 占位回显
+- [x] 修复 `app.module` 里 `ModelModule`/`AgentConfigModule` 被 import 但未注册的 bug
+- [x] `scripts/pipeline-smoke.ts`：真实 SQLite 走通私聊对话（4 项断言）
+
+**验收**：`pnpm test` **295 个用例全绿**（新增 prompt 13 + pipeline 7）；
+`typecheck` / `build` / 数据闸门 PASSED；`pipeline-smoke` 通过（出站、不引用、落库 6 条、会话唯一）。
+
+**M2 刻意没做的（留给 M3）**：attention（要不要回，现在有消息就回）、think（内心独白）、
+moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的 Pipe，不是 M2 的遗漏。
+
+**Pipeline 的出站回调设计**：`send` 作为 `handle(message, send)` 的参数而非依赖注入 ——
+因为 send 绑定到"当前这条连接的 adapter"，每个实例的 adapter 不同，不能全局注入一个。
+
+---
+
 ---
 
 ## 任务看板
@@ -546,13 +570,13 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 
 **代价**：换 `SESSION_SECRET` 会让所有摘要失效 → 需要在后台重新保存一次 token（已写进 SECURITY）。
 
-### M2 最小闭环 ← 现在做这个
+### M2 最小闭环 ✅ 已完成
 
 - [x] AgentConfig / ConfigResolver（四级覆盖 + provenance + 缓存失效）
-- [ ] `ModelGateway`：路由 + 超时 + 重试 + 记账
-- [ ] `openai-compatible` Provider
-- [ ] Persona 拼装 system prompt（**做到这一步必须定未决问题 6**）
-- [ ] 私聊能正常对话
+- [x] `ModelGateway`：路由 + 超时 + 重试 + 记账
+- [x] `openai-compatible` Provider
+- [x] Persona 拼装 system prompt（未决问题 6 已由 D030 定稿）
+- [x] 私聊能正常对话
 
 ### M3 拟人
 
@@ -624,6 +648,7 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 - [x] 2026-10-24 **预算拦截（D029）**：网关内判定、降无可降则拒绝、不做预扣；真实库冒烟覆盖聚合窗口
 - [x] 2026-10-24 **引用决策（D030）**：必要性硬判 + 人格倾向概率，模型不参与；未决问题 6 定稿
 - [x] 2026-10-24 **会话窗口（D031）**：target 必在窗口、after 优先、afterTotals 用未裁剪统计；真实库冒烟
+- [x] 2026-10-24 **Pipeline 主链路（M2 收尾）**：会话/消息落库 + prompt 拼装 + 网关 + 引用 + 兜底，替换 pong 占位；295 单测
 
 ---
 
@@ -659,6 +684,7 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 | 2026-10-24 | M2 开工：ConfigResolver（四级覆盖 + 来源追溯 + 缓存）与切换 Provider 的写路径（D027，含凭据归属校验）；185 单测 |
 | 2026-10-24 | 追加 **D026**：兜底话术由用户按人格配置，预存文本、`null` = 不说、群聊默认不说；新增 15 条规则用例 |
 | 2026-10-24 | 追加 **D025**：余额三态与熔断语义、兜底按故障时长分级、通知去重；`Credential` 加余额/冷却字段，新增 Provider 预设表；149 单测 |
+| 2026-10-24 | **M2 完成**：Pipeline 主链路打通（会话/消息落库、prompt 拼装、网关、引用、兜底），替换 pong 占位；295 单测 + pipeline-smoke |
 | 2026-10-24 | 会话窗口定稿（D031）：三重约束、after 优先、未裁剪统计；`session/window.ts` + Prisma 取数；275 单测 |
 | 2026-10-24 | 定稿未决问题 6（D030）：引用由代码判，必要性不交给概率；新增 `persona/quote.ts` 与 `Persona.quoteTendency`；259 单测 |
 | 2026-10-24 | M2-3：预算拦截（D029）+ 未定价告警；`budget-smoke` 真实库验证；240 单测 |

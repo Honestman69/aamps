@@ -2,7 +2,7 @@
  * 实例服务测试。
  *
  * 这里验证的是"能不能真的把某个 QQ 号接上"中间那段**业务逻辑**：
- *   token 解密 → 配置映射 → 适配器创建 → 接线 → pong 回声 → 状态落库。
+ *   token 解密 → 配置映射 → 适配器创建 → 接线 → 转发给 Pipeline → 状态落库。
  * 网络协议本身由 `test/adapter-qq/onebot-e2e.test.ts` 用真实 WS 服务端覆盖，
  * 所以这里用桩适配器，测试跑得快且失败点清晰。
  */
@@ -269,6 +269,12 @@ function setup(options: { failConnect?: boolean } = {}) {
       return 1;
     },
   };
+  const pipelineHandled: unknown[] = [];
+  const pipeline = {
+    async handle(message: unknown): Promise<void> {
+      pipelineHandled.push(message);
+    },
+  };
   const service = new InstanceService({
     instances: repo,
     keyStore,
@@ -277,9 +283,10 @@ function setup(options: { failConnect?: boolean } = {}) {
     registry,
     runtime,
     audit: new AuditService(auditRepo),
+    pipeline: pipeline,
   });
 
-  return { repo, configCache, credentials, auditRepo, keyStore, registry, runtime, service, created };
+  return { repo, configCache, credentials, auditRepo, keyStore, registry, runtime, service, created, pipelineHandled };
 }
 
 describe('InstanceService 配置与隔离', () => {
@@ -479,8 +486,8 @@ describe('InstanceService 连接链路', () => {
     await expect(service.connect(actor(ALICE), dto.id)).rejects.toBeInstanceOf(KeyLockedError);
   });
 
-  it('maps the stored columns into adapter config and echoes pong to inbound messages', async () => {
-    const { keyStore, service, runtime, created, repo, auditRepo } = setup();
+  it('maps the stored columns into adapter config and forwards inbound to pipeline', async () => {
+    const { keyStore, service, runtime, created, repo, auditRepo, pipelineHandled } = setup();
     const dek = randomDek();
     keyStore.set(SESSION_ALICE, ALICE, dek);
 
@@ -510,7 +517,7 @@ describe('InstanceService 连接链路', () => {
     expect(auditRepo.rows.at(-1)!.afterJson).not.toContain('10001');
     expect(auditRepo.rows.at(-1)!.afterJson).not.toContain(TOKEN);
 
-    adapter.messageHandler?.({
+    const inbound: InboundMessage = {
       id: 'msg-1',
       platform: 'qq',
       instanceId: dto.id,
@@ -520,17 +527,14 @@ describe('InstanceService 连接链路', () => {
       plainText: 'ping',
       isMentioned: true,
       receivedAt: new Date(),
-    });
+    };
+    adapter.messageHandler?.(inbound);
 
-    expect(adapter.sent).toHaveLength(1);
-    // 占位回声不带引用：真人不会对每句话都点引用（引用由 M3 表达层决定）
-    expect(adapter.sent[0]).toMatchObject({
-      kind: 'send',
-      segments: [{ type: 'text', text: 'pong' }],
-    });
-    const sent = adapter.sent[0]!;
-    expect(sent.kind).toBe('send');
-    expect(sent.kind === 'send' ? sent.replyToMessageId : 'unexpected').toBeUndefined();
+    // M2：入站消息不再回 pong，而是原样转发给 Pipeline（由 Pipeline 决定回什么）
+    expect(pipelineHandled).toHaveLength(1);
+    expect(pipelineHandled[0]).toMatchObject({ id: 'msg-1', plainText: 'ping' });
+    // 出站由 Pipeline 通过 send 回调发，实例自己不再直接发
+    expect(adapter.sent).toHaveLength(0);
   });
 
   it('reports a clear error when NapCat is unreachable and leaves no runtime behind', async () => {
