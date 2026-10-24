@@ -23,7 +23,6 @@ model Tenant {
   createdAt      DateTime @default(now())
 
   users       User[]
-  agents      Agent[]
   instances   BotInstance[]
   credentials Credential[]
   ruleSets    RuleSet[]
@@ -56,7 +55,6 @@ model User {
   updatedAt   DateTime  @updatedAt
 
   credentials Credential[]
-  agents      Agent[]
   instances   BotInstance[]
   auditLogs   AuditLog[]
 
@@ -103,54 +101,10 @@ model Credential {
   updatedAt DateTime @updatedAt
 
   instances BotInstance[]
-  agents    Agent[]
   usages    ModelUsage[]
 
   @@index([ownerUserId, provider, enabled])
   @@index([tenantId])
-}
-
-// ─────────────────────────── AI 身份（记忆与人格的归属主体） ───────────────────────────
-
-// 为什么需要这一层（D020）：
-//   一个用户会在多个社交平台各有账号（QQ / 抖音 / B站），但背后是**同一个 AI、同一段人生**。
-//   如果记忆和人格挂在 BotInstance 上，换个平台号就等于重开一个人——这正是要避免的。
-//
-// 归属规则：**"这是谁的经历"看 Agent，"从哪个口进来的"看 BotInstance。**
-// 模型路由放在 Agent 上（而不是写死在实例里），换模型/换厂商不动人格资产（D021）。
-model Agent {
-  id          String @id @default(cuid())
-  tenantId    String
-  tenant      Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  ownerUserId String
-  owner       User   @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
-
-  name   String // 后台展示名，如「小雅」
-  status String @default("active") // active | archived（归档 = 换了一个 Agent，历史只读保留）
-
-  // 模型路由：Provider 可随时切换，人格资产不随之改变（D021）
-  credentialId  String?
-  credential    Credential? @relation(fields: [credentialId], references: [id])
-  modelMain     String?     @default("deepseek-chat")
-  modelCheap    String?     @default("deepseek-chat") // 反思、内心独白等轻任务
-  modelFallback String?
-
-  // 当前生效的人设：人设属于 Agent，不属于某个社交账号
-  activePersonaId String?  @unique
-  activePersona   Persona? @relation("AgentActivePersona", fields: [activePersonaId], references: [id])
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  personas      Persona[]      @relation("AgentPersonas")
-  instances     BotInstance[]
-  agentState    AgentState?
-  memories      MemoryItem[]
-  relationships Relationship[]
-  usages        ModelUsage[]
-
-  @@index([tenantId, status])
-  @@index([ownerUserId])
 }
 
 // ─────────────────────────── QQ 机器人实例 ───────────────────────────
@@ -161,10 +115,6 @@ model BotInstance {
   tenant      Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   ownerUserId String
   owner       User   @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
-
-  // 归属：这个账号是哪个 AI 的出口（D020）。记忆/人格看 Agent，不看账号
-  agentId String
-  agent   Agent  @relation(fields: [agentId], references: [id], onDelete: Cascade)
 
   name        String // 后台展示名
   platform    String @default("qq") // qq | douyin | bilibili（多平台预留，见 D012）
@@ -190,21 +140,28 @@ model BotInstance {
   rateLimitPerMin Int       @default(20)
   nightQuiet      String    @default("00:30-07:30") // 夜间静默时段，仅 @ 除外
 
-  // 模型路由：这里是**实例级覆盖**，为空则用 Agent 的默认值（配置四级覆盖的第三级，D007 修订）
+  // 模型路由（D021：Provider 可切换；切模型不动人格与记忆，因为它们是本账号的数据）
   credentialId     String?
   credential       Credential? @relation(fields: [credentialId], references: [id])
-  modelMain        String?
-  modelCheap       String? // 内心独白等轻任务
+  modelMain        String?     @default("deepseek-chat")
+  modelCheap       String?     @default("deepseek-chat") // 内心独白、反思等轻任务
   modelFallback    String?
   modelTemperature Float       @default(0.85)
+
+  // 当前生效的人设。人格与记忆属于**这个社交平台账号**（D023）
+  activePersonaId String?  @unique
+  activePersona   Persona? @relation("ActivePersona", fields: [activePersonaId], references: [id])
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  sessions Session[]
-  events   InstanceEvent[]
-  usages   ModelUsage[]
-  memories MemoryItem[] // 只作来源渠道（可空），归属看 agentId
+  personas      Persona[]       @relation("InstancePersonas")
+  sessions      Session[]
+  agentState    AgentState?
+  events        InstanceEvent[]
+  relationships Relationship[]
+  memories      MemoryItem[]
+  usages        ModelUsage[]
 
   @@unique([platform, accountId])
   @@index([ownerUserId])
@@ -213,10 +170,10 @@ model BotInstance {
 // ─────────────────────────── 人设卡片 ───────────────────────────
 
 model Persona {
-  id      String @id @default(cuid())
-  // 人设属于 Agent（这个 AI 是谁），不属于某个社交账号（D020）
-  agentId String
-  agent   Agent  @relation("AgentPersonas", fields: [agentId], references: [id], onDelete: Cascade)
+  id         String      @id @default(cuid())
+  // 人设属于这个社交平台账号（D023：跨平台不继承，换平台要重新生成、重新演化）
+  instanceId String
+  instance   BotInstance @relation("InstancePersonas", fields: [instanceId], references: [id], onDelete: Cascade)
 
   name    String
   avatar  String?
@@ -241,10 +198,10 @@ model Persona {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  activeFor Agent?    @relation("AgentActivePersona")
+  activeFor BotInstance[] @relation("ActivePersona")
   sessions  Session[]
 
-  @@index([agentId, status])
+  @@index([instanceId, status])
 }
 
 // BehaviorConfig（存于 Persona.behaviorJson）
@@ -358,18 +315,15 @@ model Message {
 // ─────────────────────────── 记忆 ───────────────────────────
 
 model MemoryItem {
-  id         String       @id @default(cuid())
-  // 归属是 Agent：换个平台号，记忆仍然是同一个人的人生（D020）
-  agentId    String
-  agent      Agent        @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  // 来源渠道（可空）：这条记忆是在哪个社交账号上产生的，用于排查与区分，不用于归属
-  instanceId String?
-  instance   BotInstance? @relation(fields: [instanceId], references: [id], onDelete: SetNull)
+  id         String      @id @default(cuid())
+  // 归属是这个社交平台账号（D023）：跨平台不共享记忆，各平台独立演化
+  instanceId String
+  instance   BotInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
   sessionId  String?
-  session    Session?     @relation(fields: [sessionId], references: [id])
+  session    Session?    @relation(fields: [sessionId], references: [id])
 
   scope        String // episodic（每日摘要）| semantic（关于人的事实）
-  subjectId    String? // 关联的对方标识（平台内 id）；跨平台合并前不假设同一个人
+  subjectId    String? // 关联的对方标识（平台内 id）；跨平台身份不合并（D023）
   kind         String // summary | fact | event | preference
   content      String
   keywords     String  @default("") // 空格分隔，供 FTS5 检索
@@ -379,16 +333,15 @@ model MemoryItem {
   expiresAt DateTime? // 情景记忆可设置过期
   createdAt DateTime  @default(now())
 
-  @@index([agentId, scope])
-  @@index([agentId, subjectId])
+  @@index([instanceId, scope])
+  @@index([subjectId])
 }
 
 model Relationship {
-  id       String @id @default(cuid())
-  // 关系属于 Agent；同一个人在不同社交平台是两条记录（跨平台合并见未决问题，D012 暂不做）
-  agentId  String
-  agent    Agent  @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  platform String @default("qq") // qq | douyin | bilibili
+  id         String      @id @default(cuid())
+  // 关系属于这个社交平台账号（D023）：同一个人在不同平台是两段互不可见的关系
+  instanceId String
+  instance   BotInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
 
   peerId            String // 平台内用户标识（QQ 号 / uid / mid）
   nickname          String?
@@ -401,17 +354,16 @@ model Relationship {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([agentId, platform, peerId])
-  @@index([agentId, affinity])
+  @@unique([instanceId, peerId])
+  @@index([instanceId, affinity])
 }
 
 // ─────────────────────────── 心智状态 ───────────────────────────
 
 model AgentState {
-  id      String @id @default(cuid())
-  // 心情/精力是"这个 AI"的，不是某个社交账号的；账号级的静默/限速留在 BotInstance 上
-  agentId String @unique
-  agent   Agent  @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  id         String      @id @default(cuid())
+  instanceId String      @unique
+  instance   BotInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
 
   mood        Float     @default(0) // -1 ~ 1 效价
   energy      Float     @default(0.8) // 0 ~ 1
@@ -441,9 +393,6 @@ model ModelUsage {
   id           String      @id @default(cuid())
   instanceId   String
   instance     BotInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
-  // 记账也按 Agent 汇总：同一个人格在多个平台上花的是同一笔预算（D020）
-  agentId      String?
-  agent        Agent?      @relation(fields: [agentId], references: [id], onDelete: SetNull)
   credentialId String?
   credential   Credential? @relation(fields: [credentialId], references: [id])
   ownerUserId  String // 按用户隔离用量明细，管理员只看聚合总量

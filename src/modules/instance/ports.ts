@@ -10,8 +10,6 @@
 
 export type InstancePublicRow = {
   id: string;
-  /** 这个账号是哪个 AI 的出口（D020）：记忆/人格看 agentId，不看实例 */
-  agentId: string;
   name: string;
   platform: string;
   accountId: string;
@@ -50,8 +48,6 @@ export type InstanceResidentConfig = InstanceConnectConfig & { ownerUserId: stri
 export type InstanceCreateInput = {
   tenantId: string;
   ownerUserId: string;
-  /** 归属的 Agent（D020）。必填：漏传就等于把这个号变成孤儿 */
-  agentId: string;
   name: string;
   platform: string;
   accountId: string;

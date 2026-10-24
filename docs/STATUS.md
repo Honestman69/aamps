@@ -6,8 +6,8 @@
 > 仓库里没有 `.env`、没有数据库，直接 `pnpm dev` 会失败。
 
 **最后更新**：2026-10-24
-**当前阶段**：**M1 已完成并验收**；P0-1（反向实例自监听）与 **Agent 归属层（D020）** 已完成。
-M2 尚未开始写代码。
+**当前阶段**：**M1 已完成并验收**；P0-1（反向实例自监听）已完成；人格归属已按 **D023** 定稿
+（挂 `BotInstance`，跨社交平台不共享、跨 Provider 必须继承）。M2 尚未开始写代码。
 
 **下一步（默认走这条）**：**M2 最小闭环** —— `AgentConfig`/`ConfigResolver`（按 D020 的五级覆盖：
 租户 → Agent → 实例 → 角色 → 会话）→ `ModelGateway` → `openai-compatible` Provider
@@ -286,30 +286,33 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 - **B 改反向 WS（推荐）**：NapCat 作客户端连我们，token 由我们校验；附带好处是云端部署不用开入站端口
 - C 接受现状：仅 `127.0.0.1` 防护，等上游修复
 
-### ~~第 8 步：Agent 归属层（D020）~~ ✅ 已完成
+### ~~第 8 步：人格归属定稿（D020 → D023 修订）~~ ✅ 已完成
 
-**问题**：记忆与人格原本挂 `BotInstance`。用户会在多个社交平台各有账号，换个号就"失忆重开"，
-而这正是要避免的事。归属主体应该是**用户的 AI（Agent）**，实例只是它的出口。
+**过程**（记录下来，避免以后再走一遍）：
 
-- [x] `Agent` 表：`ownerUserId` / `name` / `status` / 模型路由（`modelMain` / `modelCheap` / `modelFallback` + `credentialId`）/ `activePersonaId`
-- [x] 归属改挂 `agentId`：`Persona`、`MemoryItem`、`Relationship`、`AgentState`；`MemoryItem.instanceId` 降级为**来源渠道**（可空）
-- [x] `Relationship` 唯一键改 `[agentId, platform, peerId]`（原 `userId` 更名 `peerId`，与"平台内用户"语义对齐）
-- [x] `BotInstance.agentId` 必填；`Persona.archivedAt`（重置人格时归档旧版本，不删除）
-- [x] `AgentState` 搬到 Agent（心情是同一个人的）；`silentUntil` / `rateLimitPerMin` 仍留实例（账号级）
-- [x] `BotInstance` 的模型字段降级为**实例级覆盖**（为空则用 Agent 的）
-- [x] 迁移 `20261024115349_add_agent_layer`
-- [x] 实例创建自动挂用户的默认 Agent（M4 有页面后改为显式选择）
-- [x] `GET/POST /api/instances` 返回体带 `agentId`
+1. 先按"跨平台共享"实现了一版：新增 `Agent` 表，人设/记忆/关系/情绪挂 `agentId`，实例自动挂默认 Agent。
+2. 用户澄清边界：**本项目只保证"单个社交平台内"的演化**；换社交平台应重新生成初始人格、从零演化；
+   跨社交平台演化另立项目。但**跨模型平台（Provider）必须继承**人格与记忆。
+3. 按此**回退**：删掉 `Agent` 层，归属改回 `BotInstance`；D020 的归属段作废，新增 **D023** 记录边界。
+
+**最终结构**：
+
+- [x] 人格与记忆挂 `instanceId`：`Persona` / `MemoryItem` / `Relationship` / `AgentState`
+- [x] `BotInstance.activePersonaId`（唯一）+ `Persona.archivedAt`（重置时归档旧版本）
+- [x] `Relationship` 唯一键 `[instanceId, peerId]`（`userId` 正名 `peerId`，语义是"平台内用户"）
+- [x] `BotInstance` 保留模型路由（`credentialId` / `modelMain` / `modelCheap` / `modelFallback`）
+- [x] **人格表里没有任何 provider / credential / model 字段** —— 换 Provider 零迁移（D021/D023）
+- [x] 迁移 `20261024121107_persona_scope_back_to_instance`（撤销 `add_agent_layer` 的结构）
+- [x] 删除 `src/modules/agent/`，实例创建不再需要 Agent
 
 **验收**：
 
-- `pnpm test` **144 个用例全绿**（新增"创建实例自动挂默认 Agent"）
-- `pnpm typecheck` 全绿；`pnpm build` 三产物
-- 真实链路：登录 → 建实例 → 响应带 `agentId` → 列表一致 → 库里 Agent 1 条、实例归属正确
+- `pnpm test` **143 个用例全绿**；`pnpm typecheck` 全绿；`pnpm build` 三产物
+- `pnpm check:local-data` PASSED（152 个已跟踪文件）
 - `scripts/http-smoke.ts` `HTTP SMOKE PASSED`
 
-**为什么现在做**：M2 的 `ConfigResolver` 要按 Agent 层读配置。等 M5 记忆落库后再改归属，
-就要写数据搬迁脚本，而且"记忆归属"搬错了极难发现。
+**以后别再犯**：不要为了"将来可能跨平台共享"先加一层中间表。用户明确说了那是另一个项目的事，
+多一层 join 会长期增加理解成本，而收益为零。
 
 ---
 
@@ -425,7 +428,7 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 - [x] 2026-10-24 **接入层**：`AdapterRegistry` + `adapter-qq` 完整实现（WS 连接/心跳/退避重连/令牌桶/事件转换/发送）
 - [x] 2026-10-24 **实例管理**：QQ 号与 WS 地址存 `BotInstance` 并通过接口增删改启停，`pong` 闭环；101 个单测 + 30 项 HTTP 冒烟
 - [x] 2026-10-24 **接入安全兜底**：endpoint 默认拒绝公网、连接后核验登录账号、NapCat 数据目录提交闸门（`pnpm check:local-data`）；112 个单测
-- [x] 2026-10-24 **Agent 归属层（D020）**：新增 `Agent` 表，人设/记忆/关系/情绪改挂 `agentId`，实例自动挂默认 Agent；替换旧归属三条迁移
+- [x] 2026-10-24 **人格归属定稿（D023）**：先做 Agent 层 → 用户澄清边界 → 当日回退；人格与记忆挂 `BotInstance`，跨社交平台不共享、跨 Provider 零迁移
 
 ---
 
@@ -439,7 +442,7 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 | 4 | 人设是否要支持多套按时段切换 | 影响 Persona 与 Session 的绑定关系 | M4 |
 | 5 | 是否需要群管理能力（欢迎、关键词） | 影响 Adapter 权限与风控 | M6 |
 | **6** | **「引不引用上一条」由谁决定**：模型自己判断，还是表达层按规则 + 人格参数？<br>倾向做法（未定）：机制归代码（私聊永不引用、群聊隔 N 条/超过 T 秒才引用），倾向归人格卡（`quoteTendency: never/rare/normal` → 阈值），模型最多给一个受限提示。<br>反对"全靠模型"的理由：模型输出的是文本、引用需要 message id 与时序（在系统侧）、且不可回归测试。 | 影响出站消息结构、`Persona` 是否要加字段、system prompt 形态 | **M2 接 AI 并落 Persona 字段时**（那是第一次绕不开的时刻）<br>实现落在 M3 表达层 |
-| **7** | **同一个人在不同社交平台的记忆是否合并**：现在 `Relationship` 按 `[agentId, platform, peerId]` 存，`MemoryItem.subjectId` 是平台内 id，同一人在 QQ 和抖音是两条互不相认的记录。<br>要合并必须先定三件事：① 谁判断"是同一人"（用户手动绑定 / 手机号 / 聊天内容自证）② 合并粒度（亲密度取最大？记忆互相可见？）③ 隐私后果——把 A 平台的私事带到 B 平台会当场穿帮。<br>倾向：**先不合并**（D012 已定），但结构已经留门（`platform` 与 `peerId` 分离）。触发条件：M5 记忆真正落库后，出现"它不记得我在抖音说过的话"这类真实抱怨。 | 影响记忆检索、关系计算、隐私边界 | M5 |
+| ~~7~~ | ~~同一个人在不同社交平台的记忆是否合并~~ → **已定：不合并**（D023）。一个社交平台账号一份人格与记忆，换平台重新生成初始人格、从零演化；跨平台继承属另一个项目。 | — | — |
 | **8** | **API Key 挂 User 还是挂 Agent**：现在是 `Credential` 挂 `User`（一个用户的多个 Key 组成池供降级链）。若一个用户要养多个 Agent 且**分开计费/隔离用量**，就得给 `Credential` 加 `agentId`，或改成多对多。 | 影响计费口径与密钥隔离边界 | M4 做 Agent 管理页时 |
 
 ---
@@ -456,5 +459,6 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 | 2026-10-24 | 完成凭据管理：加密写入 + 掩码 + 4 个接口 + 审计；67 个单测、23 项 HTTP 冒烟、零知识直查库全过；追加 D015（凭据物理删除） |
 | 2026-10-24 | 完成接入层与实例管理：`adapter-qq`（WS/心跳/重连/节流/事件转换）、`AdapterRegistry`、实例 CRUD + 连接接口、`pong` 闭环；101 个单测、30 项 HTTP 冒烟；追加 D016（实例配置来源与解锁依赖） |
 | 2026-10-24 | 补接入安全兜底：endpoint 护栏（`REMOTE_ENDPOINT_BLOCKED`）、`get_login_info` 账号核验、`check:local-data` 提交闸门；112 个单测；追加 D017（协议端地址与登录态边界） |
-| 2026-10-24 | 追加 D020/D021/D022（人格双层与 Agent 归属、模型可切换、重置分四档），修订 D007 为五级覆盖；schema 新增 `Agent` 并把 `Persona`/`MemoryItem`/`Relationship`/`AgentState` 归属改为 `agentId`；144 单测 + 真实链路验证 |
+| 2026-10-24 | 追加 D020/D021/D022（人格双层、模型可切换、重置分四档）；D007 曾按五级覆盖修订，同日撤回 |
+| 2026-10-24 | 追加 **D023**：人格与记忆作用域 = 单个社交平台账号；撤回 `Agent` 层（迁移 `persona_scope_back_to_instance`），D020 归属段作废、四层结构与演化闸门保留；143 单测全绿 |
 | 2026-10-24 | 建立分支纪律：M0 收尾与 M1 骨架分两次提交到 `feat/m1-adapter-and-instance`，合并前 typecheck / 112 单测 / build / 31 项冒烟 / 数据闸门全绿，`--no-ff` 合并并打标签 `m1-skeleton` |

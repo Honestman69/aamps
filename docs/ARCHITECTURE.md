@@ -307,10 +307,13 @@ prompt 要求模型先输出一段结构化思考：
 
 | 层 | 载体 | 谁能改 | 重启后 |
 |---|---|---|---|
-| 不可演化 | 独立红线字段/表 | 谁都改不了（含 superadmin） | 不变 |
-| 种子 | `Persona`（version + archivedAt） | owner 编辑（生成新版本） | 不变 |
-| **演化** | `SelfState`（traits + 自述 + 看法） | **只有反思任务**，过代码闸门 | 从库里恢复 |
-| 瞬态 | `AgentState`（mood / energy） | 每轮对话 + 衰减 | 从基线重新开始 |
+| 不可演化 | 独立红线字段/表（系统级，不随账号） | 谁都改不了（含 superadmin） | 不变 |
+| 种子 | `Persona`（挂在 `BotInstance`，version + archivedAt） | owner 编辑（生成新版本） | 不变 |
+| **演化** | `SelfState`（挂在 `BotInstance`，traits + 自述） | **只有反思任务**，过代码闸门 | 从库里恢复 |
+| 瞬态 | `AgentState`（mood / energy，挂实例） | 每轮对话 + 衰减 | 从基线重新开始 |
+
+作用域提醒（D023）：这一整套是**每个社交平台账号一份**。同一用户换平台 = 重新生成种子、从零演化；
+换模型 Provider **不触发任何人格/记忆变化**——`Persona` / `SelfState` / `MemoryItem` 里没有 provider 字段。
 
 演化循环（默认每日一次，重要事件可加一次即时反思，用 `modelCheap` 记账 `purpose=reflection`）：
 
@@ -403,20 +406,19 @@ prompt 组装顺序固定：
 ```
 Tenant
   ├─ User (1..n)              superadmin / user
-  │    ├─ Credential (1..n)   用本人的 DEK 加密，跨用户不可见
-  │    └─ Agent (1..n)        ★ 用户的 AI：人格与记忆的归属主体（D020）
-  │         ├─ Persona (1..n)        种子人设（只读、多版本、可归档）
-  │         ├─ SelfState (1)         演化层：traits + 自述（只有反思能写）
-  │         ├─ AgentState (1)        情绪/精力（瞬态）
-  │         ├─ Relationship (n)      按 [agentId, platform, peerId] 唯一
-  │         ├─ MemoryItem (n)        记忆；instanceId 仅作来源渠道（可空）
-  │         └─ BotInstance (1..n)    ★ 平台账号：QQ 号 / 抖音号 / B站 UID
-  │              └─ Session (1..n)        私聊/群聊会话
-  │                   └─ Message (n)
+  │    ├─ Credential (1..n)   用本人的 DEK 加密，跨用户不可见（Provider 的 Key 池）
+  │    └─ BotInstance (1..n)  ★ 一个社交平台账号 = 一段人格（D023）
+  │         ├─ Persona (1..n)      种子人设（只读、多版本、可归档）
+  │         ├─ SelfState (1)       演化层：traits + 自述（只有反思能写）
+  │         ├─ AgentState (1)      情绪/精力（瞬态）
+  │         ├─ Relationship (n)    按 [instanceId, peerId] 唯一
+  │         ├─ MemoryItem (n)      记忆
+  │         └─ Session (1..n)      私聊/群聊会话
+  │              └─ Message (n)
   └─ AuditLog (n)             只增不改，哈希链
 
-归属判定：**"这是谁的经历"看 Agent，"从哪个口进来的"看 Instance。**
-换平台号不换人：同一个人格挂多个 BotInstance，记忆与关系不随之重置。
+归属判定：**人格与记忆挂 `BotInstance`**；Provider 只是执行器，不落在人格表的任何字段里。
+QQ 号与抖音号是**两份独立人格**，各自演化、互不可见（跨平台合并属另一个项目）。
 ```
 
 ---
