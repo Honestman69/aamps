@@ -207,6 +207,9 @@ model Persona {
   boundariesJson   String @default("[]")
   variablesJson    String @default("{}") // 自定义变量
   behaviorJson     String @default("{}") // 见下方 BehaviorConfig
+  /// 故障兜底话术（D026）：按 [槽位][渠道] 存，null = 不说。
+  /// **必须是预存文本**，故障时不能调模型生成；`{}` 表示用代码里的默认值。
+  fallbacksJson    String @default("{}")
 
   version           Int       @default(1)
   status            String    @default("draft") // draft | published | archived（重置人格时归档旧版本，不删除）
