@@ -53,7 +53,7 @@
   原因：Windows 上 git 的 curl 后端（schannel）**不读 `https_proxy` 环境变量**，走的是系统代理设置，
   而系统代理那一路不通。解法是显式指定：
   ```bash
-  git -c http.proxy=http://127.0.0.1:6457 push origin main
+  git -c http.proxy="$https_proxy" push origin main   # 端口每次会变，直接读环境变量
   ```
   （端口换成实际的代理端口；要长期生效就 `git config http.proxy <url>`，但换网络后记得改回来。）
   **判断口径**：`curl` 通 + `git` 报 CONNECT/502 → 先怀疑"git 没用上同一个代理"，别去查凭据。
