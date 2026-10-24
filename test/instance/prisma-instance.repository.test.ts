@@ -65,6 +65,9 @@ const INPUT: InstanceCreateInput = {
   endpoint: 'ws://127.0.0.1:3002',
   accessTokenEnc: 'v1:xxx',
   enabled: true,
+  dailyBudgetCents: 500,
+  monthlyBudgetCents: 8000,
+  budgetPolicy: 'block',
 };
 
 describe('PrismaInstanceRepository.createForUser', () => {

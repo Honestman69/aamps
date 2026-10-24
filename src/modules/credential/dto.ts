@@ -40,8 +40,6 @@ const authStyleSchema = z.enum(['bearer', 'x-api-key', 'query']);
 
 const baseUrlSchema = z.string().trim().url('必须是合法 URL').max(300);
 
-const budgetSchema = z.number().int().min(0).max(1_000_000_00);
-
 export const createCredentialSchema = z
   .object({
     provider: providerSchema,
@@ -52,8 +50,6 @@ export const createCredentialSchema = z
     apiVersion: z.string().trim().max(32).nullable().optional(),
     defaultModel: shortTextSchema.nullable().optional(),
     priority: z.number().int().min(0).max(10_000).optional(),
-    dailyBudgetCents: budgetSchema.optional(),
-    monthlyBudgetCents: budgetSchema.optional(),
     enabled: z.boolean().optional(),
     /** 明文。加密后只留 `apiKeyEnc` 与 `keyMasked` */
     apiKey: apiKeySchema,
@@ -70,8 +66,6 @@ export const updateCredentialSchema = z
     apiVersion: z.string().trim().max(32).nullable().optional(),
     defaultModel: shortTextSchema.nullable().optional(),
     priority: z.number().int().min(0).max(10_000).optional(),
-    dailyBudgetCents: budgetSchema.optional(),
-    monthlyBudgetCents: budgetSchema.optional(),
     enabled: z.boolean().optional(),
     /** 提供即视为轮换：重新加密并更新掩码 */
     apiKey: apiKeySchema.optional(),
@@ -98,8 +92,6 @@ export type CredentialPublicDTO = {
   apiVersion: string | null;
   keyMasked: string;
   defaultModel: string | null;
-  dailyBudgetCents: number;
-  monthlyBudgetCents: number;
   priority: number;
   enabled: boolean;
   disabledBy: string | null;
@@ -121,8 +113,6 @@ export function toPublicDTO(row: CredentialPublicRow): CredentialPublicDTO {
     apiVersion: row.apiVersion,
     keyMasked: row.keyMasked,
     defaultModel: row.defaultModel,
-    dailyBudgetCents: row.dailyBudgetCents,
-    monthlyBudgetCents: row.monthlyBudgetCents,
     priority: row.priority,
     enabled: row.enabled,
     disabledBy: row.disabledBy,

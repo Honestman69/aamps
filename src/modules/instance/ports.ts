@@ -20,6 +20,10 @@ export type InstancePublicRow = {
   /** 是否配置了 token（布尔，不是密文） */
   hasAccessToken: boolean;
   enabled: boolean;
+  /** 人格预算（分）：0 = 不限；超限策略见 budgetPolicy（D024） */
+  dailyBudgetCents: number;
+  monthlyBudgetCents: number;
+  budgetPolicy: string;
   status: string;
   createdAt: Date;
   updatedAt: Date;
@@ -62,6 +66,9 @@ export type InstanceCreateInput = {
   accessTokenEnc?: string | null;
   accessTokenDigest?: string | null;
   enabled?: boolean;
+  dailyBudgetCents?: number;
+  monthlyBudgetCents?: number;
+  budgetPolicy?: string;
 };
 
 export type InstanceUpdatePatch = {
@@ -74,6 +81,9 @@ export type InstanceUpdatePatch = {
   accessTokenEnc?: string | null;
   accessTokenDigest?: string | null;
   enabled?: boolean;
+  dailyBudgetCents?: number;
+  monthlyBudgetCents?: number;
+  budgetPolicy?: string;
 };
 
 export interface IInstanceRepository {

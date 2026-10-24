@@ -7,7 +7,7 @@
 
 **最后更新**：2026-10-24
 **当前阶段**：**M1 已完成并验收**；P0-1（反向实例自监听）已完成；人格归属已按 **D023** 定稿
-（挂 `BotInstance`，跨社交平台不共享、跨 Provider 必须继承）。M2 尚未开始写代码。
+（挂 `BotInstance`，跨社交平台不共享、跨 Provider 必须继承）；人格预算已落到实例（D024）。M2 尚未开始写代码。
 
 **下一步（默认走这条）**：**M2 最小闭环** —— `AgentConfig`/`ConfigResolver`（按 D020 的五级覆盖：
 租户 → Agent → 实例 → 角色 → 会话）→ `ModelGateway` → `openai-compatible` Provider
@@ -316,6 +316,20 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 
 ---
 
+### ~~第 9 步：人格预算（D024）~~ ✅ 已完成
+
+- [x] `BotInstance.dailyBudgetCents` / `monthlyBudgetCents`（分，`0` = 不限）+ `budgetPolicy`（`downgrade` / `block`）
+- [x] **`Credential` 上的预算字段删除**（避免"预算挂哪儿"有两个真相）
+- [x] 实例接口 `POST/PATCH` 接受预算字段；`GET` 返回；改预算不触发重连
+- [x] 迁移 `20261024122824_budget_moves_to_instance`（含 `instance_budget` 两次结构变更）
+- [x] 文档口径同步：`MODEL-ACCESS.md` 8.1（预算归属、单价来源、聚合维度）
+
+**验收**：`pnpm test` **144 个用例全绿**（新增"预算挂人格、换 Key 不重置"）；`typecheck` / `build` / 数据闸门均通过。
+
+**为什么挂人格不挂 Key**：换 Key（过期/换渠道/换厂商）在自用场景很常见，挂 Key 等于换一次刷一次额度，预算形同虚设。
+
+---
+
 ---
 
 ## 任务看板
@@ -429,6 +443,7 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 - [x] 2026-10-24 **实例管理**：QQ 号与 WS 地址存 `BotInstance` 并通过接口增删改启停，`pong` 闭环；101 个单测 + 30 项 HTTP 冒烟
 - [x] 2026-10-24 **接入安全兜底**：endpoint 默认拒绝公网、连接后核验登录账号、NapCat 数据目录提交闸门（`pnpm check:local-data`）；112 个单测
 - [x] 2026-10-24 **人格归属定稿（D023）**：先做 Agent 层 → 用户澄清边界 → 当日回退；人格与记忆挂 `BotInstance`，跨社交平台不共享、跨 Provider 零迁移
+- [x] 2026-10-24 **人格预算（D024）**：预算与超限策略挂 `BotInstance`，`Credential` 不再有预算字段；实例接口可读写
 
 ---
 
@@ -460,5 +475,6 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 | 2026-10-24 | 完成接入层与实例管理：`adapter-qq`（WS/心跳/重连/节流/事件转换）、`AdapterRegistry`、实例 CRUD + 连接接口、`pong` 闭环；101 个单测、30 项 HTTP 冒烟；追加 D016（实例配置来源与解锁依赖） |
 | 2026-10-24 | 补接入安全兜底：endpoint 护栏（`REMOTE_ENDPOINT_BLOCKED`）、`get_login_info` 账号核验、`check:local-data` 提交闸门；112 个单测；追加 D017（协议端地址与登录态边界） |
 | 2026-10-24 | 追加 D020/D021/D022（人格双层、模型可切换、重置分四档）；D007 曾按五级覆盖修订，同日撤回 |
+| 2026-10-24 | 追加 **D024**：预算挂人格（`BotInstance`），超限 `downgrade`/`block`；删除 `Credential` 上的预算字段；迁移 `budget_moves_to_instance`；144 单测全绿 |
 | 2026-10-24 | 追加 **D023**：人格与记忆作用域 = 单个社交平台账号；撤回 `Agent` 层（迁移 `persona_scope_back_to_instance`），D020 归属段作废、四层结构与演化闸门保留；143 单测全绿 |
 | 2026-10-24 | 建立分支纪律：M0 收尾与 M1 骨架分两次提交到 `feat/m1-adapter-and-instance`，合并前 typecheck / 112 单测 / build / 31 项冒烟 / 数据闸门全绿，`--no-ff` 合并并打标签 `m1-skeleton` |

@@ -81,8 +81,6 @@ export class CredentialService {
       keyMasked: maskApiKey(input.apiKey),
       defaultModel: input.defaultModel ?? null,
       priority: input.priority ?? 100,
-      dailyBudgetCents: input.dailyBudgetCents ?? 0,
-      monthlyBudgetCents: input.monthlyBudgetCents ?? 0,
       enabled: input.enabled ?? true,
     });
 
@@ -131,8 +129,6 @@ export class CredentialService {
     if (input.apiVersion !== undefined) patch.apiVersion = input.apiVersion;
     if (input.defaultModel !== undefined) patch.defaultModel = input.defaultModel;
     if (input.priority !== undefined) patch.priority = input.priority;
-    if (input.dailyBudgetCents !== undefined) patch.dailyBudgetCents = input.dailyBudgetCents;
-    if (input.monthlyBudgetCents !== undefined) patch.monthlyBudgetCents = input.monthlyBudgetCents;
     if (input.enabled !== undefined) patch.enabled = input.enabled;
 
     // 只在本函数的栈里存在，加密后即丢弃；不做 `as string` 之类的偷懒断言

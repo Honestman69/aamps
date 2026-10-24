@@ -25,8 +25,6 @@ const ROW = {
   apiVersion: null,
   keyMasked: 'sk-****cdef',
   defaultModel: null,
-  dailyBudgetCents: 0,
-  monthlyBudgetCents: 0,
   priority: 100,
   enabled: true,
   disabledBy: null,

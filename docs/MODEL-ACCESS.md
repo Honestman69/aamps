@@ -24,7 +24,8 @@
 ```
 Provider      预设的厂商模板（协议 + 默认地址 + 鉴权方式 + 推荐模型）
    ↓
-Credential    一条具体的 Key（加密存储、可多条同 Provider、带预算与优先级）
+Credential    一条具体的 Key（加密存储、可多条同 Provider、带优先级与健康状态）
+              // 预算**不在这里**：预算挂在人格（BotInstance）上，见 D024
    ↓
 ModelRoute    某个 QQ 实例用哪条 Credential 的哪个模型（主 / 备 / 轻量）
 ```
@@ -105,7 +106,7 @@ ModelRoute    某个 QQ 实例用哪条 Credential 的哪个模型（主 / 备 /
 1. 选 Provider      → 卡片墙，选中后自动填 baseUrl / authStyle
 2. 填 Key 与备注     → 来源标注 field 在这里
 3. 拉取可用模型      → 调 /models 拿到列表，用户勾选要用的
-4. 设默认模型与预算   → 日/月预算，超额动作
+4. 设默认模型         → 主模型 / 轻量模型 / 降级模型（预算在实例上单独设，D024）
 5. 测试连接          → 必须通过才能保存并绑定实例
 ```
 
@@ -140,7 +141,8 @@ const reply = await gateway.chat({
 Gateway 内部 8 步：
 
 1. **取路由**：`ModelRoute(instanceId, purpose)` → 目标 credential + model
-2. **预算检查**：读当日/当月用量，超限则按策略 `warn | throttle | stop`
+2. **预算检查**：按 `instanceId` 读当日/当月用量（人格级预算，D024），超限按 `budgetPolicy`：
+   `downgrade`（切到 modelCheap 继续）/ `block`（不回复 + 通知 owner）
 3. **取密钥**：解密 `apiKeyEnc`（解密结果只在内存存活，绝不进日志）
 4. **选适配器**：按 `provider.adaptor` 拿到 `openai-compatible | anthropic | gemini`
 5. **组装请求**：鉴权头、baseUrl、超时、stream 参数
@@ -170,11 +172,25 @@ Gateway 内部 8 步：
 ## 8. 成本控制
 
 - 每次调用即记账，`costCents = tokenIn × 单价In + tokenOut × 单价Out`，单价从 `catalogJson` 取，没填就记 0（只统计 token 不报错）
-- 预算两级：日、月。调用**前**按估算预扣，调用**后**按实际修正，避免并发超支
-- 超额动作三选一：`warn`（只告警）/ `throttle`（切到 modelCheap）/ `stop`（停服并告警）
+- 预算两级：日、月，**挂在 `BotInstance`（人格）上**，不挂 Key（D024）。调用**前**按估算预扣，调用**后**按实际修正
+- 超额动作二选一：`downgrade`（切到 `modelCheap` 继续聊）/ `block`（不回复 + 通知 owner）；80% 时无论哪种策略都先告警
 - 到达 80% 预算主动推一条通知；静默时段只发站内不推外部
 
 自用场景下这套东西的真实价值不是省钱，是**在深夜被扣爆之前告诉你**。
+
+### 8.1 归属与口径（D024）
+
+| 问题 | 答案 |
+|---|---|
+| 预算挂谁 | `BotInstance`（= 一个社交账号 = 一份人格）。换 Key 不刷新预算，换模型也不刷新 |
+| 一次调用记什么 | `ModelUsage` 一行：`instanceId` / `credentialId` / `provider` / `model` / `purpose` / token / `costCents` |
+| 单价从哪来 | **当次使用的 credential 的 `catalogJson`**；没填回落 Provider 预设价，并记一条 warn |
+| 按人格看花了多少 | 按 `instanceId` 聚合 |
+| 按厂商看花了多少 | 按 `provider` + `model` 聚合 |
+| 换 Provider 前后对比 | `ModelUsage` 时间序列 + 审计里的实例变更 |
+
+为什么预算不挂 Key：挂 Key 的话，用户换一把 Key 额度就清零，等于没有预算；
+而且"这个人格每月能花多少"本来就是人格的属性，不是凭据的属性。
 
 ---
 
@@ -201,7 +217,7 @@ Gateway 内部 8 步：
 | GET | `/api/providers` | 预设列表（含字段定义，前端动态渲染表单） |
 | GET | `/api/credentials` | 列表（含今日/本月用量聚合） |
 | POST | `/api/credentials` | 新建（需带测试结果） |
-| PATCH | `/api/credentials/:id` | 改备注、预算、优先级、启停 |
+| PATCH | `/api/credentials/:id` | 改备注、优先级、启停（预算不在这里，见 D024） |
 | POST | `/api/credentials/:id/test` | 连通性测试（发一条 1 token 的最小请求） |
 | POST | `/api/credentials/:id/probe` | 拉取模型列表写入 catalog |
 | POST | `/api/credentials/:id/rotate` | 轮换 Key（旧 Key 保留至确认） |

@@ -111,6 +111,9 @@ class FakeInstanceRepository implements IInstanceRepository {
       endpoint: input.endpoint ?? null,
       hasAccessToken: Boolean(input.accessTokenEnc),
       enabled: input.enabled ?? true,
+      dailyBudgetCents: input.dailyBudgetCents ?? 0,
+      monthlyBudgetCents: input.monthlyBudgetCents ?? 0,
+      budgetPolicy: input.budgetPolicy ?? 'downgrade',
       status: 'offline',
       createdAt: now,
       updatedAt: now,
@@ -282,6 +285,32 @@ describe('InstanceService 配置与隔离', () => {
     expect(dto).not.toHaveProperty('accessTokenEnc');
     expect(dto).not.toHaveProperty('ownerUserId');
     expect(dto.accountId).toBe('10001');
+  });
+
+  it('预算挂在人格（实例）上，换 Key 不会重置（D024）', async () => {
+    const { repo, service } = setup();
+
+    const dto = await service.create(actor(ALICE), {
+      name: '限额号',
+      accountId: '10003',
+      adapterMode: 'client',
+      dailyBudgetCents: 500,
+      monthlyBudgetCents: 8000,
+      budgetPolicy: 'block',
+    });
+
+    expect(dto.dailyBudgetCents).toBe(500);
+    expect(dto.monthlyBudgetCents).toBe(8000);
+    expect(dto.budgetPolicy).toBe('block');
+    // 落库的是人格（实例）行，不是 Key 行 —— 换 credentialId 时这些值不受影响
+    expect(repo.created[0]?.dailyBudgetCents).toBe(500);
+    expect(repo.created[0]?.monthlyBudgetCents).toBe(8000);
+
+    const updated = await service.update(actor(ALICE), dto.id, { dailyBudgetCents: 0 });
+    expect(updated.dailyBudgetCents).toBe(0);
+    // 只改日预算，月预算与策略保持不动
+    expect(updated.monthlyBudgetCents).toBe(8000);
+    expect(updated.budgetPolicy).toBe('block');
   });
 
   it('does not require an unlocked vault when no token is configured', async () => {
