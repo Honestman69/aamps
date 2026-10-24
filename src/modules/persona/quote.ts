@@ -108,6 +108,15 @@ export type QuoteInput = {
    * 传整个窗口反而会让调用方纠结"窗口多大"，而窗口大小不该影响这个判断。
    */
   after: readonly QuoteMessage[];
+  /**
+   * `after` 的**未裁剪**统计（可选）。
+   *
+   * 为什么需要它：窗口有字符/条数预算，群里刷了 200 条时 `after` 只会留下几十条。
+   * 若按裁剪后的 `after.length` 判断"隔了几条 / 几个人在说"，结论会完全错 ——
+   * 明明有多人在说，却因为窗口裁得只剩一个人而判成"单人对话、不必引用"。
+   * 传了它就以它为准；不传则按 `after` 现算（单测与简单场景够用）。
+   */
+  afterTotals?: { count: number; distinctSenders: number };
   /** 对方这条消息是否引用了机器人（direct reply） */
   incomingQuotesBot: boolean;
   /** 机器人自己的 userId（平台内标识），用于识别自引 */
@@ -132,7 +141,11 @@ export function decideQuote(input: QuoteInput): QuoteDecision {
     return { quote: true, reason: 'direct_reply', probability: null };
   }
 
-  const isLatest = after.length === 0;
+  const totals = input.afterTotals ?? {
+    count: after.length,
+    distinctSenders: new Set(after.map((message) => message.senderId)).size,
+  };
+  const isLatest = totals.count === 0;
 
   if (channel === 'private') {
     // 私聊里目标就是最后一条：引用是纯冗余，一眼就是客服机器人
@@ -141,7 +154,7 @@ export function decideQuote(input: QuoteInput): QuoteDecision {
     }
 
     // 对方连发（2 条以上在 target 之后 = 总共 3 条以上），回最早那条必须说明在回哪句
-    if (after.length + 1 >= PRIVATE_BURST_THRESHOLD) {
+    if (totals.count + 1 >= PRIVATE_BURST_THRESHOLD) {
       return { quote: true, reason: 'multi_message', probability: null };
     }
 
@@ -156,8 +169,7 @@ export function decideQuote(input: QuoteInput): QuoteDecision {
     return { quote: false, reason: 'redundant', probability: null };
   }
 
-  const speakers = new Set(after.map((message) => message.senderId));
-  if (speakers.size >= 2) {
+  if (totals.distinctSenders >= 2) {
     // 有多人在说，不引用根本不知道在回谁 —— 这是引用最主要的用途
     return { quote: true, reason: 'multi_speaker', probability: null };
   }
@@ -167,7 +179,7 @@ export function decideQuote(input: QuoteInput): QuoteDecision {
     return { quote: true, reason: 'stale', probability: null };
   }
 
-  if (after.length > MAX_GAP_WITHOUT_QUOTE) {
+  if (totals.count > MAX_GAP_WITHOUT_QUOTE) {
     // 同一个人连着刷了太多条，回第一条必须指回
     return { quote: true, reason: 'stale', probability: null };
   }
