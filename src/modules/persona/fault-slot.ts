@@ -12,11 +12,17 @@
  * 注意：**话术是预存文本**，这里只做选择与频率判定，绝不调模型（D026）。
  */
 
-import type { UnavailableReason } from '../model/gateway/classify';
+import type { GatewayFailureReason } from '../model/gateway/gateway.service';
 import type { FallbackSlot } from './fallbacks';
 
-/** Gateway 之外还会遇到的两种"说不出话"的原因 */
-export type SpeakFailureReason = UnavailableReason | 'no_candidate' | 'budget_exhausted';
+/**
+ * 直接复用网关的原因枚举，**不在这里另立一份**。
+ *
+ * 两份定义一开始一样，加一个新原因时必然只改一处，然后某个分支静默落到错误槽位。
+ * 复用之后，`SLOT_BY_REASON` 是 `Record<SpeakFailureReason, ...>`，
+ * 网关新增原因时这里会**编译失败**，逼着人来决定它该说哪句话。
+ */
+export type SpeakFailureReason = GatewayFailureReason;
 
 /**
  * 原因 → 槽位。

@@ -35,11 +35,26 @@ function candidate(overrides: Partial<GatewayCandidate> & { credentialId: string
 class FakeRepo implements IGatewayRepository {
   usages: UsageRecordInput[] = [];
   cooled: Array<{ credentialId: string; reason: string; until: Date }> = [];
+  /** 由用例设定：预算判定会读它 */
+  usage = { todayCents: 0, monthCents: 0, unpricedCalls: 0 };
+  usageQueries = 0;
+  candidateQueries = 0;
+  lastWindow: { dayStart: Date; monthStart: Date } | null = null;
 
   constructor(private candidates: GatewayCandidate[]) {}
 
   async listCandidates(): Promise<GatewayCandidate[]> {
+    this.candidateQueries += 1;
     return this.candidates;
+  }
+
+  async usageTotals(
+    _instanceId: string,
+    window: { dayStart: Date; monthStart: Date },
+  ): Promise<{ todayCents: number; monthCents: number; unpricedCalls: number }> {
+    this.usageQueries += 1;
+    this.lastWindow = window;
+    return this.usage;
   }
 
   async markCooldown(credentialId: string, reason: string, until: Date): Promise<void> {
@@ -61,6 +76,7 @@ function makeService(options: {
   unlocked?: boolean;
 }) {
   const repo = new FakeRepo(options.candidates);
+  const warnings: string[] = [];
   const keyStore = new RuntimeKeyStore();
   if (options.unlocked !== false) {
     keyStore.set(SESSION, 'user-1', DEK);
@@ -72,8 +88,9 @@ function makeService(options: {
     keyStore,
     clock: () => new Date('2026-10-24T00:00:00Z'),
     sleep: async () => undefined,
+    warn: (message: string) => warnings.push(message),
   });
-  return { repo, service };
+  return { repo, service, warnings };
 }
 
 function okResponse(content = '你好', prompt = 1000, completion = 500): Response {
@@ -323,5 +340,219 @@ describe('GatewayService', () => {
 
     expect(seenAuth).toBe('Bearer sk-test-key');
     expect(decryptWithDek(candidate({ credentialId: 'x' }).apiKeyEnc, DEK)).toBe('sk-test-key');
+  });
+});
+
+describe('预算拦截（D024）', () => {
+  const ask = (service: GatewayService, purpose: 'chat' | 'think' = 'chat') =>
+    service.chat({
+      instanceId: 'inst-1',
+      ownerUserId: 'user-1',
+      sessionId: SESSION,
+      purpose,
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+
+  it('没设预算时不去查用量（新装实例不该为它多打两次库）', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse());
+    const { service, repo } = makeService({ candidates: [candidate({ credentialId: 'c1' })] });
+
+    await ask(service);
+
+    expect(repo.usageQueries).toBe(0);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('超预算 + policy=block：直接拒绝，且**一次网络都不出、也不查候选 Key**', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse());
+    const { service, repo } = makeService({
+      candidates: [candidate({ credentialId: 'c1' })],
+      config: { dailyBudgetCents: 100, budgetPolicy: 'block' },
+    });
+    repo.usage = { todayCents: 150, monthCents: 150, unpricedCalls: 0 };
+
+    await expect(ask(service)).rejects.toMatchObject({
+      name: 'GatewayFailedError',
+      reason: 'budget_exhausted',
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(repo.candidateQueries).toBe(0);
+  });
+
+  it('block 时带上用量细节，方便 owner 判断是"超了多少"', async () => {
+    const { service, repo } = makeService({
+      candidates: [candidate({ credentialId: 'c1' })],
+      config: { dailyBudgetCents: 100, budgetPolicy: 'block' },
+    });
+    repo.usage = { todayCents: 150, monthCents: 4200, unpricedCalls: 0 };
+
+    const err = (await ask(service).catch((e: unknown) => e)) as GatewayFailedError;
+    expect(err).toBeInstanceOf(GatewayFailedError);
+    expect(err.budget).toEqual({
+      over: 'daily',
+      because: 'policy',
+      todayCents: 150,
+      monthCents: 4200,
+      dailyBudgetCents: 100,
+      monthlyBudgetCents: 0,
+    });
+  });
+
+  it('超预算 + policy=downgrade：改用 cheap 模型，并在结果里标明', async () => {
+    let seenModel = '';
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input: string | URL | Request, init?: RequestInit) => {
+      seenModel = JSON.parse(String(init?.body)).model;
+      return new Response(
+        JSON.stringify({
+          model: 'deepseek-lite',
+          choices: [{ message: { content: '在' } }],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        }),
+        { status: 200 },
+      );
+    });
+
+    const { service, repo } = makeService({
+      candidates: [candidate({ credentialId: 'c1' })],
+      config: {
+        modelMain: 'deepseek-chat',
+        modelCheap: 'deepseek-lite',
+        dailyBudgetCents: 100,
+      },
+    });
+    repo.usage = { todayCents: 120, monthCents: 120, unpricedCalls: 0 };
+
+    const result = await ask(service);
+
+    expect(seenModel).toBe('deepseek-lite');
+    expect(result.model).toBe('deepseek-lite');
+    expect(result.budget).toEqual({ downgraded: true, over: 'daily' });
+  });
+
+  it('降级后仍然记账，且记的是真正用掉的模型', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          model: 'deepseek-lite',
+          choices: [{ message: { content: '在' } }],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const { service, repo } = makeService({
+      candidates: [candidate({ credentialId: 'c1' })],
+      config: { modelCheap: 'deepseek-lite', dailyBudgetCents: 100 },
+    });
+    repo.usage = { todayCents: 120, monthCents: 120, unpricedCalls: 0 };
+
+    await ask(service);
+
+    expect(repo.usages).toHaveLength(1);
+    expect(repo.usages[0]?.model).toBe('deepseek-lite');
+  });
+
+  it('cheap 与 main 相同：降级是假动作，必须拒绝而不是继续花钱', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse());
+    const { service, repo } = makeService({
+      candidates: [candidate({ credentialId: 'c1' })],
+      config: { modelMain: 'deepseek-chat', modelCheap: 'deepseek-chat', dailyBudgetCents: 100 },
+    });
+    repo.usage = { todayCents: 120, monthCents: 120, unpricedCalls: 0 };
+
+    const err = (await ask(service).catch((e: unknown) => e)) as GatewayFailedError;
+    expect(err).toBeInstanceOf(GatewayFailedError);
+    expect(err.budget?.because).toBe('cannotDowngrade');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('think 走 cheap 时，超预算只能拒绝（没有更便宜的可用）', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse());
+    const { service, repo } = makeService({
+      candidates: [candidate({ credentialId: 'c1' })],
+      config: { modelCheap: 'deepseek-lite', dailyBudgetCents: 100 },
+    });
+    repo.usage = { todayCents: 120, monthCents: 120, unpricedCalls: 0 };
+
+    await expect(ask(service, 'think')).rejects.toMatchObject({ reason: 'budget_exhausted' });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('未解锁优先于超预算：不该把"没登录"报成"花超了"', async () => {
+    const { service, repo } = makeService({
+      candidates: [candidate({ credentialId: 'c1' })],
+      config: { dailyBudgetCents: 100, budgetPolicy: 'block' },
+      unlocked: false,
+    });
+    repo.usage = { todayCents: 999, monthCents: 999, unpricedCalls: 0 };
+
+    // 两者同时成立时报 KeyLockedError —— 让 owner 去重新登录，而不是去改预算
+    await expect(ask(service)).rejects.toBeInstanceOf(KeyLockedError);
+  });
+
+  it('没配目录价时打一条告警（否则预算永远不触发，还没人知道）', async () => {
+    // 厂商回报的模型名不在目录里 → 计价落空，记为 0 分
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          model: 'deepseek-chat-preview',
+          choices: [{ message: { content: '在' } }],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        }),
+        { status: 200 },
+      ),
+    );
+    const { service, warnings } = makeService({ candidates: [candidate({ credentialId: 'c1' })] });
+
+    await ask(service);
+
+    expect(warnings.some((w) => w.includes('没有模型') && w.includes('预算不会因此触发'))).toBe(true);
+  });
+
+  it('有未定价调用时，预算判定会说明"用量偏低"', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse());
+    const { service, repo, warnings } = makeService({
+      candidates: [candidate({ credentialId: 'c1' })],
+      config: { dailyBudgetCents: 100 },
+    });
+    repo.usage = { todayCents: 10, monthCents: 10, unpricedCalls: 7 };
+
+    await ask(service);
+
+    expect(warnings.some((w) => w.includes('次调用没有目录价') && w.includes('预算用量偏低'))).toBe(true);
+  });
+
+  it('同一条告警一小时内不重复（否则每次调用都刷一遍日志）', async () => {
+    // 必须每次新建 Response：body 只能被读一次，复用同一个对象第二次会解析失败
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => okResponse());
+    const { service, repo, warnings } = makeService({
+      candidates: [candidate({ credentialId: 'c1' })],
+      config: { dailyBudgetCents: 100 },
+    });
+    repo.usage = { todayCents: 10, monthCents: 10, unpricedCalls: 7 };
+
+    await ask(service);
+    await ask(service);
+    await ask(service);
+
+    expect(warnings.filter((w) => w.includes('预算用量偏低'))).toHaveLength(1);
+  });
+
+  it('统计窗口按本地零点与本月一号，不是 UTC', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse());
+    const { service, repo } = makeService({
+      candidates: [candidate({ credentialId: 'c1' })],
+      config: { dailyBudgetCents: 100 },
+    });
+
+    await ask(service);
+
+    const window = repo.lastWindow;
+    expect(window).not.toBeNull();
+    expect(window?.dayStart.getHours()).toBe(0);
+    expect(window?.dayStart.getMinutes()).toBe(0);
+    expect(window?.monthStart.getDate()).toBe(1);
+    expect(window?.monthStart.getHours()).toBe(0);
   });
 });

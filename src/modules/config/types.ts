@@ -28,7 +28,20 @@ export type AgentConfig = {
   nightQuiet: string;
   /** 当前生效的人设；会话层可以临时换 */
   personaId: string | null;
+  /** 人格预算（D024）：`0` = 不限。挂在实例上，人设/会话不得覆盖 */
+  dailyBudgetCents: number;
+  monthlyBudgetCents: number;
+  /** 超限策略：降级到 modelCheap 继续，还是直接不出声（D024） */
+  budgetPolicy: BudgetPolicy;
 };
+
+/** 预算超限后的动作。与 Prisma 里的字符串枚举保持一致 */
+export const BUDGET_POLICIES = ['downgrade', 'block'] as const;
+export type BudgetPolicy = (typeof BUDGET_POLICIES)[number];
+
+export function isBudgetPolicy(value: unknown): value is BudgetPolicy {
+  return typeof value === 'string' && (BUDGET_POLICIES as readonly string[]).includes(value);
+}
 
 /** 会话级的运行时开关，不属于"配置"，但 Pipeline 每次都要读 */
 export type SessionFlags = {
@@ -58,6 +71,10 @@ export const DEFAULT_AGENT_CONFIG: AgentConfig = {
   dailyMsgCap: 800,
   nightQuiet: '00:30-07:30',
   personaId: null,
+  // 默认不限额：新装的实例不该因为一条默认预算就哑掉
+  dailyBudgetCents: 0,
+  monthlyBudgetCents: 0,
+  budgetPolicy: 'downgrade',
 };
 
 /** 温度合法区间：低于 0 没意义，高于 1.5 输出开始胡言乱语 */
@@ -75,6 +92,9 @@ export type ConfigBundle = {
     dailyMsgCap: number;
     nightQuiet: string;
     activePersonaId: string | null;
+    dailyBudgetCents: number;
+    monthlyBudgetCents: number;
+    budgetPolicy: string;
   };
   /** 当前生效的人设（若 activePersonaId 指向的那条） */
   persona: {
