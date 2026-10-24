@@ -4,7 +4,8 @@
 > 新会话接手时，直接从「下一步」开始，不要重新规划。
 
 **最后更新**：2026-10-24
-**当前阶段**：M1 骨架完成（接入层 + 实例管理 + 接入安全兜底），差 NapCat 真机联调；联调通过即进 M2 最小闭环
+**当前阶段**：**M1 已完成并验收**（接入层 + 实例管理 + 接入安全兜底 + 反向 WS 鉴权 + 真机 pong）。
+下一步是 M2 最小闭环（接模型、私聊能对话）。
 
 ---
 
@@ -13,7 +14,8 @@
 - 远程：`git@github.com:Honestman69/aamps.git`（网页：https://github.com/Honestman69/aamps）
 - 分支：`main`，首个提交 `ceccdc6`
 - **里程碑标签**（回档锚点，见 `AGENTS.md`「分支与合并纪律」）：
-  - `m1-skeleton` —— M1 骨架完成（适配器 + 实例管理 + 接入安全兜底）
+  - `m1-skeleton` —— M1 骨架合并点（`9c933b9`，当时 token 鉴权还是坏的）
+  - `m1-verified` —— M1 真机验收通过点（反向 WS + token 401 + pong，见「第 7 步」）
   - 合并一律 `git merge --no-ff`，分支保留不删；回档首选 `git revert -m 1 <merge>`
 - 网络：本机 `github.com:22` 会被重置，`~/.ssh/config` 已配置走 `ssh.github.com:443` + `Compression yes`。
   直接 `git push` 即可；若出现 `Connection reset`，先重试一次，通常是网络波动。
@@ -188,9 +190,9 @@
 - **连接失败必须真的 close**：早期版本在 `verifyLogin` 抛错时只把 `this.client = null`，socket 还开着，NapCat 侧会认为连接有效。现在 catch 里先 `client.close()` 再置空，测试里用 `openSockets === 0` 断言。
 - **NapCat 数据目录的闸门**：`.gitignore` 覆盖 `napcat/`、`napcat-data/`、`.config/QQ/`、`onebot_*.json`、`ntqq_*.json`；`pnpm check:local-data` 同时扫「已跟踪」与「未被忽略」两类文件（前者是已经出事了，后者是下次 `git add -A` 就出事），命中即非零退出。已用 `git add -f` 实际验证过它能拦住。
 
-### 第 7 步：NapCat 真机联调 ← 现在做这个
+### ~~第 7 步：NapCat 真机联调~~ ✅ 已完成
 
-代码层面 M1 已通，差一次真实环境验证。前置：装 NapCat、准备小号（`STATUS.md` 未决问题 1、2 已定：先本机、后云）。
+代码层面 M1 已通，真机验证见下方「2026-10-24 应用层验证」。
 
 **2026-10-24 联调结果**：环境就绪，`pong` 闭环跑通；随后发现上游 token 缺陷并改为反向 WS。
 
@@ -226,6 +228,29 @@ POST /api/instances/<id>/connect    → 200 {"status":"online"}（2.6 秒，NapC
 ```
 
 **验收**：除群里 @、换号切换两项外全过；日志里没有任何 token / 完整 QQ 号。
+
+**2026-10-24 合并前全量验证**（`AGENTS.md` 规定的四条 + 数据闸门，全绿才算可合并）：
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 类型 | `pnpm typecheck` | 通过 |
+| 单测 | `pnpm test` | **129 个全过**（新增反向 WS 16 个 + 仓储契约 3 个） |
+| 构建 | `pnpm build` | contracts + adapter-qq + 主服务均出产物 |
+| 端到端 | `scripts/http-smoke.ts`（独立库 `zk.db`、端口 3111） | `HTTP SMOKE PASSED`（26 项） |
+| 数据闸门 | `pnpm check:local-data` | `PASSED`（141 个已跟踪文件） |
+
+这轮端到端**抓到两个单测抓不到的问题**，都已修：
+
+1. **`adapterMode` 漏透传**：`POST /api/instances` 传 `server`，实际落库是 `client`。
+   `PrismaInstanceRepository.createForUser` 手写 `data: {...}` 时漏了这个字段，
+   Prisma 静默用 DB 默认值（`client`）补上；单测用的是假仓储所以全绿。
+   修法：把 `InstanceCreateInput.adapterMode` 改成**必填**（编译器强制所有创建路径显式给值），
+   仓储忠实透传；补 `test/instance/prisma-instance.repository.test.ts` 断言"每个入参字段都出现"。
+2. **冒烟用例语义漂移**：`实例：NapCat 没起来时连接 → 502` 在默认改成反向模式后，
+   实际测的是"等对端 20 秒超时"而不是"拨号失败"。修法：该用例显式 `adapterMode: 'client'`；
+   另加一条反向模式的失败用例（监听端口被占用 → 502 + offline）。
+
+顺带修了 `scripts/http-smoke.ts` 顶部注释（写 `ADMIN_PASSWORD`，代码读 `SMOKE_PASSWORD`，照注释抄会踩空）。
 
 **已知缺陷（NapCat 4.18.41）**：`websocketServers` 的 `token` 校验不生效（已改反向绕开，见 D018）。
 
@@ -272,12 +297,12 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 - [x] 收到消息 → 回 `pong`
 - [x] 发送节流（全局令牌桶）
 
-### M2 最小闭环
+### M2 最小闭环 ← 现在做这个
 
 - [ ] AgentConfig / ConfigResolver（四级覆盖）
 - [ ] `ModelGateway`：路由 + 超时 + 重试 + 记账
 - [ ] `openai-compatible` Provider
-- [ ] Persona 拼装 system prompt
+- [ ] Persona 拼装 system prompt（**做到这一步必须定未决问题 6**）
 - [ ] 私聊能正常对话
 
 ### M3 拟人

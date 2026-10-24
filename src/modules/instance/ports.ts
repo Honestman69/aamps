@@ -44,7 +44,12 @@ export type InstanceCreateInput = {
   platform: string;
   accountId: string;
   adapterType: string;
-  adapterMode?: string;
+  /**
+   * 必填（不是可选）：默认值只允许存在于 service 层一处。
+   * 设成可选会让仓储有"漏传就落 DB 默认值"的空间，而 DB 的默认是 `client`，
+   * 与产品默认（`server`）相反 —— 这个不一致已经造成过一次真实 bug。
+   */
+  adapterMode: string;
   endpoint?: string | null;
   accessTokenEnc?: string | null;
   enabled?: boolean;

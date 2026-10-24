@@ -59,6 +59,7 @@ export class PrismaInstanceRepository implements IInstanceRepository {
         platform: input.platform,
         accountId: input.accountId,
         adapterType: input.adapterType,
+        adapterMode: input.adapterMode,
         endpoint: input.endpoint ?? null,
         accessTokenEnc: input.accessTokenEnc ?? null,
         enabled: input.enabled ?? true,
