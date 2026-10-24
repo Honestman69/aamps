@@ -32,8 +32,8 @@
   `corepack pnpm install` 首次约 9 分钟，别以为卡死了。
 - 构建：`pnpm build` 先构建 `packages/*`（契约包 `main` 指向 `dist/index.js`）再编译主服务。
   只跑 `tsc` 不构建包，运行时会 `ERR_MODULE_NOT_FOUND`。
-- **推送状态**：2026-10-24 已推到 `57d37ca`（M1 收尾合并提交）。远端现有：
-  `main` / `feat/m1-adapter-and-instance` / `feat/m1-reverse-ws` 三个分支，
+- **推送状态**：2026-10-24 已推到 `20d0828`（D028 合并提交）。远端现有：
+  `main` + 各阶段的 `feat/*` 分支（每个结构改造一条，合并后可留作追溯），
   `m1-skeleton`（`9c933b9`）与 `m1-verified`（`57d37ca`）两个标签。
   GitHub 凭据已配置在 Git Credential Manager；之前的阻塞是缺凭据（非网络），见提交 `1c8667c`。
   **push 失败的真正原因（2026-10-24 排查过）**：git 走 SSH，**规则 / PAC 模式的代理管不到 SSH**，
@@ -45,6 +45,15 @@
   会把所有 HTTPS 地址重写成镜像，而镜像只能拉不能推。真要走 HTTPS 就写
   `https://github.com:443/owner/repo`（带默认端口不匹配该前缀）。平时用 SSH 即可。
   若出现 `could not read Username`，先查 `git credential fill` 能不能返回用户名，不要先去折腾网络。
+- **又一个 push 坑（2026-10-24 晚，HTTPS remote）**：报 `CONNECT tunnel failed, response 502`，
+  但同一时刻 `curl -x $https_proxy https://github.com/...info/refs?service=git-upload-pack` 返回 **200**。
+  原因：Windows 上 git 的 curl 后端（schannel）**不读 `https_proxy` 环境变量**，走的是系统代理设置，
+  而系统代理那一路不通。解法是显式指定：
+  ```bash
+  git -c http.proxy=http://127.0.0.1:6457 push origin main
+  ```
+  （端口换成实际的代理端口；要长期生效就 `git config http.proxy <url>`，但换网络后记得改回来。）
+  **判断口径**：`curl` 通 + `git` 报 CONNECT/502 → 先怀疑"git 没用上同一个代理"，别去查凭据。
 
 ---
 
