@@ -14,6 +14,7 @@ export default defineConfig({
     alias: {
       '@': resolve(__dirname, 'src'),
       '@newjob/contracts': resolve(__dirname, 'packages/contracts/src/index.ts'),
+      '@newjob/adapter-qq': resolve(__dirname, 'packages/adapter-qq/src/index.ts'),
     },
   },
   test: {

@@ -26,6 +26,12 @@ export const AuditAction = {
   /** DEK 解锁事件：出事时用它回答"明文在哪些时间窗口存在于内存里" */
   CredentialUnlock: 'credential.unlock',
   CredentialLock: 'credential.lock',
+  /** 实例：连接动作会解密平台 token，属于密钥相关事件，必须留痕 */
+  InstanceCreate: 'instance.create',
+  InstanceUpdate: 'instance.update',
+  InstanceDelete: 'instance.delete',
+  InstanceConnect: 'instance.connect',
+  InstanceDisconnect: 'instance.disconnect',
   UserLogin: 'user.login',
   UserLoginFailed: 'user.login_failed',
   UserCreate: 'user.create',

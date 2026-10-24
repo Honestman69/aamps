@@ -2,8 +2,10 @@ import { Global, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 
 import { PrismaService } from './common/prisma/prisma.service';
+import { AdapterModule } from './modules/adapter/adapter.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { CredentialModule } from './modules/credential/credential.module';
+import { InstanceModule } from './modules/instance/instance.module';
 
 /**
  * Prisma 作为全局单例，所有模块共用一条连接。
@@ -22,7 +24,9 @@ class PrismaModule {}
     ConfigModule.forRoot({ isGlobal: true, cache: true }),
     PrismaModule,
     AuthModule,
+    AdapterModule,
     CredentialModule,
+    InstanceModule,
   ],
 })
 export class AppModule {}

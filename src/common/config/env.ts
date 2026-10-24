@@ -29,6 +29,16 @@ export function isProduction(): boolean {
 }
 
 /**
+ * 布尔开关。
+ * 约定：**只有明确的 `true` / `1` 才算开**，`false`/空/拼错一律当关。
+ * 安全开关宁可"写错了不生效"，也不要"写错一个字就打开了"。
+ */
+export function boolEnv(name: string): boolean {
+  const raw = process.env[name]?.trim().toLowerCase();
+  return raw === 'true' || raw === '1';
+}
+
+/**
  * 会话签名密钥。
  * 只用于签 sessionId，**不参与任何数据加密**（与 D003 一致：这里没有 LLM 主密钥这种东西）。
  */
