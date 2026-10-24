@@ -21,8 +21,8 @@
   `corepack pnpm install` 首次约 9 分钟，别以为卡死了。
 - 构建：`pnpm build` 先构建 `packages/*`（契约包 `main` 指向 `dist/index.js`）再编译主服务。
   只跑 `tsc` 不构建包，运行时会 `ERR_MODULE_NOT_FOUND`。
-- **推送状态**：2026-10-24 已恢复。GitHub 凭据已配置在 Git Credential Manager，
-  本地与远端 `main` 同步于 `1c8667c`（加密底座 / HTTP 层 / 审计修复三个里程碑）。
+- **推送状态**：2026-10-24 已恢复到 `9c933b9`（M1 合并提交），同时推送了
+  分支 `feat/m1-adapter-and-instance` 与标签 `m1-skeleton`。GitHub 凭据已配置在 Git Credential Manager。
   之前的阻塞原因是缺凭据（非网络），详见提交 `1c8667c` 的说明。
   若以后又出现 `could not read Username`，先查 `git credential fill` 能不能返回用户名，不要先去折腾网络。
 
