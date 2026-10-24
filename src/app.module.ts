@@ -5,6 +5,7 @@ import { PrismaService } from './common/prisma/prisma.service';
 import { AdapterModule } from './modules/adapter/adapter.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { ConfigModule as AgentConfigModule } from './modules/config/config.module';
+import { ModelModule } from './modules/model/model.module';
 import { CredentialModule } from './modules/credential/credential.module';
 import { InstanceModule } from './modules/instance/instance.module';
 
