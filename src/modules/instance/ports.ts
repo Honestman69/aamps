@@ -34,8 +34,16 @@ export type InstanceConnectConfig = {
   accountId: string;
   endpoint: string | null;
   accessTokenEnc: string | null;
+  /** 反向模式握手校验用的摘要；没有它就只能在用户解锁后手动连接 */
+  accessTokenDigest: string | null;
   enabled: boolean;
 };
+
+/**
+ * 启动自监听用的行：多一个 ownerUserId（要拿它落状态），没有 actor。
+ * 只有系统路径用，不走用户可见接口。
+ */
+export type InstanceResidentConfig = InstanceConnectConfig & { ownerUserId: string };
 
 export type InstanceCreateInput = {
   tenantId: string;
@@ -52,6 +60,7 @@ export type InstanceCreateInput = {
   adapterMode: string;
   endpoint?: string | null;
   accessTokenEnc?: string | null;
+  accessTokenDigest?: string | null;
   enabled?: boolean;
 };
 
@@ -63,6 +72,7 @@ export type InstanceUpdatePatch = {
   adapterMode?: string;
   endpoint?: string | null;
   accessTokenEnc?: string | null;
+  accessTokenDigest?: string | null;
   enabled?: boolean;
 };
 
@@ -72,6 +82,13 @@ export interface IInstanceRepository {
   findForUser(userId: string, id: string): Promise<InstancePublicRow | null>;
   /** 连接专用：这是唯一会返回密文的读取方法 */
   findForConnect(userId: string, id: string): Promise<InstanceConnectConfig | null>;
+  /**
+   * 服务启动时的自监听枚举。**这是唯一不带 userId 的读取**，因为它是系统行为：
+   * 反向模式下 NapCat 主动连进来，服务重启后必须能自己重新监听，
+   * 而那时还没有任何用户会话（DEK 不在内存，token 明文拿不到，只剩摘要）。
+   * 只返回 `enabled && mode=server && 有摘要 && 有地址` 的行。
+   */
+  listResidentListenCandidates(): Promise<InstanceResidentConfig[]>;
   updateForUser(userId: string, id: string, patch: InstanceUpdatePatch): Promise<InstancePublicRow | null>;
   deleteForUser(userId: string, id: string): Promise<boolean>;
   /** 把连接状态落到库里，后台刷新页面时看到的不是内存里的旧值 */

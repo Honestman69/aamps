@@ -20,6 +20,8 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['test/**/*.test.ts'],
+    // 有些模块在**调用时**才读 env（会话签名、token 摘要），这里补上测试用的最小环境
+    setupFiles: [resolve(__dirname, 'test/setup.ts')],
     // 单文件串行更容易定位问题，也不受临时目录缓存目录影响
     fileParallelism: false,
     // Argon2 参数是 64MiB/t=3，单个用例上百毫秒，默认 5s 超时对慢机器偏紧

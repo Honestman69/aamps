@@ -395,6 +395,41 @@ describe('OneBotAdapter 反向模式（NapCat 连我们）', () => {
     ).toBe(true);
   }, 20_000);
 
+  it('refuses to listen when neither a plaintext token nor a verifier is given', async () => {
+    // 没有校验手段就监听，等于把控制权交给任何能连上这个端口的人
+    const port = await freePort();
+    const adapter = new OneBotAdapter({
+      instanceId: 'inst-no-auth',
+      config: { mode: 'server', wsUrl: `ws://127.0.0.1:${port}`, selfId: '10001' },
+      logger: silentLogger,
+    });
+    cleanup.push(() => adapter.disconnect());
+    await expect(adapter.connect()).rejects.toThrow(/token 校验手段/);
+  });
+
+  it('comes online with a verifier instead of a plaintext token (the digest path)', async () => {
+    // 这是"服务重启后不需要解锁"的关键路径：主服务只给一个校验函数，
+    // 适配器全程不接触 token 明文。
+    const port = await freePort();
+    const secret = 'digest-path-token-123456';
+    const adapter = new OneBotAdapter({
+      instanceId: 'inst-digest',
+      config: { mode: 'server', wsUrl: `ws://127.0.0.1:${port}`, selfId: '10001' },
+      verifyPeerToken: (provided: string) => provided === secret,
+      logger: silentLogger,
+    });
+    cleanup.push(() => adapter.disconnect());
+
+    const connecting = adapter.connect();
+    await waitUntilListening(port);
+    const peer = await connectFakeNapCat(port, secret);
+    await connecting;
+
+    expect(adapter.getStatus()).toBe('online');
+    // 连上之后仍然核验登录身份，摘要模式不能省这一步
+    expect(peer.received.some((item) => item.action === 'get_login_info')).toBe(true);
+  }, 20_000);
+
   it('does not come online when the peer presents a wrong token', async () => {
     const port = await freePort();
     const deps: AdapterDeps = {
@@ -453,10 +488,15 @@ describe('parseOneBotConfig', () => {
     expect(parseOneBotConfig({ ...base, mode: 'CLIENT' }).mode).toBe('client');
   });
 
-  it('refuses reverse mode without a token', () => {
-    // 反向模式是我们自己开的端口，没有 token 就等于对任何能连上的进程开放
-    expect(() =>
-      parseOneBotConfig({ mode: 'server', wsUrl: 'ws://127.0.0.1:3002', selfId: '10001' }),
-    ).toThrow(/Access Token/);
+  it('parses reverse mode even without a plaintext token (the caller may hold only a digest)', () => {
+    // 服务启动时 DEK 不在内存，主服务手里可能只有 token 摘要。
+    // 配置解析只管格式，"有没有校验手段"由适配器装配时判定。
+    const config = parseOneBotConfig({
+      mode: 'server',
+      wsUrl: 'ws://127.0.0.1:3002',
+      selfId: '10001',
+    });
+    expect(config.mode).toBe('server');
+    expect(config.accessToken).toBeUndefined();
   });
 });

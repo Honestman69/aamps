@@ -23,7 +23,7 @@ import { OneBotWsClient } from './onebot/client';
 import { toInboundMessage, toPlatformEvent } from './onebot/convert';
 import { toOneBotCall } from './onebot/outbound';
 import { idToString, type OneBotEvent } from './onebot/protocol';
-import { OneBotWsServer } from './onebot/server';
+import { OneBotWsServer, constantTimeEqualString } from './onebot/server';
 import type { OneBotTransport } from './onebot/transport';
 import { TokenBucket, bucketFromRateHint } from './throttle';
 
@@ -67,11 +67,10 @@ export function parseOneBotConfig(config: Record<string, unknown>): OneBotConfig
       ? config.accessToken.trim()
       : undefined;
 
-  // 反向模式必须带 token：这一端是我们自己校验，空 token 就等于对任何进程开放
-  if (mode === 'server' && !accessToken) {
-    throw new Error('反向模式必须配置 Access Token（由本服务在握手阶段校验）');
-  }
-
+  // 注意：这里**不再**强制反向模式必须有明文 token。
+  // 监听发生在服务启动时，那时 DEK 不在内存里，主服务可能只持有 token 摘要
+  // （见 contracts 的 `AdapterDeps.verifyPeerToken`）。"有没有校验手段"由
+  // `createTransport` 在装配时判定，配置解析只管格式。
   return { mode, wsUrl, accessToken, selfId };
 }
 
@@ -141,7 +140,7 @@ export class OneBotAdapter implements IAdapter {
         // 只监听回环/内网地址：反向模式的绑定地址不应该出现在公网上
         host: url.hostname || '127.0.0.1',
         port,
-        accessToken: config.accessToken as string,
+        verifyToken: this.resolvePeerVerifier(config.accessToken),
         logger: this.deps.logger,
         onEvent,
         onStatusChange,
@@ -155,6 +154,25 @@ export class OneBotAdapter implements IAdapter {
       onEvent,
       onStatusChange,
     });
+  }
+
+  /**
+   * 反向模式的 token 校验器。
+   *
+   * 优先用主服务注入的（它手里是 HMAC 摘要，服务启动时不需要 DEK 也能校验）；
+   * 没有注入时退回"与明文比对"，供单机测试和还没有摘要的老数据使用。
+   * 两者都没有 → 直接拒绝启动，绝不出现"监听了但不校验"的窗口。
+   */
+  private resolvePeerVerifier(plainToken?: string): (provided: string) => boolean {
+    if (this.deps.verifyPeerToken) {
+      return this.deps.verifyPeerToken;
+    }
+    if (plainToken) {
+      return (provided: string) => constantTimeEqualString(provided, plainToken);
+    }
+    throw new Error(
+      '反向模式缺少 token 校验手段：实例未保存 Access Token，调用方也没有注入 verifyPeerToken',
+    );
   }
 
   /**

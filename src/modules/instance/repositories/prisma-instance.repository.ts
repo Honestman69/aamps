@@ -14,6 +14,7 @@ import type {
   InstanceConnectConfig,
   InstanceCreateInput,
   InstancePublicRow,
+  InstanceResidentConfig,
   InstanceUpdatePatch,
 } from '../ports';
 
@@ -44,6 +45,7 @@ const CONNECT_SELECT = {
   accountId: true,
   endpoint: true,
   accessTokenEnc: true,
+  accessTokenDigest: true,
   enabled: true,
 } as const;
 
@@ -62,6 +64,7 @@ export class PrismaInstanceRepository implements IInstanceRepository {
         adapterMode: input.adapterMode,
         endpoint: input.endpoint ?? null,
         accessTokenEnc: input.accessTokenEnc ?? null,
+        accessTokenDigest: input.accessTokenDigest ?? null,
         enabled: input.enabled ?? true,
       },
       select: { ...PUBLIC_SELECT, accessTokenEnc: true },
@@ -91,6 +94,20 @@ export class PrismaInstanceRepository implements IInstanceRepository {
       // 归属过滤不能省：拿到别人的 id 也只得到 null
       where: { id, ownerUserId: userId },
       select: CONNECT_SELECT,
+    });
+  }
+
+  async listResidentListenCandidates(): Promise<InstanceResidentConfig[]> {
+    return this.prisma.botInstance.findMany({
+      where: {
+        enabled: true,
+        adapterMode: 'server',
+        // 没有摘要就没有校验手段，监听了也不能接；这种行留给用户下次手动连接时回填
+        accessTokenDigest: { not: null },
+        endpoint: { not: null },
+      },
+      select: { ...CONNECT_SELECT, ownerUserId: true },
+      orderBy: { createdAt: 'asc' },
     });
   }
 
