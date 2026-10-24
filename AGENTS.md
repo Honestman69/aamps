@@ -46,11 +46,16 @@ pnpm test                       # 应为全绿（当前 51 个用例）
 pnpm dev                        # 或 node dist/src/main.js
 ```
 
-两个自己踩过的坑：
+两个自己踩过的坑，加一条纪律：
 
 1. **`BOOTSTRAP_ADMIN_PASSWORD` 只在首次建号时生效**。换个空库跑会新建管理员；
    账号已存在时会跳过并打印原因，不会改别名密码。
 2. **`SESSION_SECRET` 缺失或短于 32 字符会直接拒绝启动**。这是刻意的——给它默认值等于公开所有会话签名。
+
+再加上一条不是"坑"而是纪律：
+
+3. **NapCat 的数据目录不要搬**。换机器时在新机器上重新扫码登录生成，而不是把 `napcat/` 或
+   `.config/QQ/` 复制过去——那里面是 QQ 登录态，等同于账号控制权（`SECURITY.md` 7.1）。
 
 ---
 
@@ -64,10 +69,15 @@ pnpm dev                        # 或 node dist/src/main.js
 6. **密钥、Token、QQ 号不进日志。** 日志脱敏用白名单，不用黑名单。
 7. **不判断平台字符串。** 需要知道"能不能主动发、字数上限多少、回复是否公开"，读 `adapter.capabilities`，不要写 `if (platform === 'qq')`。见 D012。
 8. **文档与代码同步。** 改了架构就改 `ARCHITECTURE.md`，改了决策就改 `DECISIONS.md`，做完一步就更新 `STATUS.md`。
+9. **协议端的登录态永远留在协议端。** NapCat 的数据目录（`napcat/`、`.config/QQ/`、`onebot_<QQ号>.json`、`ntqq_*.json`）等同于**账号控制权**，不是缓存：
+   - **不入 git**，提交前必须跑 `pnpm check:local-data`（它同时查已跟踪与未被忽略的文件）；
+   - **不随迁移搬运**，换机器/迁云时在新机器上**重新扫码生成**，不要打包带走；
+   - 接入地址默认只允许本机/内网，公网地址需显式 `ALLOW_REMOTE_ADAPTER=true`。
+   详见 `SECURITY.md` 7.1。
 
 ---
 
-## 新会话最容易犯的 7 个错
+## 新会话最容易犯的 8 个错
 
 前人都踩过，别重复：
 
@@ -80,6 +90,7 @@ pnpm dev                        # 或 node dist/src/main.js
 | 5 | 在 Controller 里直接 `prisma.xxx.findMany()` | 绕过 owner 过滤，等于密钥泄漏 | 走 Repository |
 | 6 | 把 `mind`（拟人表现层）做成必须开启 | 它是可选装饰器，关掉也要能正常对话 | 每层可独立关闭 |
 | 7 | 直接 `fetch('https://api.deepseek.com/...')` | 绕过重试、记账、降级、审计 | 走 `ModelGateway` |
+| 8 | 把 `napcat/`、`.config/QQ/`、`onebot_*.json` 复制到新机器或提交上去 | 那是 QQ 登录态 = 账号控制权，搬一次就多一份泄露面 | 新机器重新扫码生成；提交前 `pnpm check:local-data` |
 
 ---
 
@@ -126,12 +137,73 @@ newjob/                         pnpm workspace
 2. 如果做了架构或决策层面的变更，同步 `ARCHITECTURE.md` / `DECISIONS.md`。
 3. 在 `.workbuddy/memory/YYYY-MM-DD.md` 追加一条简短日志（这是本地私有记忆，**不能替代** STATUS.md）。
 
-**提交前：**
+**提交前（缺一条都不算可合并）：**
 
 ```bash
-pnpm typecheck   # tsc --noEmit
-pnpm test        # 安全相关的必须通过
+pnpm typecheck          # tsc --noEmit
+pnpm test               # 安全相关的必须通过
+pnpm build              # 先包后主服务，验证产物能起
+pnpm check:local-data   # 协议端数据（QQ 登录态）没混进版本库
 ```
+
+---
+
+## 分支与合并纪律（每个里程碑一次）
+
+> 铁律：**先分支、后验证、再合并、留标签。** 任何"先合到 main 再说"的做法都等于放弃回档能力。
+
+**1. 一个里程碑 = 一个分支**，命名 `feat/<scope>`：
+
+```
+feat/m1-adapter-and-instance      # M1 接入层
+fix/audit-clock-rollback          # 修 bug
+```
+
+**2. 分支上按逻辑拆提交**（不是按文件），每条提交信息写清"验证了什么"。
+一个提交要么能独立解释，要么说明它依赖前一条。**不要出现"一堆改动 + 'update'"**。
+
+**3. 合并前必须全绿**，四条一起过（缺一条都别合）：
+
+| 检查 | 命令 | 通过标准 |
+|---|---|---|
+| 类型 | `pnpm typecheck` | 无输出错误 |
+| 单测 | `pnpm test` | 全绿，安全相关用例必须包含 |
+| 构建 | `pnpm build` | 两个包 + 主服务都出产物 |
+| 端到端 | `scripts/http-smoke.ts`（起真服务、真 SQLite） | `HTTP SMOKE PASSED` |
+| 数据闸门 | `pnpm check:local-data` | `PASSED` |
+
+端到端冒烟跑法（**别指向 `dev.db`**）：
+
+```bash
+rm -f data/zk.db* && DATABASE_URL="file:../data/zk.db" npx prisma migrate deploy
+DATABASE_URL="file:../data/zk.db" PORT=3111 BOOTSTRAP_ADMIN_USERNAME=smoke_http_admin \
+  BOOTSTRAP_ADMIN_PASSWORD=smoke-http-pass-01 node dist/src/main.js &
+BASE_URL=http://127.0.0.1:3111 npx tsx scripts/http-smoke.ts
+```
+
+**4. 用 `--no-ff` 合并 + 打标签**，让"这个里程碑的整体状态"在历史里有一个可点名、可回退的锚点：
+
+```bash
+m=1                                  # 里程碑编号
+git checkout main
+git merge --no-ff feat/m1-adapter-and-instance -m "merge: M1 接入层"
+git tag -a "m${m}-skeleton" -m "M1 骨架完成：适配器 + 实例管理 + 接入安全兜底"
+```
+
+**5. 分支合并后不要删。** 它和 tag 一起构成回档点；删了就只剩一条线性历史，
+出问题时只能靠 `reflog` 找，而 `reflog` 会过期。
+
+**出问题怎么回档（按严重程度选）：**
+
+```bash
+git log --oneline --graph --decorate -10   # 先看清形状
+git revert -m 1 <merge-commit>             # 首选：撤销一次合并，保留历史，可再提交
+git checkout m1-skeleton                   # 只是要看看当时的状态
+git reset --hard m1-skeleton               # 最后手段：本地丢弃后续提交（已推送的别这么干）
+```
+
+**判断标准**：如果一条命令能把项目带回"上一个能跑的状态"，那这个里程碑就算归档好了；
+如果回不去，说明标签或分支缺了，当时就该补。
 
 ---
 

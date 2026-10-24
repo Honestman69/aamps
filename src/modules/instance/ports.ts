@@ -1,0 +1,70 @@
+/**
+ * 实例模块的 Repository 端口。
+ *
+ * 与凭据一样，**没有 `findById` / `findMany`**：每个方法都带 `userId`。
+ * 实例里存着 `accessTokenEnc`（NapCat 的 token），跨用户拿到就是一条能发消息的通道。
+ *
+ * 唯一能取到密文的方法是 `findForConnect`，它只服务"连接"这一个动作，
+ * 并且返回值里没有任何可展示字段 —— 想拿它拼接口响应会很别扭，这是刻意的。
+ */
+
+export type InstancePublicRow = {
+  id: string;
+  name: string;
+  platform: string;
+  accountId: string;
+  adapterType: string;
+  endpoint: string | null;
+  /** 是否配置了 token（布尔，不是密文） */
+  hasAccessToken: boolean;
+  enabled: boolean;
+  status: string;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+/** 连接时需要的全部材料。离开这个结构，密文没有别的去处 */
+export type InstanceConnectConfig = {
+  id: string;
+  platform: string;
+  adapterType: string;
+  accountId: string;
+  endpoint: string | null;
+  accessTokenEnc: string | null;
+  enabled: boolean;
+};
+
+export type InstanceCreateInput = {
+  tenantId: string;
+  ownerUserId: string;
+  name: string;
+  platform: string;
+  accountId: string;
+  adapterType: string;
+  endpoint?: string | null;
+  accessTokenEnc?: string | null;
+  enabled?: boolean;
+};
+
+export type InstanceUpdatePatch = {
+  name?: string;
+  platform?: string;
+  accountId?: string;
+  adapterType?: string;
+  endpoint?: string | null;
+  accessTokenEnc?: string | null;
+  enabled?: boolean;
+};
+
+export interface IInstanceRepository {
+  createForUser(input: InstanceCreateInput): Promise<InstancePublicRow>;
+  listForUser(userId: string): Promise<InstancePublicRow[]>;
+  findForUser(userId: string, id: string): Promise<InstancePublicRow | null>;
+  /** 连接专用：这是唯一会返回密文的读取方法 */
+  findForConnect(userId: string, id: string): Promise<InstanceConnectConfig | null>;
+  updateForUser(userId: string, id: string, patch: InstanceUpdatePatch): Promise<InstancePublicRow | null>;
+  deleteForUser(userId: string, id: string): Promise<boolean>;
+  /** 把连接状态落到库里，后台刷新页面时看到的不是内存里的旧值 */
+  setStatusForUser(userId: string, id: string, status: string): Promise<boolean>;
+  countForUser(userId: string): Promise<number>;
+}

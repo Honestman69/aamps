@@ -17,6 +17,18 @@ data/*
 *.db-shm
 *.db-wal
 
+# ── 协议端本地数据（NapCat / NTQQ） ──
+# 这些目录里是 QQ 的登录会话：等同于账号控制权，不是"缓存"。
+# 规则与 SECURITY.md「协议端数据目录」一节对应，配套检查：pnpm check:local-data
+napcat/
+napcat-data/
+NapCat*/
+ntqq/
+qq-data/
+**/.config/QQ/
+**/onebot_*.json
+**/ntqq_*.json
+
 # 日志
 *.log
 logs/

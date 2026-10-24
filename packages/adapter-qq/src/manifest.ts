@@ -23,8 +23,8 @@ export const manifest: AdapterManifest = {
       label: 'WebSocket 地址',
       type: 'text',
       required: true,
-      placeholder: 'ws://127.0.0.1:6700/onebot/v11/ws',
-      help: 'NapCat 网络配置中的反向 WebSocket 地址',
+      placeholder: 'ws://127.0.0.1:3001',
+      help: '以 NapCat WebUI「网络配置」里显示的 WebSocket 服务端地址为准（常见 3001，部分版本是 6700）。不要填公网地址',
     },
     {
       key: 'accessToken',

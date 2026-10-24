@@ -132,6 +132,8 @@ import { UnlockService } from './unlock.service';
   exports: [
     RuntimeKeyStore,
     SessionService,
+    // 必须导出：其他模块要挂同一个守卫实例（它持有会话单例），自己 new 会验签不一致
+    SessionGuard,
     AUDIT_SERVICE,
     BootstrapService,
     UnlockService,

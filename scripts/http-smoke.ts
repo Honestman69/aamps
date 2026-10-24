@@ -15,6 +15,8 @@ const BASE = process.env.BASE_URL ?? 'http://127.0.0.1:3111';
 const ADMIN = process.env.SMOKE_USERNAME ?? 'smoke_http_admin';
 const PASSWORD = process.env.SMOKE_PASSWORD ?? 'smoke-http-pass-01';
 const NEW_PASSWORD = process.env.SMOKE_NEW_PASSWORD ?? 'smoke-http-pass-02';
+/** 留给 `zero-knowledge-check.ts` 当靶子的明文 Key，两边必须一致 */
+const ZK_PLAINTEXT = process.env.ZK_PLAINTEXT ?? 'sk-smoke-zk-marker-4c3b2a19';
 
 /** 极简 cookie jar：只关心我们自己的 session cookie */
 let cookie = '';
@@ -105,6 +107,129 @@ async function main(): Promise<void> {
   assert.equal(res.status, 200);
   assert.equal(res.body.unlocked, true);
 
+  // ── 凭据管理（M0 第 5 步） ──
+  const credentialKey = 'sk-smoke-credential-9f8e7d6c';
+  step('凭据：新增 → 201，响应只有掩码，没有密文');
+  res = await call('POST', '/api/credentials', {
+    provider: 'deepseek',
+    label: '冒烟用',
+    apiKey: credentialKey,
+  });
+  assert.equal(res.status, 201, JSON.stringify(res.body));
+  const credId = res.body.id as string;
+  assert.equal(res.body.keyMasked, 'sk-****7d6c');
+  assert.ok(!('apiKeyEnc' in res.body), '响应体里不允许有 apiKeyEnc');
+  assert.ok(!res.raw.includes(credentialKey), '响应体里出现了明文 Key');
+
+  step('凭据：列表 → 只有掩码，没有归属与密文字段');
+  res = await call('GET', '/api/credentials');
+  assert.equal(res.status, 200);
+  const credList = res.body as Array<Record<string, unknown>>;
+  assert.equal(credList.length, 1);
+  for (const forbidden of ['apiKeyEnc', 'ownerUserId', 'tenantId']) {
+    assert.ok(!(forbidden in credList[0]!), `凭据列表泄漏字段 ${forbidden}`);
+  }
+  assert.equal(credList[0]!.keyMasked, 'sk-****7d6c');
+
+  step('凭据：请求体里塞 apiKeyEnc（想自己指定密文）→ 400');
+  res = await call('POST', '/api/credentials', {
+    provider: 'deepseek',
+    label: '越权写入',
+    apiKey: 'sk-smoke-attempt-000000',
+    apiKeyEnc: 'dek:v1:forged:forged:forged',
+  });
+  assert.equal(res.status, 400);
+
+  step('凭据：改元数据 → 200，密文不动（掩码不变）');
+  res = await call('PATCH', `/api/credentials/${credId}`, { label: '改名后' });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(res.body.label, '改名后');
+  assert.equal(res.body.keyMasked, 'sk-****7d6c');
+
+  step('凭据：轮换 Key → 掩码随之变化');
+  res = await call('PATCH', `/api/credentials/${credId}`, { apiKey: 'sk-smoke-rotated-1234abcd' });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(res.body.keyMasked, 'sk-****abcd');
+
+  step('凭据：不存在的 id → 404（不提"存在但无权"）');
+  res = await call('PATCH', '/api/credentials/no-such-credential', { label: 'x' });
+  assert.equal(res.status, 404);
+
+  step('凭据：删除 → 200，列表清空');
+  res = await call('DELETE', `/api/credentials/${credId}`);
+  assert.equal(res.status, 200);
+  res = await call('GET', '/api/credentials');
+  assert.deepEqual(res.body, []);
+
+  step('凭据：留一条给零知识验收（直查数据库时用它当靶子）');
+  res = await call('POST', '/api/credentials', {
+    provider: 'openai',
+    label: 'zk-keep',
+    apiKey: ZK_PLAINTEXT,
+  });
+  assert.equal(res.status, 201, JSON.stringify(res.body));
+
+  step('适配器清单：qq/onebot 已注册（前端据此渲染表单）');
+  res = await call('GET', '/api/adapters');
+  assert.equal(res.status, 200);
+  const manifests = res.body as Array<Record<string, any>>;
+  const qq = manifests.find((item) => item.platform === 'qq' && item.protocol === 'onebot');
+  assert.ok(qq, '没有找到 qq/onebot 适配器');
+  assert.ok(Array.isArray(qq.configFields) && qq.configFields.length >= 3);
+
+  step('实例：新建（QQ 号从接口填，不是写死在配置里）→ 201');
+  res = await call('POST', '/api/instances', {
+    name: '冒烟实例',
+    accountId: '10001000',
+    endpoint: 'ws://127.0.0.1:1/onebot/v11/ws',
+  });
+  assert.equal(res.status, 201, JSON.stringify(res.body));
+  const instanceId = res.body.id as string;
+  assert.equal(res.body.accountId, '10001000');
+  assert.equal(res.body.hasAccessToken, false);
+  assert.ok(!('accessTokenEnc' in res.body), '实例响应里不允许有 accessTokenEnc');
+
+  step('实例：列表只返回自己的，且没有 token 密文');
+  res = await call('GET', '/api/instances');
+  assert.equal(res.status, 200);
+  const instanceList = res.body as Array<Record<string, unknown>>;
+  assert.equal(instanceList.length, 1);
+  for (const forbidden of ['accessTokenEnc', 'ownerUserId', 'tenantId']) {
+    assert.ok(!(forbidden in instanceList[0]!), `实例列表泄漏字段 ${forbidden}`);
+  }
+  assert.equal(instanceList[0]!.status, 'offline');
+
+  step('实例：NapCat 没起来时连接 → 502，且状态回到 offline');
+  res = await call('POST', `/api/instances/${instanceId}/connect`);
+  assert.equal(res.status, 502, JSON.stringify(res.body));
+  assert.equal(res.body.code, 'INSTANCE_CONNECT_FAILED');
+  res = await call('GET', '/api/instances');
+  assert.equal((res.body as Array<Record<string, unknown>>)[0]!.status, 'offline');
+
+  step('实例：公网地址 → 400（默认不允许把 QQ 登录态交给陌生地址）');
+  res = await call('POST', '/api/instances', {
+    name: '公网 NapCat',
+    accountId: '10001001',
+    endpoint: 'ws://napcat.example.com:3001',
+  });
+  assert.equal(res.status, 400, JSON.stringify(res.body));
+  assert.equal(res.body.code, 'REMOTE_ENDPOINT_BLOCKED');
+
+  step('实例：改名字 → 200');
+  res = await call('PATCH', `/api/instances/${instanceId}`, { name: '改过名的实例' });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(res.body.name, '改过名的实例');
+
+  step('实例：不存在的 id → 404');
+  res = await call('POST', '/api/instances/no-such-instance/connect');
+  assert.equal(res.status, 404);
+
+  step('实例：删除 → 200，列表清空');
+  res = await call('DELETE', `/api/instances/${instanceId}`);
+  assert.equal(res.status, 200);
+  res = await call('GET', '/api/instances');
+  assert.deepEqual(res.body, []);
+
   step('管理员接口：用户列表不含任何密钥材料');
   res = await call('GET', '/api/admin/users');
   assert.equal(res.status, 200);
@@ -137,11 +262,32 @@ async function main(): Promise<void> {
   assert.equal(res.status, 200);
   const rows = res.body as Array<Record<string, any>>;
   const actions = rows.map((row) => row.action);
-  for (const expected of ['user.create', 'credential.unlock', 'user.password_change']) {
+  for (const expected of [
+    'user.create',
+    'credential.unlock',
+    'user.password_change',
+    'credential.create',
+    'credential.update',
+    'credential.rotate',
+    'credential.delete',
+    'instance.create',
+    'instance.update',
+    'instance.delete',
+  ]) {
     assert.ok(actions.includes(expected), `审计缺少 ${expected}，实际：${actions.join(',')}`);
   }
   const dump = JSON.stringify(rows);
-  for (const forbidden of [PASSWORD, NEW_PASSWORD, 'passwordHash', 'wrappedDek', 'keySalt']) {
+  for (const forbidden of [
+    PASSWORD,
+    NEW_PASSWORD,
+    'passwordHash',
+    'wrappedDek',
+    'keySalt',
+    credentialKey,
+    ZK_PLAINTEXT,
+    // 完整 QQ 号不进审计（硬性规则 6），只允许出现掩码
+    '10001000',
+  ]) {
     assert.ok(!dump.includes(forbidden), `审计泄漏了 ${forbidden}`);
   }
 
@@ -154,6 +300,10 @@ async function main(): Promise<void> {
   res = await call('POST', '/api/auth/lock');
   assert.equal(res.status, 200);
   res = await call('GET', '/api/auth/me');
+  assert.equal(res.status, 401);
+
+  step('锁定后访问凭据接口 → 401（会话已销毁，DEK 也没了）');
+  res = await call('GET', '/api/credentials');
   assert.equal(res.status, 401);
 
   step('伪造 cookie → 401（签名校验生效）');
