@@ -28,6 +28,10 @@ const adapterModeSchema = z.enum(['client', 'server']);
 
 /** 预算单位是"分"，0 表示不限。上限 1000 万分（10 万元）只是防手滑输入天文数字 */
 const budgetCentsSchema = z.number().int().min(0).max(10_000_000);
+/** 模型名：允许为空（表示跟随默认），非空时限制长度防脏数据 */
+const modelNameSchema = z.string().trim().min(1).max(120);
+/** 温度：与 resolver 的合法区间一致，越界直接 400，而不是存进去再被静默夹掉 */
+const temperatureSchema = z.number().min(0).max(1.5);
 /** 超限策略：降级继续聊，还是直接拒答 */
 const budgetPolicySchema = z.enum(['downgrade', 'block']);
 
@@ -47,6 +51,12 @@ export const createInstanceSchema = z
     dailyBudgetCents: budgetCentsSchema.optional(),
     monthlyBudgetCents: budgetCentsSchema.optional(),
     budgetPolicy: budgetPolicySchema.optional(),
+    /** 用哪把 Key（必须属于本人）。换 Provider 就是改这一项 */
+    credentialId: z.string().trim().min(1).max(64).nullable().optional(),
+    modelMain: modelNameSchema.nullable().optional(),
+    modelCheap: modelNameSchema.nullable().optional(),
+    modelFallback: modelNameSchema.nullable().optional(),
+    modelTemperature: temperatureSchema.optional(),
   })
   .strict();
 
@@ -64,6 +74,11 @@ export const updateInstanceSchema = z
     dailyBudgetCents: budgetCentsSchema.optional(),
     monthlyBudgetCents: budgetCentsSchema.optional(),
     budgetPolicy: budgetPolicySchema.optional(),
+    credentialId: z.string().trim().min(1).max(64).nullable().optional(),
+    modelMain: modelNameSchema.nullable().optional(),
+    modelCheap: modelNameSchema.nullable().optional(),
+    modelFallback: modelNameSchema.nullable().optional(),
+    modelTemperature: temperatureSchema.optional(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, { message: '至少提供一个要修改的字段' });
@@ -91,6 +106,12 @@ export type InstancePublicDTO = {
   dailyBudgetCents: number;
   monthlyBudgetCents: number;
   budgetPolicy: string;
+  /** 当前绑定的 Key（只有 id；不含任何密钥材料） */
+  credentialId: string | null;
+  modelMain: string | null;
+  modelCheap: string | null;
+  modelFallback: string | null;
+  modelTemperature: number;
   status: string;
   createdAt: string;
   updatedAt: string;
@@ -110,6 +131,11 @@ export function toInstanceDTO(row: InstancePublicRow): InstancePublicDTO {
     dailyBudgetCents: row.dailyBudgetCents,
     monthlyBudgetCents: row.monthlyBudgetCents,
     budgetPolicy: row.budgetPolicy,
+    credentialId: row.credentialId,
+    modelMain: row.modelMain,
+    modelCheap: row.modelCheap,
+    modelFallback: row.modelFallback,
+    modelTemperature: row.modelTemperature,
     status: row.status,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),

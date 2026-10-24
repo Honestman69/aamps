@@ -114,6 +114,11 @@ class FakeInstanceRepository implements IInstanceRepository {
       dailyBudgetCents: input.dailyBudgetCents ?? 0,
       monthlyBudgetCents: input.monthlyBudgetCents ?? 0,
       budgetPolicy: input.budgetPolicy ?? 'downgrade',
+      credentialId: input.credentialId ?? null,
+      modelMain: input.modelMain ?? null,
+      modelCheap: input.modelCheap ?? null,
+      modelFallback: input.modelFallback ?? null,
+      modelTemperature: input.modelTemperature ?? 0.85,
       status: 'offline',
       createdAt: now,
       updatedAt: now,
@@ -251,15 +256,30 @@ function setup(options: { failConnect?: boolean } = {}) {
   });
 
   const runtime = new InstanceRuntime();
+  const ownedCredentials = new Set<string>(['cred-own']);
+  const credentials = {
+    async findForUser(_userId: string, id: string): Promise<unknown | null> {
+      return ownedCredentials.has(id) ? { id } : null;
+    },
+  };
+  const configCache = {
+    invalidated: [] as string[],
+    invalidate(instanceId: string): number {
+      this.invalidated.push(instanceId);
+      return 1;
+    },
+  };
   const service = new InstanceService({
     instances: repo,
     keyStore,
+    configCache,
+    credentials,
     registry,
     runtime,
     audit: new AuditService(auditRepo),
   });
 
-  return { repo, auditRepo, keyStore, registry, runtime, service, created };
+  return { repo, configCache, credentials, auditRepo, keyStore, registry, runtime, service, created };
 }
 
 describe('InstanceService 配置与隔离', () => {
@@ -285,6 +305,64 @@ describe('InstanceService 配置与隔离', () => {
     expect(dto).not.toHaveProperty('accessTokenEnc');
     expect(dto).not.toHaveProperty('ownerUserId');
     expect(dto.accountId).toBe('10001');
+  });
+
+  it('绑定自己的 Key 成功，别人的 Key 被拒（不能靠 credentialId 白嫖额度）', async () => {
+    const { service } = setup();
+
+    const ok = await service.create(actor(ALICE), {
+      name: '绑自己的 Key',
+      accountId: '10005',
+      adapterMode: 'client',
+      credentialId: 'cred-own',
+      modelMain: 'deepseek-chat',
+    });
+    expect(ok.credentialId).toBe('cred-own');
+    expect(ok.modelMain).toBe('deepseek-chat');
+
+    await expect(
+      service.create(actor(ALICE), {
+        name: '绑别人的 Key',
+        accountId: '10006',
+        adapterMode: 'client',
+        credentialId: 'cred-someone-else',
+      }),
+    ).rejects.toThrow(/无权使用/);
+  });
+
+  it('换 Provider：改 credentialId 与模型即可，无需重连', async () => {
+    const { service, configCache } = setup();
+    const dto = await service.create(actor(ALICE), {
+      name: '换模型',
+      accountId: '10007',
+      adapterMode: 'client',
+      credentialId: 'cred-own',
+    });
+
+    const updated = await service.update(actor(ALICE), dto.id, {
+      credentialId: 'cred-own',
+      modelMain: 'gpt-5',
+      modelCheap: 'gpt-5-mini',
+      modelTemperature: 0.6,
+    });
+
+    expect(updated.modelMain).toBe('gpt-5');
+    expect(updated.modelCheap).toBe('gpt-5-mini');
+    expect(updated.modelTemperature).toBe(0.6);
+    expect(configCache.invalidated).toContain(dto.id);
+  });
+
+  it('改配置后立刻失效配置缓存（否则用户要等 30 秒才生效）', async () => {
+    const { service, configCache } = setup();
+    const dto = await service.create(actor(ALICE), {
+      name: '缓存验证',
+      accountId: '10004',
+      adapterMode: 'client',
+    });
+
+    await service.update(actor(ALICE), dto.id, { modelMain: 'gpt-5' });
+
+    expect(configCache.invalidated).toContain(dto.id);
   });
 
   it('预算挂在人格（实例）上，换 Key 不会重置（D024）', async () => {
