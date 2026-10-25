@@ -33,6 +33,18 @@ export type AgentConfig = {
   monthlyBudgetCents: number;
   /** 超限策略：降级到 modelCheap 继续，还是直接不出声（D024） */
   budgetPolicy: BudgetPolicy;
+
+  // ── 多模态（D033）──
+  /** 看图用的模型；`null` = 不做图片识别（入站图片只以「[图片]」占位） */
+  visionModel: string | null;
+  /** 语音合成用的 Key；与聊天 Key 分开，`null` = 语音不可用 */
+  ttsCredentialId: string | null;
+  /** 合成模型；`null` = 语音不可用 */
+  ttsModel: string | null;
+  /** 音色名（厂商相关） */
+  ttsVoice: string;
+  /** 允许转发的图片域名白名单（逗号分隔）。空 = 允许任意公网 https */
+  imageHosts: string;
 };
 
 /** 预算超限后的动作。与 Prisma 里的字符串枚举保持一致 */
@@ -75,6 +87,12 @@ export const DEFAULT_AGENT_CONFIG: AgentConfig = {
   dailyBudgetCents: 0,
   monthlyBudgetCents: 0,
   budgetPolicy: 'downgrade',
+  // 多模态默认全关：能力要显式配才生效，避免"看起来支持但一用就 400"
+  visionModel: null,
+  ttsCredentialId: null,
+  ttsModel: null,
+  ttsVoice: 'alloy',
+  imageHosts: '',
 };
 
 /** 温度合法区间：低于 0 没意义，高于 1.5 输出开始胡言乱语 */
@@ -95,6 +113,12 @@ export type ConfigBundle = {
     dailyBudgetCents: number;
     monthlyBudgetCents: number;
     budgetPolicy: string;
+    // 多模态（D033）
+    modelVision: string | null;
+    ttsCredentialId: string | null;
+    ttsModel: string | null;
+    ttsVoice: string;
+    imageHosts: string;
   };
   /** 当前生效的人设（若 activePersonaId 指向的那条） */
   persona: {

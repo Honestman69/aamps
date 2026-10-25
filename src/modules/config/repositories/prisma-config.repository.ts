@@ -27,6 +27,11 @@ export class PrismaConfigSourceRepository implements IConfigSourceRepository {
         monthlyBudgetCents: true,
         budgetPolicy: true,
         activePersonaId: true,
+        modelVision: true,
+        ttsCredentialId: true,
+        ttsModel: true,
+        ttsVoice: true,
+        imageHosts: true,
       },
     });
     if (!instance) {

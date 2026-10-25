@@ -166,6 +166,8 @@ newjob/
 │  │  │  ├─ attention/         # 发言决策
 │  │  │  ├─ reflection/        # 内心独白
 │  │  │  └─ expression/        # 拆条、延迟、表情
+│  │  ├─ media/                # 多模态（D033）：URL 白名单、入站图片抓取、媒体意图、TTS
+│  │  │  └─ assets/            # 素材库（D034）：存图/表情、按别名取用、内容去重
 │  │  ├─ memory/               # 工作记忆 / 情景记忆 / 语义记忆
 │  │  ├─ persona/              # 人设卡片与版本
 │  │  ├─ rules/                # 约束词与规则引擎
@@ -220,6 +222,23 @@ interface IPipe<I, O> {
 
 **为什么 attention 在 generate 之前**：这是省钱又拟人的关键。自用场景下 60%~80% 的群消息不该回，提前判掉既省 token 又避免"有问必答"。
 
+### 多模态的接缝（D033）
+
+多模态**不是新管道**，只是现有三段各加一次转译：
+
+| 位置 | 做什么 | 失败怎么办 |
+|---|---|---|
+| `context` 之后 / `generate` 之前 | 入站 `image` 段 → 下载 → base64 data URL → 拼成 `content: [text, image_url]`（只挂当前这条，历史图不重发） | 这张图丢掉，正文留「[图片]」，不影响说话 |
+| `generate` 的模型选择 | 带图时指定 `modelVision`，**不参与预算降级** | 没配 `modelVision` 就根本不下载图片 |
+| `express` 之前 | 解析模型输出的 `[img]url[/img]` / `[voice]text[/voice]` → 校验 URL → TTS 合成 → 拆成 1~2 条出站 | 校验不过就丢标记；TTS 失败就把那句话当文字说 |
+
+**媒体选择归模型、形态归代码**：模型只说"我想发这张图/这句话用语音"，引用、拆条、延迟、兜底话术
+仍然由 `src/` 决定（D030 / 硬性规则 11）。这条边界见 `DECISIONS.md` D033。
+
+**素材库（D034）是这条边界的延续**：`[save]名字[/save]` / `[use]名字[/use]` 里的"名字"是模型唯一的入口，
+它不能给 URL。库里存的每张图都至少被真实抓取过一次（`assets/<sha256>.<ext>`），
+所以"发图"这个动作对外只有两种来源：**公网白名单 URL** 或 **我们自己落盘的文件**。
+
 ---
 
 ## 6. 心智引擎（mind）
@@ -254,6 +273,11 @@ decide = wake > threshold(busy ? 0.75 : 0.55)
 
 私聊与群聊分开：私聊默认几乎必回（阈值 0.05），群聊才是决策重点。
 
+> **实现现状（M3-1，见 D032）**：`src/modules/mind/state/`（mood/energy 衰减 + 亲密度）与
+> `src/modules/mind/attention/`（阈值与权重来自 `Persona.behaviorJson.attention`）已接入 Pipeline，
+> 判定发生在**调模型之前**。与上式的差异只有两处：`busy` 只抬高群聊阈值（私聊的忙碌是延迟不是失联），
+> 以及**群里被 @ 必回**（硬规则，不参与阈值比较）。`reflection/`（内心独白）与 `expression/`（拆条延迟）尚未实现。
+
 ### 6.3 双阶段生成
 
 单次调用容易"工整"，两段式才自然：
@@ -277,6 +301,12 @@ prompt 要求模型先输出一段结构化思考：
 
 成本控制：`length_hint` 短时 A 阶段可以用小模型/低 temperature，B 阶段才用主力模型。
 
+> **实现现状（M3-4，见 D036）**：`src/modules/mind/reflection/` 已落地。A 阶段走
+> `gateway.chat({ purpose: 'think' })`（`modelCheap` 记账），B 阶段把独白翻译成"导演指令"拼进 system。
+> 与上式的差异：`want_to_reply` **不参与"要不要回"的判断**（那只影响语气），
+> 因为 attention 已经决定过；思考只落 `Message.thinkJson`，**绝不回灌历史**。
+> 失败（解析不出 JSON / 调用报错）→ 退化为单阶段，不影响回话。
+
 ### 6.4 表达层（expression）
 
 人类特征是可以工程化的：
@@ -288,6 +318,12 @@ prompt 要求模型先输出一段结构化思考：
 - **不连发同一句式**：检查最近 5 条，重复开头换说法
 
 所有随机都过 `seededRand(conversationId + timestamp)`，方便复现 bug。
+
+> **实现现状（M3-3，见 D035）**：`src/modules/mind/expression/` 已落地拆条、延迟、回 @，
+> 文本/图片/语音分三条发；同一会话在 `PipelineService` 里串行，后一条等前一条说完。
+> 与上式的差异：`maxCharsPerSegment` 只作目标（**绝不截断**）、延迟有 12s 总上限（按比例压缩）、
+> 已用引用时不再 @。**未做**：偶发行为（错别字/撤回/追加表情）、"不连发同一句式"（属模型职责）、
+> 连发冷却（归 M6 风控）。
 
 ### 6.5 自主性（proactive）
 

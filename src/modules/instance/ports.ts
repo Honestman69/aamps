@@ -30,6 +30,14 @@ export type InstancePublicRow = {
   modelCheap: string | null;
   modelFallback: string | null;
   modelTemperature: number;
+  /** 看图用的模型；null = 不做图片识别（D033） */
+  modelVision: string | null;
+  /** 语音合成用的 Key / 模型 / 音色；三者任一为空则语音不可用（D033） */
+  ttsCredentialId: string | null;
+  ttsModel: string | null;
+  ttsVoice: string;
+  /** 允许转发的图片域名白名单（逗号分隔）；空 = 任意公网 https */
+  imageHosts: string;
   status: string;
   createdAt: Date;
   updatedAt: Date;
@@ -80,6 +88,11 @@ export type InstanceCreateInput = {
   modelCheap?: string | null;
   modelFallback?: string | null;
   modelTemperature?: number;
+  modelVision?: string | null;
+  ttsCredentialId?: string | null;
+  ttsModel?: string | null;
+  ttsVoice?: string;
+  imageHosts?: string;
 };
 
 export type InstanceUpdatePatch = {
@@ -100,6 +113,11 @@ export type InstanceUpdatePatch = {
   modelCheap?: string | null;
   modelFallback?: string | null;
   modelTemperature?: number;
+  modelVision?: string | null;
+  ttsCredentialId?: string | null;
+  ttsModel?: string | null;
+  ttsVoice?: string;
+  imageHosts?: string;
 };
 
 export interface IInstanceRepository {

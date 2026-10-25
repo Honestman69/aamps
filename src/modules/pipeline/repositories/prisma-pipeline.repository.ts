@@ -39,6 +39,7 @@ export class PrismaPipelineRepository implements IPipelineRepository {
         boundariesJson: true,
         fallbacksJson: true,
         quoteTendency: true,
+        behaviorJson: true,
       },
     });
     if (!persona) {

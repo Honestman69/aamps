@@ -5,18 +5,27 @@
 > **换机器 / 全新克隆先读 [`AGENTS.md`](../AGENTS.md) 的「换机器 / 全新克隆」**——
 > 仓库里没有 `.env`、没有数据库，直接 `pnpm dev` 会失败。
 
-**最后更新**：2026-10-24
-**当前阶段**：**M2 已完成**（最小闭环打通：私聊能对话）。M1 已验收；P0-1（反向实例自监听）已完成。
-M2 各步：配置解析（12）、ModelGateway（13）、故障→话术映射（14）、预算拦截（15）、
-引用决策（16）、会话窗口（17）、Pipeline 主链路（18）。
+**最后更新**：2026-10-25
+**当前阶段**：**M3 已完成**（拟人：状态机 / 发言决策 / 双阶段生成 / 表达层，外加多模态与素材库），
+已合并 `main` 并打标签 `m3-persona`。
+M2 及之前全部完成（私聊能对话）。
 
-**下一步（默认走这条）**：**M3 拟人** —— 状态机（mood/energy/affinity）、发言决策（attention）、
-双阶段生成（内心独白 → 外显）、表达层（拆条/打字延迟/表情）。M2 的 Pipeline 已经是完整的
-消息主链路，M3 是在它上面加 Pipe，不再推倒重来。
+**下一步（默认走这条）**：**M4 管理后台** —— Vue3 工程 + 登录页 + 人设编辑器 + 密钥管理页。
+但**先做一件事**：现在所有配置只能改库或走 HTTP 接口（`modelVision` / `ttsCredentialId` / 素材列表都没有界面），
+M4 的第一页应该是"实例设置"，把 D033/D034 那批字段暴露出来，否则它们实际上是不可用的。
+
+M4 之前可选的一条：**M5 的记忆与自主**里的反思任务——它是唯一能给 `mood`/`SelfState` 长期演化的东西；
+不做它，人格只会"当下像人"，不会"越聊越熟"。
+
+> **多模态要配三样才生效**（都在实例上）：`modelVision`（看图）、`ttsCredentialId` + `ttsModel`（发语音）。
+> 不配就是"能力不存在"——图片只留「[图片]」占位，prompt 里也不提 `[voice]`。
+> **素材库不需要配置**：平台支持发图即可用，模型说 `[save]名字[/save]` 就存，说 `[use]名字[/use]` 就发。
 
 **M2 已完成的完整链路**（`PipelineService.handle`）：
-入站消息 → upsert 会话 + 落库 → 取 owner + 人设 → `buildWindow`（D031）→ 拼 system prompt（D020）
-→ `ModelGateway.chat`（D024 预算 / D025 熔断 / 记账）→ `decideQuote`（D030）→ 出站 + 落库。
+入站消息 → 会话/消息落库 → 取 owner + 人设 + 配置（会话开关）→ 状态衰减 + 关系读取
+→ `buildWindow`（D031）→ **attention 判定（M3，判掉就不花 token）** → 拼 system prompt（D020，含语气提示）
+→ `ModelGateway.chat`（D024 预算 / D025 熔断 / 记账）→ `decideQuote`（D030）→ 出站 + 落库
+→ 状态/关系回写。
 失败走 `faultToSlot` + `decideSpeak` + `resolveFallback`（D028/D026），可能静默。
 
 **另一条路（只在"准备上云"时才走）**：P0-2 部署拓扑选型（Tailscale 组网 vs 公网反代），
@@ -526,6 +535,193 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 
 ---
 
+### ~~第 23 步：M3-4 双阶段生成——内心独白 → 外显~~ ✅ 已完成（D036）
+
+**做了什么**
+
+- [x] `src/modules/mind/reflection/think.ts`：思考指令、宽容解析（容忍解释文字与 ```json 代码块）、
+      `emotion_shift` 夹在 ±0.3、导演指令（**明确"不要说出口"**）
+- [x] `src/modules/mind/reflection/policy.ts`：`behaviorJson.think.enabled` 开关（默认开）
+- [x] Pipeline：A 阶段 `purpose: 'think'`（走 `modelCheap` 记账）→ 独白拼进 system 作为导演指令 →
+      B 阶段主模型生成；**think 失败/不是 JSON 一律退化为单阶段**，不影响回话
+- [x] `emotion_shift` 接 `applyReply({ moodShift })`：mood 终于开始被推动（此前只回归）
+- [x] `Message.thinkJson` 落库：只供排查，**绝不回灌对话历史**
+
+**验收**
+
+- `pnpm test` **452 个用例全绿**（新增 19：think 13 + pipeline 6）
+- `pnpm typecheck` / `pnpm build` 通过
+- `pipeline-smoke` **10 项**全过（新增⑩：`think → chat` 调用序列、独白落库、mood 被推动）
+- `http-smoke` 32 项全过；`pnpm check:local-data` PASSED
+
+**实现补充（后续不要改）**
+
+- **思考不进历史**：进了下一轮，模型就开始"演内心戏"，越演越假。只落 `thinkJson`。
+- **think 失败就退化单阶段**，绝不因为"没思考成"而不回话（D011）。
+- **`want_to_reply` 只影响语气，不做二次否决**：attention 已经决定回不回，模型再否决会出现"叫了不应"。
+- **成本翻倍**：每条消息两次调用（A 用 cheap、B 用主模型）。不要这个成本就设
+  `behaviorJson.think.enabled = false`。
+
+---
+
+### ~~第 22 步：M3-3 表达层——拆条 / 打字延迟 / 回 @ / 会话串行~~ ✅ 已完成（D035）
+
+**做了什么**
+
+- [x] `src/modules/mind/expression/split.ts`：拆条（换行 → 句末标点 → 逗号 → 硬切；
+      单条 ≤40 字、最多 3 条；**超出条数并进最后一条，绝不截断**；短回复不拆）
+- [x] `src/modules/mind/expression/delay.ts`：首条 `0.8s + 字数×0.05s`（±30%），
+      后续 `字数/4.5 秒`；忙碌 ×3、深夜（23:00–07:00）×1.6；总延迟 12s 上限按比例压缩
+- [x] `src/modules/mind/expression/rand.ts`：消息级种子（`seededRand(会话+消息id)`），
+      延迟与拆法的随机可复现；明确**不可用于安全用途**
+- [x] `src/modules/mind/expression/plan.ts`：总装计划（每条的延迟 + 是否回 @）；
+      参数来自 `behaviorJson.expression`，逐字段回落
+- [x] Pipeline：文本按计划拆条发送、图片与语音各自单独一条；**@ 与引用都只挂第一条，
+      已引用则不再 @**；新增 `sleep` 注入点（测试/冒烟不真等）
+- [x] Pipeline **同会话串行**：`instanceId + 会话` 的 promise 队列，后一条等前一条说完
+
+**验收**
+
+- `pnpm test` **433 个用例全绿**（新增 26：expression 22 + pipeline 4）
+- `pnpm typecheck` / `pnpm build` 通过
+- `pipeline-smoke` 9 项全过（含"每条前面都请求了延迟"的断言；媒体/素材的条数断言按新行为更新）
+- `http-smoke` 31 项全过；`pnpm check:local-data` PASSED（227 个已跟踪文件）
+
+**实现补充（后续不要改）**
+
+- **拆条的唯一硬约束是"不丢内容"**：`maxCharsPerSegment` 是目标不是门槛；条数超了并进最后一条。
+- **换行永远分段**：那是用户自己的分段意图，不受"短回复不拆"影响。
+- **延迟只乘不减**，且有总上限（12s）。没有上限时一个 3000 字的回复能把会话卡几十秒。
+- **同会话必须串行**：否则两条消息各自等各自的延迟，最后交错发出，比秒回还假。
+  队列是进程内 Map，丢了只影响"同时来两条"。
+- **随机走消息级种子**，线上"这条怎么慢成这样"可以重放。**它不是密码学随机**。
+- **@ 与引用不重复**：已经引用就不再 @，两者都只挂第一条。
+
+---
+
+### ~~第 21 步：素材库——存图/表情，按别名取用~~ ✅ 已完成（D034）
+
+**做了什么**
+
+- [x] `prisma` 迁移 `media_assets`：`MediaAsset`（`instanceId` + `alias` 唯一、`sha256` 内容去重、
+      `useCount` / `lastUsedAt` / `deletedAt` 软删）；挂 `instanceId`，跨平台不共享（D023）
+- [x] `src/modules/media/assets/`：
+  - `asset.service.ts`：存（别名校验、限额 200 张 / 单张 2MB、内容去重、重名拒绝）、
+    取（按别名 → 本地绝对路径 + 记账）、清单（只给名字，按使用频次排序）
+  - `repositories/prisma-media-asset.repository.ts`：每个方法都带 `instanceId`，`deletedAt: null` 是默认条件
+- [x] `media/intent.ts` 扩两条指令：`[use]名字[/use]`、`[save]名字[/save]`（都独占一行；图片总数共用 2 张上限）
+- [x] `IImageFetcher.fetch()`：素材保存要走**原始字节**（之前只有 data URL 通道）
+- [x] Pipeline：`[save]` → 只存**这条消息里真实存在的图**；`[use]` → 查库取文件，查不到就跳过（不编、不发空消息）
+- [x] prompt：素材清单进能力段（最多 12 条）；**没有素材时不提 `[use]`**，但 `[save]` 一直提
+- [x] 适配器 `mface`（商城/收藏表情）→ 带 url 的 `image`，否则表情包存不进库
+
+**验收**
+
+- `pnpm test` **407 个用例全绿**（新增 25：assets 14 + intent 6 + pipeline 4 + adapter 1）
+- `pnpm typecheck` / `pnpm build` 通过
+- `pipeline-smoke` **9 项**全过（新增⑧存素材落盘、⑨按别名取出并发送 + `useCount` 记账）
+- `http-smoke` 31 项全过；`pnpm check:local-data` PASSED（222 个已跟踪文件）
+
+**实现补充（后续不要改）**
+
+- **别名是唯一入口，不接受 URL**：否则 D033 好不容易堵上的 SSRF 面又开了。
+- **重名拒绝、不覆盖；软删后名字仍占位**：覆盖或复用名字都会让旧对话里的 `[use]` 指到另一张图。
+- **内容去重**：`assets/<sha256>.<ext>`，同一张图只存一份文件，但允许起多个别名。
+- **清单必须跟着 prompt 走**：模型看不到库，只能从清单里挑；清单排序是"常用的、最近用过的"。
+- **已知限制**：保存发生在模型输出之后，存失败时它那句"存好了"仍会发出去（不引入第二轮调用纠正，D034）。
+
+---
+
+### ~~第 20 步：多模态——看图 / 发图 / 发语音~~ ✅ 已完成（D033）
+
+**做了什么**
+
+- [x] `prisma` 迁移 `media_capabilities`：`BotInstance` 增 `modelVision` / `ttsCredentialId` / `ttsModel` /
+      `ttsVoice` / `imageHosts`（全部实例级，随人格走，换 Provider 不动）
+- [x] `src/modules/media/image-url.ts`：远程 URL 白名单与私网拦截（IP 字面量 / 单标签域名 /
+      `*.local` / `user:pass` 全拒），入站允许 http、出站只允许 https
+- [x] `src/modules/media/fetcher.ts`：入站图片下载 → data URL（4MB 上限、8s 超时、失败只丢这一张）
+- [x] `src/modules/media/intent.ts`：媒体指令解析（独占一行、图片 ≤2、语音 ≤300 字）、
+      `stripStrayMediaTags` 防写错的标签漏给用户
+- [x] `src/modules/model/providers/openai-speech.ts` + `src/modules/media/tts.ts`：
+      OpenAI 兼容 `/audio/speech`，按内容 hash 落盘 mp3 并缓存，失败一律降级为文字
+- [x] `ChatMessage.content` 支持段数组；`GatewayInput.model` 支持指定视觉模型，
+      且视觉请求**不参与预算降级**
+- [x] Pipeline：入站图片挂在**当前这条**消息上（历史图不重发）；出站"文本+图片一条、语音单独一条"；
+      平台不支持语音时把语音内容改说成文字
+- [x] prompt 增「媒体能力」段：只列真的可用的通道
+- [x] **修 M2 遗留缺陷**：主链路按 owner 取 DEK（`RuntimeKeyStore.getForUser`），
+      此前用 chat session id 查密钥库，真机上必然拿不到 → 消息全被静默吞掉
+
+**验收**
+
+- `pnpm test` **382 个用例全绿**（新增 43：media 28 + pipeline 媒体 8 + prompt 4 + key store 4，另有既有夹具调整）
+- `pnpm typecheck` / `pnpm build` 通过
+- `pipeline-smoke` **7 项**全过（新增⑦：模型回"图片+语音"→ 发出 2 条，语音文件真实落盘）
+- `http-smoke` 31 项全过（独立库、端口 3111）
+- `pnpm check:local-data` PASSED（210 个已跟踪文件）
+
+**实现补充（后续不要改）**
+
+- **没配就不提**：prompt 里的媒体能力段由配置驱动。没配 TTS 就不写 `[voice]` ——
+  否则模型会说"我发你语音"，然后什么都没有。
+- **校验失败就丢，不原样发给用户**：`[img]http://127.0.0.1/...[/img]` 这类留在正文里就是垃圾。
+- **语音文件用内容 hash 命名**（`data/media/tts/<sha256 前 32 位>.mp3`），绝不用模型文本拼路径。
+  同一句话只存一份 = 天然缓存。**目前没有自动清理**（M6 的 worker 按 mtime 保留 N 天）。
+- **出站图片只在 https 白名单（可选）内**：图片是协议端去下载的，链到内网等于让它当内网探测器。
+- **语音失败 → 文字兜底**，包括"平台不支持语音"这种情况（`voiceAsText`），不要让回复凭空消失。
+
+---
+
+### ~~第 19 步：M3-1/2 状态机 + 发言决策~~ ✅ 已完成
+
+**做了什么**
+
+- [x] `src/modules/mind/state/mind-state.ts`：`mood` 每小时向基线回归 8%；
+      `energy` 按 24 小时作息曲线收敛（τ=2.5h，深夜 0.40 / 上午 0.88 / 午后低谷 0.72）；
+      回一条扣 0.02；过期的 `busyUntil` 由衰减顺手清空
+- [x] `src/modules/mind/state/relationship.ts`：亲密度单次涨幅 = 私聊回话 1 / 群聊 0.6 /
+      只读不回 0.2，被 @ 再 +0.4，长消息最多 +0.4，单次封顶 2；7 天宽限期后每天 -1
+- [x] `src/modules/mind/state/ports.ts` + `prisma-mind-state.repository.ts`：
+      `AgentState` / `Relationship` 两张表按实例 upsert
+- [x] `src/modules/mind/attention/policy.ts`：从 `Persona.behaviorJson.attention` 解析阈值与权重，
+      **逐字段回落**默认（一个字段写错不连累其它字段）
+- [x] `src/modules/mind/attention/attention.ts`：`wake` 公式 + 阈值判定；
+      **群里被 @ 必回**（硬规则，不受阈值与精力影响）；`busy` 只抬高群聊阈值，不影响私聊
+- [x] `src/modules/mind/attention/signals.ts`：`followUp`（上一条是它说的，10 分钟内）与
+      `groupActivity`（10 分钟内条数 / 12）都从会话窗口推，不新增查询
+- [x] `persona/prompt.ts` 新增「语气提示」段（D020 顺序最后一段）：只在精力/情绪偏离常态时说话，
+      且说现象不说指令
+- [x] Pipeline 接入：配置提前读（会话开关）、状态先衰减再判定、判定不回则**不调模型**、
+      两条路径都回写状态与关系；状态层异常一律吞掉，不影响对话
+- [x] `scripts/pipeline-smoke.ts` 扩到 6 项：真实 SQL 验证 `AgentState` 单行 upsert 与
+      `Relationship` 亲密度增长
+
+**验收**
+
+- `pnpm test` **338 个用例全绿**（新增 43：state 11 + relationship 10 + attention 10 + policy 4 + prompt 4 + pipeline 4）
+- `pnpm typecheck` / `pnpm build` 通过
+- `pipeline-smoke` 6 项全过（energy 0.740 / affinity 3）
+- `http-smoke` 31 项全过（独立库 `zk.db`、端口 3111）
+- `pnpm check:local-data` PASSED（199 个已跟踪文件）
+
+**实现补充（后续不要改）**
+
+- **衰减的起点只有一个**：每次衰减的量都按 `lastDecayAt → now` 算，返回值的 `lastDecayAt` 推进到 `now`。
+  这样"漏写库一次"只会让下次从更早的起点重算（结果相同），不会叠加衰减。精力一旦写成
+  "每次调用扣一点"，查询与定时任务都会偷偷扣，最后表现为"人格莫名其妙没精神了"。
+- **时钟回拨不衰减**，但 `busyUntil` 是否过期照常判断——它是"此刻的事实"，与经过多少时间无关。
+- **`mood` 目前没有推动来源**：只有回归基线。真正的推动量来自 M3-4 内心独白的 `emotion_shift`；
+  现在凭文本猜情绪等于瞎猜，猜错比不动更糟。所以提示词里 mood 只在 `|mood| ≥ 0.25` 时出现，
+  日常几乎不会触发——这是刻意留白，不是漏做。
+- **attention 在网关之前**，这是它省钱的地方；因此它**看不到模型输出**，只判"要不要开口"，
+  判错了最多少说一句，不会答错。
+- **不用随机数**：同一组输入永远同一结论（可复现、可精确断言）。"偶尔看一眼不回"的随机性由
+  状态变化体现（精力在掉、亲密度在涨），比扔骰子更接近真实原因（D032）。
+- **会话静默 / 人工接管时连状态都不写**：那时说话的"不是它"，算进亲密度会让关系变成客服的关系。
+- **亲密度衰减只在写库时算一次**，算完把 `lastInteractionAt` 推到 now。写成"每次调用都扣一点"
+  会让同一段空窗被反复扣到归零。
+
 ---
 
 ## 任务看板
@@ -580,10 +776,12 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 
 ### M3 拟人
 
-- [ ] 状态机（mood / energy / affinity）
-- [ ] 发言决策器
-- [ ] 双阶段生成（内心独白 → 外显）
-- [ ] 表达层（拆条 / 打字延迟 / 表情）
+- [x] 状态机（mood / energy / affinity）—— `mind/state/`（第 19 步，D032）
+- [x] 发言决策器 —— `mind/attention/`，判定在调模型之前（第 19 步，D032）
+- [x] 多模态：看图 / 用图片回复 / 发语音（第 20 步，D033）
+- [x] 素材库：存表情/图片、按别名取用（第 21 步，D034）
+- [x] 双阶段生成（内心独白 → 外显）—— 第 23 步，`mind/reflection/`（D036）
+- [x] 表达层（拆条 / 打字延迟 / 回 @ / 会话串行）—— 第 22 步，`mind/expression/`（D035）
 - [x] **是否引用上一条** —— 机制已就位（D030，`persona/quote.ts` + `Persona.quoteTendency`），
       M3 接出站时调用 `decideQuote()` 即可。引用不是默认行为：真人只在这一句需要指回上文时才引用。
       M1 的占位回声曾经无条件引用（`replyToMessageId`），看着很机械，已去掉；协议层能力保留。
@@ -649,6 +847,12 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 - [x] 2026-10-24 **引用决策（D030）**：必要性硬判 + 人格倾向概率，模型不参与；未决问题 6 定稿
 - [x] 2026-10-24 **会话窗口（D031）**：target 必在窗口、after 优先、afterTotals 用未裁剪统计；真实库冒烟
 - [x] 2026-10-24 **Pipeline 主链路（M2 收尾）**：会话/消息落库 + prompt 拼装 + 网关 + 引用 + 兜底，替换 pong 占位；295 单测
+- [x] 2026-10-25 **状态机与发言决策（M3-1/2，D032）**：mood/energy 纯函数衰减 + 亲密度累积、attention 判定前置到网关之前（判掉不花 token）、状态与关系回写 Pipeline；338 单测
+- [x] 2026-10-25 **多模态（D033）**：入站图片转多模态消息（独立视觉模型）、模型用独占行标记决定发图/发语音、TTS 落盘 mp3、出站 URL 白名单；顺带修掉"主链路按 chat session id 取 DEK"的 M2 缺陷；382 单测
+- [x] 2026-10-25 **素材库（D034）**：`MediaAsset` 表 + `[save]`/`[use]` 指令 + prompt 清单，别名唯一入口、内容去重、重名拒绝；适配器补 `mface → image`；407 单测、pipeline-smoke 9 项
+- [x] 2026-10-25 **表达层（D035）**：拆条 / 打字延迟 / 回 @ / 同会话串行 + 消息级可复现随机；433 单测
+- [x] 2026-10-25 **双阶段生成（D036）**：think（modelCheap，JSON 独白）→ 导演指令 → 外显；emotion_shift 推动 mood；452 单测、pipeline-smoke 10 项
+- [x] 2026-10-25 **M3 合并**：`feat/m3-mind` `--no-ff` 合入 `main`，打标签 `m3-persona`
 
 ---
 
@@ -692,3 +896,8 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 | 2026-10-24 | 追加 **D024**：预算挂人格（`BotInstance`），超限 `downgrade`/`block`；删除 `Credential` 上的预算字段；迁移 `budget_moves_to_instance`；144 单测全绿 |
 | 2026-10-24 | 追加 **D023**：人格与记忆作用域 = 单个社交平台账号；撤回 `Agent` 层（迁移 `persona_scope_back_to_instance`），D020 归属段作废、四层结构与演化闸门保留；143 单测全绿 |
 | 2026-10-24 | 建立分支纪律：M0 收尾与 M1 骨架分两次提交到 `feat/m1-adapter-and-instance`，合并前 typecheck / 112 单测 / build / 31 项冒烟 / 数据闸门全绿，`--no-ff` 合并并打标签 `m1-skeleton` |
+| 2026-10-25 | M3 开工：状态机（mood/energy 纯函数衰减 + 亲密度累积/衰减）与发言决策（attention 前置到网关之前、群里被 @ 必回、busy 只影响群聊）落地并接入 Pipeline；338 单测、pipeline-smoke 6 项、http-smoke 31 项全过；追加 **D032** |
+| 2026-10-25 | 多模态落地（D033）：`media/` 模块（URL 白名单、入站图片抓取、媒体意图解析、TTS）+ 实例字段迁移 `media_capabilities` + Pipeline 出站多媒体；修复主链路 DEK 取用键错误；382 单测、pipeline-smoke 7 项全过 |
+| 2026-10-25 | 素材库落地（D034）：`MediaAsset` 迁移 + `assets/` 服务与仓储 + `[save]`/`[use]` 指令 + prompt 清单 + 适配器 `mface` 映射；407 单测、pipeline-smoke 9 项全过 |
+| 2026-10-25 | 表达层落地（D035）：拆条（不丢内容）/ 打字延迟（只乘不减、12s 上限）/ 回 @ / 同会话串行 / 消息级种子；文本、图片、语音分开发；433 单测 |
+| 2026-10-25 | 双阶段生成落地（D036）+ M3 收尾：think→导演指令→外显、独白落库不回灌、emotion_shift 推动 mood；452 单测 / smoke 10 项 / http-smoke 32 项全过；合并 main 打标签 `m3-persona` |

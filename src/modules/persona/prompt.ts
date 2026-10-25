@@ -37,6 +37,24 @@ export type PromptContext = {
   channel: 'private' | 'group';
   /** 机器人自己的名字 */
   selfName: string;
+  /**
+   * 对话能力（D033）：只把**这台机器真的能做**的事写进 prompt。
+   * 没配 TTS 就不提语音 —— 模型不会去用一个它不知道不存在的通道，
+   * 而"提了但发不出去"会表现为它说了"我发你语音"然后什么都没发。
+   */
+  capabilities?: {
+    imageReply: boolean;
+    voiceReply: boolean;
+    /** 素材库里的别名（D034）：模型只能从这些名字里挑 */
+    assets?: string[];
+  } | null;
+  /**
+   * 瞬态状态（M3）：只影响"语气提示"，不参与人格设定。
+   *
+   * 为什么不写进种子：种子是"它出生时是什么人"，state 是"它此刻累不累"。
+   * 混在一起会让模型把"你现在很困"当成性格的一部分，睡一觉就该变的东西被写死。
+   */
+  state?: { mood: number; energy: number } | null;
 };
 
 /** 拼装产物：system 消息 + few-shot 对话（examples 作为 user/assistant 成对塞进 messages 前） */
@@ -192,6 +210,73 @@ function buildBoundariesSection(seed: PersonaSeed): string {
 // ─────────────────────────── 主入口 ───────────────────────────
 
 /**
+ * 语气提示（M3）：把瞬态状态翻译成一句"此刻的感觉"。
+ *
+ * 两条纪律：
+ * 1. **只在偏离常态时说话**。精力 0.8 是默认值，每个 prompt 都写一句"你现在很精神"
+ *    等于噪声，还会被模型当成设定去演。
+ * 2. **说现象，不说指令**。写"回话会很短"而不是"请把回复控制在 20 字内"——后者是
+ *    运维式指令，模型会照做，但语气会僵。
+ */
+/**
+ * 媒体能力说明（D033）。
+ *
+ * 为什么用"独占一行的标记"而不是让它自然语言描述：
+ * 自然语言（"我发你一张图"）无法被执行，只会变成一句空话。
+ * 标记必须独占一行，是为了让正文里顺手提到 `[img]` 时不被误判成指令。
+ */
+function buildMediaSection(capabilities: PromptContext['capabilities']): string {
+  if (!capabilities || (!capabilities.imageReply && !capabilities.voiceReply)) {
+    return '';
+  }
+  const assets = capabilities.assets ?? [];
+  const lines = ['你手上的聊天工具还支持这些，规则要严格遵守：'];
+  if (capabilities.imageReply) {
+    lines.push(
+      '- 想把一张图片发给对方时，单独写一行：[img]图片链接[/img]。链接必须是你真的确定存在的公开 https 图片地址；拿不准就别发。',
+    );
+  }
+  // 没存过任何素材时**不提** [use]：否则模型会编一个名字，然后发不出去
+  if (capabilities.imageReply && assets.length > 0) {
+    lines.push(
+      `- 你手边存着这些图，想发其中一张就单独写一行：[use]名字[/use]。现在有：${assets.join('、')}。只能用这些名字，不要编。`,
+    );
+  }
+  if (capabilities.imageReply) {
+    lines.push(
+      '- 对方发了图你想留着以后用，就单独写一行：[save]给它起的名字[/save]（两到六个字，好记、别和已有的重名）。',
+    );
+  }
+  if (capabilities.voiceReply) {
+    lines.push(
+      '- 想用语音说一句时，单独写一行：[voice]要说的话[/voice]。语音适合短句和带情绪的回应，不适合念长段。',
+    );
+  }
+  lines.push(
+    '这些标记不要解释、不要和别的字写在同一行；大部分时候还是正常打字，用多了很假。',
+  );
+  return lines.join('\n');
+}
+
+function buildToneSection(state: PromptContext['state']): string {
+  if (!state) {
+    return '';
+  }
+  const lines: string[] = [];
+  if (state.energy < 0.3) {
+    lines.push('你现在很困，回话会很短，也懒得展开。');
+  } else if (state.energy < 0.55) {
+    lines.push('你有点累了，说话比平时简短。');
+  }
+  if (state.mood <= -0.25) {
+    lines.push('你现在的情绪不太好，语气比平时冲一些。');
+  } else if (state.mood >= 0.25) {
+    lines.push('你现在心情不错，语气松一些。');
+  }
+  return lines.join('');
+}
+
+/**
  * 拼装 system prompt。
  *
  * 返回值里的 `examples` 是 few-shot，调用方要把它**插到对话历史之前**，
@@ -233,6 +318,18 @@ export function assemblePrompt(seed: PersonaSeed, context: PromptContext): Assem
   const boundaries = buildBoundariesSection(seed);
   if (boundaries) {
     sections.push(boundaries);
+  }
+
+  // ⑧ 媒体能力（D033）：只列真的可用的通道
+  const media = buildMediaSection(context.capabilities);
+  if (media) {
+    sections.push(media);
+  }
+
+  // ⑨ 语气提示（D020 顺序的最后一段）：此刻累不累、心情如何
+  const tone = buildToneSection(context.state);
+  if (tone) {
+    sections.push(tone);
   }
 
   return {

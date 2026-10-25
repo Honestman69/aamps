@@ -34,6 +34,21 @@ const modelNameSchema = z.string().trim().min(1).max(120);
 const temperatureSchema = z.number().min(0).max(1.5);
 /** 超限策略：降级继续聊，还是直接拒答 */
 const budgetPolicySchema = z.enum(['downgrade', 'block']);
+/** 音色名：厂商相关，只做长度与空白校验，不猜合法取值 */
+const ttsVoiceSchema = z.string().trim().min(1).max(60);
+/** 图片域名白名单：逗号分隔，空串 = 不限（仍受私网拦截约束，见 D033） */
+const imageHostsSchema = z
+  .string()
+  .max(500)
+  .refine(
+    (value) =>
+      value
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .every((host) => /^[a-z0-9.-]+$/i.test(host)),
+    { message: '只填域名（逗号分隔），不要带协议、路径或端口' },
+  );
 
 export const createInstanceSchema = z
   .object({
@@ -57,6 +72,12 @@ export const createInstanceSchema = z
     modelCheap: modelNameSchema.nullable().optional(),
     modelFallback: modelNameSchema.nullable().optional(),
     modelTemperature: temperatureSchema.optional(),
+    /** 多模态（D033）：不填 = 该能力关闭 */
+    modelVision: modelNameSchema.nullable().optional(),
+    ttsCredentialId: z.string().trim().min(1).max(64).nullable().optional(),
+    ttsModel: modelNameSchema.nullable().optional(),
+    ttsVoice: ttsVoiceSchema.optional(),
+    imageHosts: imageHostsSchema.optional(),
   })
   .strict();
 
@@ -79,6 +100,11 @@ export const updateInstanceSchema = z
     modelCheap: modelNameSchema.nullable().optional(),
     modelFallback: modelNameSchema.nullable().optional(),
     modelTemperature: temperatureSchema.optional(),
+    modelVision: modelNameSchema.nullable().optional(),
+    ttsCredentialId: z.string().trim().min(1).max(64).nullable().optional(),
+    ttsModel: modelNameSchema.nullable().optional(),
+    ttsVoice: ttsVoiceSchema.optional(),
+    imageHosts: imageHostsSchema.optional(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, { message: '至少提供一个要修改的字段' });
@@ -112,6 +138,12 @@ export type InstancePublicDTO = {
   modelCheap: string | null;
   modelFallback: string | null;
   modelTemperature: number;
+  /** 多模态（D033）：模型/Key 为空表示该能力关闭 */
+  modelVision: string | null;
+  ttsCredentialId: string | null;
+  ttsModel: string | null;
+  ttsVoice: string;
+  imageHosts: string;
   status: string;
   createdAt: string;
   updatedAt: string;
@@ -136,6 +168,11 @@ export function toInstanceDTO(row: InstancePublicRow): InstancePublicDTO {
     modelCheap: row.modelCheap,
     modelFallback: row.modelFallback,
     modelTemperature: row.modelTemperature,
+    modelVision: row.modelVision,
+    ttsCredentialId: row.ttsCredentialId,
+    ttsModel: row.ttsModel,
+    ttsVoice: row.ttsVoice,
+    imageHosts: row.imageHosts,
     status: row.status,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),

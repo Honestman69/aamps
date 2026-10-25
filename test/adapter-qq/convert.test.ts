@@ -116,6 +116,24 @@ describe('OneBot → InboundMessage', () => {
     expect(msg!.segments[0]).toEqual({ type: 'text', text: '你好[CQ:face,id=1]' });
   });
 
+  it('maps mface with url to image（表情包要能进素材库）', () => {
+    const msg = toInboundMessage(
+      {
+        post_type: 'message',
+        message_type: 'private',
+        message_id: 9,
+        user_id: 20002,
+        message: [
+          { type: 'mface', data: { summary: '商城表情', url: 'https://gxh.vip.qq.com/x.png' } },
+        ],
+      },
+      CTX,
+    );
+
+    expect(msg!.segments[0]).toEqual({ type: 'image', url: 'https://gxh.vip.qq.com/x.png' });
+    expect(msg!.plainText).toBe('[图片]');
+  });
+
   it('maps unknown segment types to unknown without leaking the payload as text', () => {
     const msg = toInboundMessage(
       {

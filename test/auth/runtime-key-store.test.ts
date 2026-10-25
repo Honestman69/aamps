@@ -88,3 +88,36 @@ describe('RuntimeKeyStore', () => {
     expect(() => store.set('s1', 'u1', Buffer.alloc(16))).toThrow(/32 字节/);
   });
 });
+
+describe('按用户取 DEK（消息主链路用）', () => {
+  it('任一未过期会话都能取到该用户的 DEK（消息不来自浏览器会话）', () => {
+    const store = new RuntimeKeyStore();
+    const dek = randomDek();
+    store.set('browser-session', 'u1', dek);
+
+    const got = store.getForUser('u1');
+    expect(got.equals(dek)).toBe(true);
+  });
+
+  it('别的用户拿不到别人的 DEK', () => {
+    const store = new RuntimeKeyStore();
+    store.set('s1', 'u1', randomDek());
+    expect(() => store.getForUser('u2')).toThrow(KeyLockedError);
+  });
+
+  it('过期的解锁态不算数', () => {
+    const clock = controlledClock();
+    const store = new RuntimeKeyStore(clock.now);
+    store.set('s1', 'u1', randomDek(), 1000);
+    clock.advance(2000);
+
+    expect(() => store.getForUser('u1')).toThrow(KeyLockedError);
+  });
+
+  it('清掉会话后也取不到', () => {
+    const store = new RuntimeKeyStore();
+    store.set('s1', 'u1', randomDek());
+    store.clear('s1');
+    expect(() => store.getForUser('u1')).toThrow(KeyLockedError);
+  });
+});
