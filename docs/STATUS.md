@@ -6,7 +6,7 @@
 > 仓库里没有 `.env`、没有数据库，直接 `pnpm dev` 会失败。
 
 **最后更新**：2026-10-25
-**当前阶段**：**M3 进行中** —— M3-1 状态机、M3-2 发言决策、**多模态（看图 / 发图 / 发语音，D033）** 已完成并接入 Pipeline。
+**当前阶段**：**M3 进行中** —— M3-1 状态机、M3-2 发言决策、多模态（D033）、**素材库（D034）** 已完成并接入 Pipeline。
 M2 及之前全部完成（私聊能对话）。
 
 **下一步（默认走这条）**：**M3-3 表达层（express）** —— 拆条（单条 ≤40 字，最多 3 条）、
@@ -17,6 +17,7 @@ M2 及之前全部完成（私聊能对话）。
 
 > **多模态要配三样才生效**（都在实例上）：`modelVision`（看图）、`ttsCredentialId` + `ttsModel`（发语音）。
 > 不配就是"能力不存在"——图片只留「[图片]」占位，prompt 里也不提 `[voice]`。
+> **素材库不需要配置**：平台支持发图即可用，模型说 `[save]名字[/save]` 就存，说 `[use]名字[/use]` 就发。
 
 **M2 已完成的完整链路**（`PipelineService.handle`）：
 入站消息 → 会话/消息落库 → 取 owner + 人设 + 配置（会话开关）→ 状态衰减 + 关系读取
@@ -532,6 +533,39 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 
 ---
 
+### ~~第 21 步：素材库——存图/表情，按别名取用~~ ✅ 已完成（D034）
+
+**做了什么**
+
+- [x] `prisma` 迁移 `media_assets`：`MediaAsset`（`instanceId` + `alias` 唯一、`sha256` 内容去重、
+      `useCount` / `lastUsedAt` / `deletedAt` 软删）；挂 `instanceId`，跨平台不共享（D023）
+- [x] `src/modules/media/assets/`：
+  - `asset.service.ts`：存（别名校验、限额 200 张 / 单张 2MB、内容去重、重名拒绝）、
+    取（按别名 → 本地绝对路径 + 记账）、清单（只给名字，按使用频次排序）
+  - `repositories/prisma-media-asset.repository.ts`：每个方法都带 `instanceId`，`deletedAt: null` 是默认条件
+- [x] `media/intent.ts` 扩两条指令：`[use]名字[/use]`、`[save]名字[/save]`（都独占一行；图片总数共用 2 张上限）
+- [x] `IImageFetcher.fetch()`：素材保存要走**原始字节**（之前只有 data URL 通道）
+- [x] Pipeline：`[save]` → 只存**这条消息里真实存在的图**；`[use]` → 查库取文件，查不到就跳过（不编、不发空消息）
+- [x] prompt：素材清单进能力段（最多 12 条）；**没有素材时不提 `[use]`**，但 `[save]` 一直提
+- [x] 适配器 `mface`（商城/收藏表情）→ 带 url 的 `image`，否则表情包存不进库
+
+**验收**
+
+- `pnpm test` **407 个用例全绿**（新增 25：assets 14 + intent 6 + pipeline 4 + adapter 1）
+- `pnpm typecheck` / `pnpm build` 通过
+- `pipeline-smoke` **9 项**全过（新增⑧存素材落盘、⑨按别名取出并发送 + `useCount` 记账）
+- `http-smoke` 31 项全过；`pnpm check:local-data` PASSED（222 个已跟踪文件）
+
+**实现补充（后续不要改）**
+
+- **别名是唯一入口，不接受 URL**：否则 D033 好不容易堵上的 SSRF 面又开了。
+- **重名拒绝、不覆盖；软删后名字仍占位**：覆盖或复用名字都会让旧对话里的 `[use]` 指到另一张图。
+- **内容去重**：`assets/<sha256>.<ext>`，同一张图只存一份文件，但允许起多个别名。
+- **清单必须跟着 prompt 走**：模型看不到库，只能从清单里挑；清单排序是"常用的、最近用过的"。
+- **已知限制**：保存发生在模型输出之后，存失败时它那句"存好了"仍会发出去（不引入第二轮调用纠正，D034）。
+
+---
+
 ### ~~第 20 步：多模态——看图 / 发图 / 发语音~~ ✅ 已完成（D033）
 
 **做了什么**
@@ -679,6 +713,7 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 - [x] 状态机（mood / energy / affinity）—— `mind/state/`（第 19 步，D032）
 - [x] 发言决策器 —— `mind/attention/`，判定在调模型之前（第 19 步，D032）
 - [x] 多模态：看图 / 用图片回复 / 发语音（第 20 步，D033）
+- [x] 素材库：存表情/图片、按别名取用（第 21 步，D034）
 - [ ] 双阶段生成（内心独白 → 外显）—— 下一步 M3-4；`emotion_shift` 接 `applyReply({ moodShift })`
 - [ ] 表达层（拆条 / 打字延迟 / 表情）—— 下一步 M3-3，落在 `mind/expression/`
 - [x] **是否引用上一条** —— 机制已就位（D030，`persona/quote.ts` + `Persona.quoteTendency`），
@@ -748,6 +783,7 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 - [x] 2026-10-24 **Pipeline 主链路（M2 收尾）**：会话/消息落库 + prompt 拼装 + 网关 + 引用 + 兜底，替换 pong 占位；295 单测
 - [x] 2026-10-25 **状态机与发言决策（M3-1/2，D032）**：mood/energy 纯函数衰减 + 亲密度累积、attention 判定前置到网关之前（判掉不花 token）、状态与关系回写 Pipeline；338 单测
 - [x] 2026-10-25 **多模态（D033）**：入站图片转多模态消息（独立视觉模型）、模型用独占行标记决定发图/发语音、TTS 落盘 mp3、出站 URL 白名单；顺带修掉"主链路按 chat session id 取 DEK"的 M2 缺陷；382 单测
+- [x] 2026-10-25 **素材库（D034）**：`MediaAsset` 表 + `[save]`/`[use]` 指令 + prompt 清单，别名唯一入口、内容去重、重名拒绝；适配器补 `mface → image`；407 单测、pipeline-smoke 9 项
 
 ---
 
@@ -793,3 +829,4 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 | 2026-10-24 | 建立分支纪律：M0 收尾与 M1 骨架分两次提交到 `feat/m1-adapter-and-instance`，合并前 typecheck / 112 单测 / build / 31 项冒烟 / 数据闸门全绿，`--no-ff` 合并并打标签 `m1-skeleton` |
 | 2026-10-25 | M3 开工：状态机（mood/energy 纯函数衰减 + 亲密度累积/衰减）与发言决策（attention 前置到网关之前、群里被 @ 必回、busy 只影响群聊）落地并接入 Pipeline；338 单测、pipeline-smoke 6 项、http-smoke 31 项全过；追加 **D032** |
 | 2026-10-25 | 多模态落地（D033）：`media/` 模块（URL 白名单、入站图片抓取、媒体意图解析、TTS）+ 实例字段迁移 `media_capabilities` + Pipeline 出站多媒体；修复主链路 DEK 取用键错误；382 单测、pipeline-smoke 7 项全过 |
+| 2026-10-25 | 素材库落地（D034）：`MediaAsset` 迁移 + `assets/` 服务与仓储 + `[save]`/`[use]` 指令 + prompt 清单 + 适配器 `mface` 映射；407 单测、pipeline-smoke 9 项全过 |
