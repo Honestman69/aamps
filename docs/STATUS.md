@@ -6,17 +6,16 @@
 > 仓库里没有 `.env`、没有数据库，直接 `pnpm dev` 会失败。
 
 **最后更新**：2026-10-25
-**当前阶段**：**M3 收尾** —— M3-1 状态机、M3-2 发言决策、多模态（D033）、素材库（D034）、
-**M3-3 表达层（D035）** 已完成并接入 Pipeline。只剩 M3-4 双阶段生成。
+**当前阶段**：**M3 已完成**（拟人：状态机 / 发言决策 / 双阶段生成 / 表达层，外加多模态与素材库），
+已合并 `main` 并打标签 `m3-persona`。
 M2 及之前全部完成（私聊能对话）。
 
-**下一步（默认走这条）**：**M3-4 双阶段生成（think）** —— 先让模型输出一段结构化内心独白
-（`want_to_reply` / `emotion_shift` / `intent` / `tone` / `length_hint`），再把它当"导演指令"喂给第二次调用
-产出真正发出的文本。落地点：`src/modules/mind/reflection/`（think 用 `purpose: 'think'` + `modelCheap`），
-出口仍是 `PipelineService.deliver`。**`emotion_shift` 接 `applyReply({ moodShift })`**，
-把现在只回归不推动的 mood 真正用起来。
+**下一步（默认走这条）**：**M4 管理后台** —— Vue3 工程 + 登录页 + 人设编辑器 + 密钥管理页。
+但**先做一件事**：现在所有配置只能改库或走 HTTP 接口（`modelVision` / `ttsCredentialId` / 素材列表都没有界面），
+M4 的第一页应该是"实例设置"，把 D033/D034 那批字段暴露出来，否则它们实际上是不可用的。
 
-M3 收尾后按纪律合并 `feat/m3-mind` → `main` 并打标签 `m3-persona`。
+M4 之前可选的一条：**M5 的记忆与自主**里的反思任务——它是唯一能给 `mood`/`SelfState` 长期演化的东西；
+不做它，人格只会"当下像人"，不会"越聊越熟"。
 
 > **多模态要配三样才生效**（都在实例上）：`modelVision`（看图）、`ttsCredentialId` + `ttsModel`（发语音）。
 > 不配就是"能力不存在"——图片只留「[图片]」占位，prompt 里也不提 `[voice]`。
@@ -536,6 +535,35 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 
 ---
 
+### ~~第 23 步：M3-4 双阶段生成——内心独白 → 外显~~ ✅ 已完成（D036）
+
+**做了什么**
+
+- [x] `src/modules/mind/reflection/think.ts`：思考指令、宽容解析（容忍解释文字与 ```json 代码块）、
+      `emotion_shift` 夹在 ±0.3、导演指令（**明确"不要说出口"**）
+- [x] `src/modules/mind/reflection/policy.ts`：`behaviorJson.think.enabled` 开关（默认开）
+- [x] Pipeline：A 阶段 `purpose: 'think'`（走 `modelCheap` 记账）→ 独白拼进 system 作为导演指令 →
+      B 阶段主模型生成；**think 失败/不是 JSON 一律退化为单阶段**，不影响回话
+- [x] `emotion_shift` 接 `applyReply({ moodShift })`：mood 终于开始被推动（此前只回归）
+- [x] `Message.thinkJson` 落库：只供排查，**绝不回灌对话历史**
+
+**验收**
+
+- `pnpm test` **452 个用例全绿**（新增 19：think 13 + pipeline 6）
+- `pnpm typecheck` / `pnpm build` 通过
+- `pipeline-smoke` **10 项**全过（新增⑩：`think → chat` 调用序列、独白落库、mood 被推动）
+- `http-smoke` 32 项全过；`pnpm check:local-data` PASSED
+
+**实现补充（后续不要改）**
+
+- **思考不进历史**：进了下一轮，模型就开始"演内心戏"，越演越假。只落 `thinkJson`。
+- **think 失败就退化单阶段**，绝不因为"没思考成"而不回话（D011）。
+- **`want_to_reply` 只影响语气，不做二次否决**：attention 已经决定回不回，模型再否决会出现"叫了不应"。
+- **成本翻倍**：每条消息两次调用（A 用 cheap、B 用主模型）。不要这个成本就设
+  `behaviorJson.think.enabled = false`。
+
+---
+
 ### ~~第 22 步：M3-3 表达层——拆条 / 打字延迟 / 回 @ / 会话串行~~ ✅ 已完成（D035）
 
 **做了什么**
@@ -752,7 +780,7 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 - [x] 发言决策器 —— `mind/attention/`，判定在调模型之前（第 19 步，D032）
 - [x] 多模态：看图 / 用图片回复 / 发语音（第 20 步，D033）
 - [x] 素材库：存表情/图片、按别名取用（第 21 步，D034）
-- [ ] 双阶段生成（内心独白 → 外显）—— 下一步 M3-4；`emotion_shift` 接 `applyReply({ moodShift })`
+- [x] 双阶段生成（内心独白 → 外显）—— 第 23 步，`mind/reflection/`（D036）
 - [x] 表达层（拆条 / 打字延迟 / 回 @ / 会话串行）—— 第 22 步，`mind/expression/`（D035）
 - [x] **是否引用上一条** —— 机制已就位（D030，`persona/quote.ts` + `Persona.quoteTendency`），
       M3 接出站时调用 `decideQuote()` 即可。引用不是默认行为：真人只在这一句需要指回上文时才引用。
@@ -823,6 +851,8 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 - [x] 2026-10-25 **多模态（D033）**：入站图片转多模态消息（独立视觉模型）、模型用独占行标记决定发图/发语音、TTS 落盘 mp3、出站 URL 白名单；顺带修掉"主链路按 chat session id 取 DEK"的 M2 缺陷；382 单测
 - [x] 2026-10-25 **素材库（D034）**：`MediaAsset` 表 + `[save]`/`[use]` 指令 + prompt 清单，别名唯一入口、内容去重、重名拒绝；适配器补 `mface → image`；407 单测、pipeline-smoke 9 项
 - [x] 2026-10-25 **表达层（D035）**：拆条 / 打字延迟 / 回 @ / 同会话串行 + 消息级可复现随机；433 单测
+- [x] 2026-10-25 **双阶段生成（D036）**：think（modelCheap，JSON 独白）→ 导演指令 → 外显；emotion_shift 推动 mood；452 单测、pipeline-smoke 10 项
+- [x] 2026-10-25 **M3 合并**：`feat/m3-mind` `--no-ff` 合入 `main`，打标签 `m3-persona`
 
 ---
 
@@ -870,3 +900,4 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 | 2026-10-25 | 多模态落地（D033）：`media/` 模块（URL 白名单、入站图片抓取、媒体意图解析、TTS）+ 实例字段迁移 `media_capabilities` + Pipeline 出站多媒体；修复主链路 DEK 取用键错误；382 单测、pipeline-smoke 7 项全过 |
 | 2026-10-25 | 素材库落地（D034）：`MediaAsset` 迁移 + `assets/` 服务与仓储 + `[save]`/`[use]` 指令 + prompt 清单 + 适配器 `mface` 映射；407 单测、pipeline-smoke 9 项全过 |
 | 2026-10-25 | 表达层落地（D035）：拆条（不丢内容）/ 打字延迟（只乘不减、12s 上限）/ 回 @ / 同会话串行 / 消息级种子；文本、图片、语音分开发；433 单测 |
+| 2026-10-25 | 双阶段生成落地（D036）+ M3 收尾：think→导演指令→外显、独白落库不回灌、emotion_shift 推动 mood；452 单测 / smoke 10 项 / http-smoke 32 项全过；合并 main 打标签 `m3-persona` |

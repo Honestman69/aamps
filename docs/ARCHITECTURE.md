@@ -301,6 +301,12 @@ prompt 要求模型先输出一段结构化思考：
 
 成本控制：`length_hint` 短时 A 阶段可以用小模型/低 temperature，B 阶段才用主力模型。
 
+> **实现现状（M3-4，见 D036）**：`src/modules/mind/reflection/` 已落地。A 阶段走
+> `gateway.chat({ purpose: 'think' })`（`modelCheap` 记账），B 阶段把独白翻译成"导演指令"拼进 system。
+> 与上式的差异：`want_to_reply` **不参与"要不要回"的判断**（那只影响语气），
+> 因为 attention 已经决定过；思考只落 `Message.thinkJson`，**绝不回灌历史**。
+> 失败（解析不出 JSON / 调用报错）→ 退化为单阶段，不影响回话。
+
 ### 6.4 表达层（expression）
 
 人类特征是可以工程化的：
