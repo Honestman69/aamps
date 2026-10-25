@@ -6,14 +6,17 @@
 > 仓库里没有 `.env`、没有数据库，直接 `pnpm dev` 会失败。
 
 **最后更新**：2026-10-25
-**当前阶段**：**M3 进行中** —— M3-1 状态机、M3-2 发言决策、多模态（D033）、**素材库（D034）** 已完成并接入 Pipeline。
+**当前阶段**：**M3 收尾** —— M3-1 状态机、M3-2 发言决策、多模态（D033）、素材库（D034）、
+**M3-3 表达层（D035）** 已完成并接入 Pipeline。只剩 M3-4 双阶段生成。
 M2 及之前全部完成（私聊能对话）。
 
-**下一步（默认走这条）**：**M3-3 表达层（express）** —— 拆条（单条 ≤40 字，最多 3 条）、
-打字延迟（首条阅读时间 + 后续逐字）、群内被 @ 时的回 @、连续发送上限。落地位置是
-`src/modules/mind/expression/`，出口在 `PipelineService` 出站前（`OutboundAction` 可多条）。
-之后才是 **M3-4 双阶段生成（think）**：`emotion_shift` 喂给 `applyReply({ moodShift })`，
-把现在空转的 mood 真正推动起来。
+**下一步（默认走这条）**：**M3-4 双阶段生成（think）** —— 先让模型输出一段结构化内心独白
+（`want_to_reply` / `emotion_shift` / `intent` / `tone` / `length_hint`），再把它当"导演指令"喂给第二次调用
+产出真正发出的文本。落地点：`src/modules/mind/reflection/`（think 用 `purpose: 'think'` + `modelCheap`），
+出口仍是 `PipelineService.deliver`。**`emotion_shift` 接 `applyReply({ moodShift })`**，
+把现在只回归不推动的 mood 真正用起来。
+
+M3 收尾后按纪律合并 `feat/m3-mind` → `main` 并打标签 `m3-persona`。
 
 > **多模态要配三样才生效**（都在实例上）：`modelVision`（看图）、`ttsCredentialId` + `ttsModel`（发语音）。
 > 不配就是"能力不存在"——图片只留「[图片]」占位，prompt 里也不提 `[voice]`。
@@ -533,6 +536,41 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 
 ---
 
+### ~~第 22 步：M3-3 表达层——拆条 / 打字延迟 / 回 @ / 会话串行~~ ✅ 已完成（D035）
+
+**做了什么**
+
+- [x] `src/modules/mind/expression/split.ts`：拆条（换行 → 句末标点 → 逗号 → 硬切；
+      单条 ≤40 字、最多 3 条；**超出条数并进最后一条，绝不截断**；短回复不拆）
+- [x] `src/modules/mind/expression/delay.ts`：首条 `0.8s + 字数×0.05s`（±30%），
+      后续 `字数/4.5 秒`；忙碌 ×3、深夜（23:00–07:00）×1.6；总延迟 12s 上限按比例压缩
+- [x] `src/modules/mind/expression/rand.ts`：消息级种子（`seededRand(会话+消息id)`），
+      延迟与拆法的随机可复现；明确**不可用于安全用途**
+- [x] `src/modules/mind/expression/plan.ts`：总装计划（每条的延迟 + 是否回 @）；
+      参数来自 `behaviorJson.expression`，逐字段回落
+- [x] Pipeline：文本按计划拆条发送、图片与语音各自单独一条；**@ 与引用都只挂第一条，
+      已引用则不再 @**；新增 `sleep` 注入点（测试/冒烟不真等）
+- [x] Pipeline **同会话串行**：`instanceId + 会话` 的 promise 队列，后一条等前一条说完
+
+**验收**
+
+- `pnpm test` **433 个用例全绿**（新增 26：expression 22 + pipeline 4）
+- `pnpm typecheck` / `pnpm build` 通过
+- `pipeline-smoke` 9 项全过（含"每条前面都请求了延迟"的断言；媒体/素材的条数断言按新行为更新）
+- `http-smoke` 31 项全过；`pnpm check:local-data` PASSED（227 个已跟踪文件）
+
+**实现补充（后续不要改）**
+
+- **拆条的唯一硬约束是"不丢内容"**：`maxCharsPerSegment` 是目标不是门槛；条数超了并进最后一条。
+- **换行永远分段**：那是用户自己的分段意图，不受"短回复不拆"影响。
+- **延迟只乘不减**，且有总上限（12s）。没有上限时一个 3000 字的回复能把会话卡几十秒。
+- **同会话必须串行**：否则两条消息各自等各自的延迟，最后交错发出，比秒回还假。
+  队列是进程内 Map，丢了只影响"同时来两条"。
+- **随机走消息级种子**，线上"这条怎么慢成这样"可以重放。**它不是密码学随机**。
+- **@ 与引用不重复**：已经引用就不再 @，两者都只挂第一条。
+
+---
+
 ### ~~第 21 步：素材库——存图/表情，按别名取用~~ ✅ 已完成（D034）
 
 **做了什么**
@@ -715,7 +753,7 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 - [x] 多模态：看图 / 用图片回复 / 发语音（第 20 步，D033）
 - [x] 素材库：存表情/图片、按别名取用（第 21 步，D034）
 - [ ] 双阶段生成（内心独白 → 外显）—— 下一步 M3-4；`emotion_shift` 接 `applyReply({ moodShift })`
-- [ ] 表达层（拆条 / 打字延迟 / 表情）—— 下一步 M3-3，落在 `mind/expression/`
+- [x] 表达层（拆条 / 打字延迟 / 回 @ / 会话串行）—— 第 22 步，`mind/expression/`（D035）
 - [x] **是否引用上一条** —— 机制已就位（D030，`persona/quote.ts` + `Persona.quoteTendency`），
       M3 接出站时调用 `decideQuote()` 即可。引用不是默认行为：真人只在这一句需要指回上文时才引用。
       M1 的占位回声曾经无条件引用（`replyToMessageId`），看着很机械，已去掉；协议层能力保留。
@@ -784,6 +822,7 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 - [x] 2026-10-25 **状态机与发言决策（M3-1/2，D032）**：mood/energy 纯函数衰减 + 亲密度累积、attention 判定前置到网关之前（判掉不花 token）、状态与关系回写 Pipeline；338 单测
 - [x] 2026-10-25 **多模态（D033）**：入站图片转多模态消息（独立视觉模型）、模型用独占行标记决定发图/发语音、TTS 落盘 mp3、出站 URL 白名单；顺带修掉"主链路按 chat session id 取 DEK"的 M2 缺陷；382 单测
 - [x] 2026-10-25 **素材库（D034）**：`MediaAsset` 表 + `[save]`/`[use]` 指令 + prompt 清单，别名唯一入口、内容去重、重名拒绝；适配器补 `mface → image`；407 单测、pipeline-smoke 9 项
+- [x] 2026-10-25 **表达层（D035）**：拆条 / 打字延迟 / 回 @ / 同会话串行 + 消息级可复现随机；433 单测
 
 ---
 
@@ -830,3 +869,4 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 | 2026-10-25 | M3 开工：状态机（mood/energy 纯函数衰减 + 亲密度累积/衰减）与发言决策（attention 前置到网关之前、群里被 @ 必回、busy 只影响群聊）落地并接入 Pipeline；338 单测、pipeline-smoke 6 项、http-smoke 31 项全过；追加 **D032** |
 | 2026-10-25 | 多模态落地（D033）：`media/` 模块（URL 白名单、入站图片抓取、媒体意图解析、TTS）+ 实例字段迁移 `media_capabilities` + Pipeline 出站多媒体；修复主链路 DEK 取用键错误；382 单测、pipeline-smoke 7 项全过 |
 | 2026-10-25 | 素材库落地（D034）：`MediaAsset` 迁移 + `assets/` 服务与仓储 + `[save]`/`[use]` 指令 + prompt 清单 + 适配器 `mface` 映射；407 单测、pipeline-smoke 9 项全过 |
+| 2026-10-25 | 表达层落地（D035）：拆条（不丢内容）/ 打字延迟（只乘不减、12s 上限）/ 回 @ / 同会话串行 / 消息级种子；文本、图片、语音分开发；433 单测 |

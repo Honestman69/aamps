@@ -313,6 +313,12 @@ prompt 要求模型先输出一段结构化思考：
 
 所有随机都过 `seededRand(conversationId + timestamp)`，方便复现 bug。
 
+> **实现现状（M3-3，见 D035）**：`src/modules/mind/expression/` 已落地拆条、延迟、回 @，
+> 文本/图片/语音分三条发；同一会话在 `PipelineService` 里串行，后一条等前一条说完。
+> 与上式的差异：`maxCharsPerSegment` 只作目标（**绝不截断**）、延迟有 12s 总上限（按比例压缩）、
+> 已用引用时不再 @。**未做**：偶发行为（错别字/撤回/追加表情）、"不连发同一句式"（属模型职责）、
+> 连发冷却（归 M6 风控）。
+
 ### 6.5 自主性（proactive）
 
 `proactive.worker` 每小时扫描一次，满足条件才动作：
