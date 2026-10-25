@@ -32,6 +32,8 @@ export type ActivePersona = PersonaSeed & {
   fallbacksJson: string | null;
   /** 引用倾向（D030），脏值由 parseQuoteTendency 兜底 */
   quoteTendency: string;
+  /** 行为参数（M3）：发言决策阈值/权重、表达层节奏。脏值逐字段回落默认 */
+  behaviorJson: string;
 };
 
 export interface IPipelineRepository {

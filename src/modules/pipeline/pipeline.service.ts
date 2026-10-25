@@ -1,42 +1,65 @@
 /**
- * Pipeline：消息主链路（M2 最小闭环）。
+ * Pipeline：消息主链路。
  *
- * 一条入站消息走完这条链：
+ * M2 打通了最小闭环，M3 在它上面**加 Pipe**，不推倒重来：
  *
  * ```
  * InboundMessage
  *   → 落库（upsert session + 存入站消息）
- *   → 取 owner + 人设
+ *   → 取 owner + 人设 + 配置
+ *   → 治理（人工接管 / 会话静默 → 只入库不说话）
+ *   → 心智状态衰减（mood / energy）+ 关系读取
  *   → buildWindow（D031：target 必须在窗口里）
- *   → assemblePrompt（D020：种子 → 情境 → 软禁区）
+ *   → attention（M3：要不要回）—— 不回就到此为止，不花 token
+ *   → assemblePrompt（D020：种子 → 情境 → 语气）
  *   → ModelGateway.chat（D024 预算 / D025 熔断 / 记账）
- *   → decideQuote（D030：必要性 + 倾向）
+ *   → decideQuote（D030）
  *   → 出站 + 落库
+ *   → 状态与关系回写（花精力、长亲密度）
  * ```
  *
  * 失败时（`GatewayFailedError`）走兜底：按 D028 用 `faultToSlot` 映射到话术槽位，
  * 再按 `decideSpeak` 限频，`resolveFallback` 取文本，可能静默。
  *
- * ## 这条链刻意**没做**的事（属于 M3）
+ * ## attention 放的位置就是它省钱的地方
  *
- * - attention（要不要回）—— 现在是有消息就回
- * - think（内心独白）—— 现在单阶段直出
- * - moderate（输出审核）—— 现在直接发
- * - express（拆条/打字延迟）—— 现在单条原样
+ * 判定在**调模型之前**。自用场景里大部分群消息不该回，提前判掉既省 token，
+ * 也避免"有问必答"那种客服感（ARCHITECTURE 5）。
  *
- * 这些是 M3 的 Pipe，现在不做是为了让"私聊能对话"这条最小路径先跑通。
+ * ## 状态层失败不阻断对话
+ *
+ * `mind` 仓储的读写都吞异常：状态是"表现层"的东西，坏了最多这几句不像人，
+ * 而对话本身必须继续。反过来（因为读状态失败就不回消息）会把一个装饰层变成单点故障（D011）。
+ *
+ * ## 还没做的（M3 后续）
+ *
+ * - think（内心独白 → emotion_shift 推动 mood）
+ * - moderate（输出审核）
+ * - express（拆条 / 打字延迟 / 表情 / 夜间静默 / 连发上限）
  */
 
 import type { InboundMessage, OutboundAction } from '@newjob/contracts';
 import { KeyLockedError } from '@newjob/contracts';
 
-import type { AgentConfig } from '../config/types';
+import type { ResolvedConfig } from '../config/types';
+import { decideAttention } from '../mind/attention/attention';
+import { parseAttentionPolicy } from '../mind/attention/policy';
+import { computeSignals } from '../mind/attention/signals';
+import {
+  applyReply,
+  createMindState,
+  decayState,
+  isBusy,
+  type MindState,
+} from '../mind/state/mind-state';
+import type { IMindStateRepository } from '../mind/state/ports';
+import { nextAffinity, type RelationshipSnapshot } from '../mind/state/relationship';
 import { GatewayFailedError, GatewayService } from '../model/gateway/gateway.service';
 import type { ChatMessage } from '../model/providers/openai-compatible';
 import { parseFallbacks, resolveFallback } from '../persona/fallbacks';
 import { decideSpeak, faultToSlot, type SpeakFailureReason } from '../persona/fault-slot';
-import { decideQuote, parseQuoteTendency } from '../persona/quote';
 import { assemblePrompt } from '../persona/prompt';
+import { decideQuote, parseQuoteTendency } from '../persona/quote';
 import {
   buildWindow,
   DEFAULT_WINDOW_LIMITS,
@@ -52,8 +75,13 @@ export type PipelineDeps = {
   pipeline: IPipelineRepository;
   sessions: ISessionRepository;
   windowRepo: ISessionWindowRepository;
+  /** 心智状态（M3）：mood / energy / affinity */
+  mind: IMindStateRepository;
   config: {
-    get(instanceId: string, options?: { sessionId?: string | null }): Promise<{ config: AgentConfig }>;
+    get(
+      instanceId: string,
+      options?: { sessionId?: string | null },
+    ): Promise<Pick<ResolvedConfig, 'config' | 'sessionFlags'>>;
   };
   gateway: GatewayService;
   clock?: () => Date;
@@ -91,6 +119,7 @@ export class PipelineService {
 
   private async process(message: InboundMessage, send: SendAction): Promise<void> {
     const instanceId = message.instanceId;
+    const channel: 'private' | 'group' = message.session.kind === 'group' ? 'group' : 'private';
 
     // ① 落库：会话 + 入站消息
     const session = await this.deps.sessions.ensureSession({
@@ -101,15 +130,29 @@ export class PipelineService {
     });
     const inbound = await this.deps.sessions.saveInbound({ sessionId: session.id, message });
 
-    // ② 取 owner + 人设
+    // ② 取 owner + 人设 + 配置（配置要提前：会话开关决定"要不要理"）
     const owner = await this.deps.pipeline.findOwner(instanceId);
     if (!owner) {
       return; // 实例没了，无处可发
     }
-    const persona = await this.deps.pipeline.findActivePersona(instanceId);
+    const [persona, resolved] = await Promise.all([
+      this.deps.pipeline.findActivePersona(instanceId),
+      this.deps.config.get(instanceId, { sessionId: session.id }),
+    ]);
 
-    // ③ 取窗口
-    const channel = message.session.kind === 'group' ? 'group' : 'private';
+    // ③ 治理：人工接管 / 会话静默 → 只入库，不说话，也不动状态
+    //    人接管期间的对话不属于"它"的经历，记进亲密度会让关系变成人工客服的关系
+    if (resolved.sessionFlags.aiPaused || resolved.sessionFlags.muted) {
+      return;
+    }
+
+    const now = this.now();
+
+    // ④ 心智状态先衰减到"现在"，再拿它做判断（否则会拿几小时前的精力做决策）
+    const state = await this.loadMindState(instanceId, now);
+    const relationship = await this.loadRelationship(instanceId, message.sender.id);
+
+    // ⑤ 取窗口
     const limits = DEFAULT_WINDOW_LIMITS[channel];
     const slice = await this.deps.windowRepo.loadSlice({
       sessionId: session.id,
@@ -124,21 +167,46 @@ export class PipelineService {
       targetId: inbound.id,
       messages: [...slice.before, slice.target, ...slice.after],
       limits,
-      now: this.now(),
+      now,
     });
     if (!window) {
       return;
     }
 
-    // ④ 拼 prompt
-    const { config } = await this.deps.config.get(instanceId, { sessionId: session.id });
+    // ⑥ 发言人决策（M3）：判定在调模型之前，判掉就不花 token
+    const signals = computeSignals(window, now);
+    const attention = decideAttention(
+      {
+        channel,
+        isMentioned: message.isMentioned,
+        state: { energy: state.energy, busy: isBusy(state, now) },
+        affinity: relationship?.affinity ?? 0,
+        followUp: signals.followUp,
+        // 私聊没有"群热度"这个概念，传 0 而不是传私聊的消息密度
+        groupActivity: channel === 'group' ? signals.groupActivity : 0,
+      },
+      parseAttentionPolicy(persona?.behaviorJson ?? null),
+    );
+
+    if (!attention.speak) {
+      // 看了不回：状态照旧写回（把衰减持久化），关系只涨一点点
+      await this.persistMind(instanceId, state);
+      await this.persistRelationship(instanceId, message, relationship, now, false);
+      return;
+    }
+
+    // ⑦ 拼 prompt（带上此刻的语气）
     const assembled = persona
       ? assemblePrompt(persona, {
           peerName: message.sender.name || session.peerName,
           channel,
           selfName: owner.name,
+          state: { mood: state.mood, energy: state.energy },
         })
-      : { system: '你是一个有自己性格的人。', examples: [] as Array<{ role: 'user' | 'assistant'; content: string }> };
+      : {
+          system: '你是一个有自己性格的人。',
+          examples: [] as Array<{ role: 'user' | 'assistant'; content: string }>,
+        };
 
     const messages: ChatMessage[] = [
       { role: 'system', content: assembled.system },
@@ -153,7 +221,7 @@ export class PipelineService {
       }),
     ];
 
-    // ⑤ 调网关
+    // ⑧ 调网关
     const result = await this.deps.gateway.chat({
       instanceId,
       ownerUserId: owner.ownerUserId,
@@ -162,7 +230,7 @@ export class PipelineService {
       messages,
     });
 
-    // ⑥ 引用决策
+    // ⑨ 引用决策
     const facts = windowQuoteFacts(window);
     const quoteDecision = decideQuote({
       channel,
@@ -172,10 +240,10 @@ export class PipelineService {
       incomingQuotesBot: message.replyToMessageId != null,
       selfId: owner.accountId,
       tendency: parseQuoteTendency(persona?.quoteTendency),
-      now: this.now(),
+      now,
     });
 
-    // ⑦ 出站 + 落库
+    // ⑩ 出站 + 落库
     const action: OutboundAction = {
       kind: 'send',
       session: message.session,
@@ -189,6 +257,57 @@ export class PipelineService {
       senderId: owner.accountId,
       replyToMessageId: quoteDecision.quote ? message.id : null,
     });
+
+    // ⑪ 交互回写：回一条要花精力，关系往前走一点
+    await this.persistMind(instanceId, applyReply(state));
+    await this.persistRelationship(instanceId, message, relationship, now, true);
+  }
+
+  // ── 状态与关系（失败不阻断对话） ──
+
+  private async loadMindState(instanceId: string, now: Date): Promise<MindState> {
+    const stored = await this.deps.mind.loadState(instanceId).catch(() => null);
+    const base = stored ?? createMindState(now);
+    return decayState(base, now);
+  }
+
+  private async loadRelationship(
+    instanceId: string,
+    peerId: string,
+  ): Promise<RelationshipSnapshot | null> {
+    return this.deps.mind.loadRelationship(instanceId, peerId).catch(() => null);
+  }
+
+  private async persistMind(instanceId: string, state: MindState): Promise<void> {
+    await this.deps.mind.saveState(instanceId, state).catch(() => undefined);
+  }
+
+  private async persistRelationship(
+    instanceId: string,
+    message: InboundMessage,
+    relationship: RelationshipSnapshot | null,
+    now: Date,
+    replied: boolean,
+  ): Promise<void> {
+    const { affinity, lastInteractionAt } = nextAffinity(
+      relationship,
+      {
+        channel: message.session.kind === 'group' ? 'group' : 'private',
+        replied,
+        mentioned: message.isMentioned,
+        textLength: message.plainText.length,
+      },
+      now,
+    );
+    await this.deps.mind
+      .saveRelationship({
+        instanceId,
+        peerId: message.sender.id,
+        nickname: message.sender.name || relationship?.nickname || null,
+        affinity,
+        lastInteractionAt,
+      })
+      .catch(() => undefined);
   }
 
   private async handleFailure(message: InboundMessage, send: SendAction, err: Error): Promise<void> {

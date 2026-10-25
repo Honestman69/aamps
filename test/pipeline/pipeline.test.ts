@@ -3,6 +3,9 @@ import { KeyLockedError } from '@newjob/contracts';
 import { describe, expect, it } from 'vitest';
 
 import type { AgentConfig } from '@/modules/config/types';
+import type { MindState } from '@/modules/mind/state/mind-state';
+import type { IMindStateRepository } from '@/modules/mind/state/ports';
+import type { RelationshipSnapshot } from '@/modules/mind/state/relationship';
 import { GatewayFailedError, GatewayService } from '@/modules/model/gateway/gateway.service';
 import type { ActivePersona, InstanceOwner, IPipelineRepository } from '@/modules/pipeline/ports';
 import { PipelineService, type PipelineDeps } from '@/modules/pipeline/pipeline.service';
@@ -111,6 +114,50 @@ class FakePipelineRepo implements IPipelineRepository {
   }
 }
 
+class FakeMindRepo implements IMindStateRepository {
+  state: MindState | null = null;
+  savedStates: MindState[] = [];
+  relationships: RelationshipSnapshot[] = [];
+  savedRelationships: Array<{ affinity: number; lastInteractionAt: Date; peerId: string }> = [];
+
+  async loadState(): Promise<MindState | null> {
+    return this.state;
+  }
+  async saveState(_instanceId: string, state: MindState): Promise<void> {
+    this.state = state;
+    this.savedStates.push(state);
+  }
+  async loadRelationship(_instanceId: string, peerId: string): Promise<RelationshipSnapshot | null> {
+    return this.relationships.find((r) => r.peerId === peerId) ?? null;
+  }
+  async saveRelationship(input: {
+    instanceId: string;
+    peerId: string;
+    nickname: string | null;
+    affinity: number;
+    lastInteractionAt: Date;
+  }): Promise<void> {
+    this.savedRelationships.push({
+      peerId: input.peerId,
+      affinity: input.affinity,
+      lastInteractionAt: input.lastInteractionAt,
+    });
+    const existing = this.relationships.find((r) => r.peerId === input.peerId);
+    if (existing) {
+      existing.affinity = input.affinity;
+      existing.lastInteractionAt = input.lastInteractionAt;
+    } else {
+      this.relationships.push({
+        peerId: input.peerId,
+        nickname: input.nickname,
+        affinity: input.affinity,
+        trust: 0,
+        lastInteractionAt: input.lastInteractionAt,
+      });
+    }
+  }
+}
+
 type GatewayStub = {
   chat: GatewayService['chat'];
 };
@@ -145,29 +192,46 @@ const PERSONA_LONG_OUTAGE: ActivePersona = {
     budgetLimit: { private: null, group: null },
   }),
   quoteTendency: 'normal',
+  behaviorJson: '{}',
 };
 
 type Harness = {
   sessions: FakeSessionRepo;
   windowRepo: FakeWindowRepo;
   pipelineRepo: FakePipelineRepo;
+  mind: FakeMindRepo;
   sent: OutboundAction[];
   service: PipelineService;
   gateway: GatewayStub;
   send: (action: OutboundAction) => Promise<{ messageId: string }>;
 };
 
-function makeHarness(overrides: { gateway?: GatewayStub; persona?: ActivePersona | null } = {}): Harness {
+function makeHarness(
+  overrides: {
+    gateway?: GatewayStub;
+    persona?: ActivePersona | null;
+    sessionFlags?: { aiPaused?: boolean; reviewMode?: boolean; muted?: boolean };
+  } = {},
+): Harness {
   const sessions = new FakeSessionRepo();
   const windowRepo = new FakeWindowRepo();
   const pipelineRepo = new FakePipelineRepo();
+  const mind = new FakeMindRepo();
   const sent: OutboundAction[] = [];
   const gateway = overrides.gateway ?? gatewayStub({});
   pipelineRepo.persona = overrides.persona === undefined ? null : overrides.persona;
 
   const config = {
-    get: async (): Promise<{ config: AgentConfig }> => ({
+    get: async (): Promise<{
+      config: AgentConfig;
+      sessionFlags: { aiPaused: boolean; reviewMode: boolean; muted: boolean };
+    }> => ({
       config: { modelMain: 'deepseek-chat' } as AgentConfig,
+      sessionFlags: {
+        aiPaused: overrides.sessionFlags?.aiPaused ?? false,
+        reviewMode: overrides.sessionFlags?.reviewMode ?? false,
+        muted: overrides.sessionFlags?.muted ?? false,
+      },
     }),
   };
 
@@ -175,6 +239,7 @@ function makeHarness(overrides: { gateway?: GatewayStub; persona?: ActivePersona
     pipeline: pipelineRepo,
     sessions,
     windowRepo,
+    mind,
     config,
     gateway: gateway as GatewayService,
     clock: () => new Date('2026-10-24T12:00:00'),
@@ -190,6 +255,7 @@ function makeHarness(overrides: { gateway?: GatewayStub; persona?: ActivePersona
     sessions,
     windowRepo,
     pipelineRepo,
+    mind,
     sent,
     service,
     gateway,
@@ -264,6 +330,62 @@ describe('Pipeline 主链路', () => {
 
     await h.service.handle(msg, h.send);
     expect(h.sent).toHaveLength(0);
+  });
+});
+
+describe('Pipeline 状态与发言决策（M3）', () => {
+  it('私聊回话：花精力、亲密度上涨、状态落库', async () => {
+    const h = makeHarness();
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send);
+
+    expect(sentText(h.sent)).toEqual(['你好呀']);
+    expect(h.mind.savedStates).toHaveLength(1);
+    // 起始精力 0.8，回一条扣 0.02
+    expect(h.mind.savedStates[0]?.energy).toBeCloseTo(0.78, 5);
+    expect(h.mind.savedRelationships).toHaveLength(1);
+    expect(h.mind.savedRelationships[0]?.affinity).toBeGreaterThan(0);
+  });
+
+  it('群聊没被 @、状态平常 → 只入库不回复（不花 token）', async () => {
+    const h = makeHarness();
+    const msg = inbound({
+      session: { kind: 'group', peerId: 'group-1' },
+      sender: { id: 'peer-1', name: '阿明', isOwner: false },
+    });
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send);
+
+    expect(sentText(h.sent)).toHaveLength(0);
+    expect(h.sessions.inboundMessages).toHaveLength(1);
+    // 没回话不消耗精力，但关系仍要涨一点（"看到"也算一次交互）
+    expect(h.mind.savedStates[0]?.energy).toBeCloseTo(0.8, 5);
+    expect(h.mind.savedRelationships[0]?.affinity).toBeGreaterThan(0);
+  });
+
+  it('群聊被 @ → 必回（不受阈值与精力影响）', async () => {
+    const h = makeHarness();
+    const msg = inbound({ session: { kind: 'group', peerId: 'group-1' }, isMentioned: true });
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send);
+
+    expect(sentText(h.sent)).toEqual(['你好呀']);
+  });
+
+  it('会话被静默（muted）→ 只入库，不动状态', async () => {
+    const h = makeHarness({ sessionFlags: { muted: true } });
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send);
+
+    expect(h.sent).toHaveLength(0);
+    expect(h.mind.savedStates).toHaveLength(0);
+    expect(h.mind.savedRelationships).toHaveLength(0);
   });
 });
 

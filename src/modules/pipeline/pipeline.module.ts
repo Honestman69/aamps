@@ -13,7 +13,9 @@ import { Module } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { ConfigModule } from '../config/config.module';
 import { CONFIG_SERVICE } from '../config/tokens';
-import type { AgentConfig } from '../config/types';
+import type { ResolvedConfig } from '../config/types';
+import { PrismaMindStateRepository } from '../mind/state/repositories/prisma-mind-state.repository';
+import type { IMindStateRepository } from '../mind/state/ports';
 import { ModelModule } from '../model/model.module';
 import { GATEWAY_SERVICE } from '../model/tokens';
 import { GatewayService } from '../model/gateway/gateway.service';
@@ -25,6 +27,7 @@ import { PipelineService } from './pipeline.service';
 import type { IPipelineRepository } from './ports';
 import { PrismaPipelineRepository } from './repositories/prisma-pipeline.repository';
 import {
+  MIND_STATE_REPOSITORY,
   PIPELINE_REPOSITORY,
   PIPELINE_SERVICE,
   SESSION_REPOSITORY,
@@ -51,18 +54,32 @@ import {
       inject: [PrismaService],
     },
     {
+      provide: MIND_STATE_REPOSITORY,
+      useFactory: (prisma: PrismaService): IMindStateRepository =>
+        new PrismaMindStateRepository(prisma),
+      inject: [PrismaService],
+    },
+    {
       provide: PIPELINE_SERVICE,
       useFactory: (
         pipeline: IPipelineRepository,
         sessions: ISessionRepository,
         windowRepo: ISessionWindowRepository,
-        config: { get(instanceId: string, options?: { sessionId?: string | null }): Promise<{ config: AgentConfig }> },
+        mind: IMindStateRepository,
+        config: {
+          get(
+            instanceId: string,
+            options?: { sessionId?: string | null },
+          ): Promise<Pick<ResolvedConfig, 'config' | 'sessionFlags'>>;
+        },
         gateway: GatewayService,
-      ): PipelineService => new PipelineService({ pipeline, sessions, windowRepo, config, gateway }),
+      ): PipelineService =>
+        new PipelineService({ pipeline, sessions, windowRepo, mind, config, gateway }),
       inject: [
         PIPELINE_REPOSITORY,
         SESSION_REPOSITORY,
         SESSION_WINDOW_REPOSITORY,
+        MIND_STATE_REPOSITORY,
         CONFIG_SERVICE,
         GATEWAY_SERVICE,
       ],

@@ -22,11 +22,12 @@ import type { InboundMessage, OutboundAction } from '@newjob/contracts';
 import { encryptWithDek, randomDek } from '../src/common/crypto';
 import { RuntimeKeyStore } from '../src/modules/auth/runtime-key-store';
 import { GatewayService } from '../src/modules/model/gateway/gateway.service';
+import { PrismaMindStateRepository } from '../src/modules/mind/state/repositories/prisma-mind-state.repository';
 import { PrismaPipelineRepository } from '../src/modules/pipeline/repositories/prisma-pipeline.repository';
 import { PipelineService } from '../src/modules/pipeline/pipeline.service';
 import { PrismaSessionRepository } from '../src/modules/session/repositories/prisma-session.repository';
 import { PrismaSessionWindowRepository } from '../src/modules/session/repositories/prisma-session-window.repository';
-import { DEFAULT_AGENT_CONFIG, type AgentConfig } from '../src/modules/config/types';
+import { DEFAULT_AGENT_CONFIG } from '../src/modules/config/types';
 
 const prisma = new PrismaClient();
 const DEK = randomDek();
@@ -116,11 +117,15 @@ async function main(): Promise<void> {
   const pipelineRepo = new PrismaPipelineRepository(prisma);
   const sessionRepo = new PrismaSessionRepository(prisma);
   const windowRepo = new PrismaSessionWindowRepository(prisma);
+  const mindRepo = new PrismaMindStateRepository(prisma);
   const keyStore = new RuntimeKeyStore();
   keyStore.set(SESSION, user.id, DEK);
 
   const config = {
-    get: async (): Promise<{ config: AgentConfig }> => ({ config: DEFAULT_AGENT_CONFIG }),
+    get: async () => ({
+      config: DEFAULT_AGENT_CONFIG,
+      sessionFlags: { aiPaused: false, reviewMode: false, muted: false },
+    }),
   };
 
   const sent: OutboundAction[] = [];
@@ -128,6 +133,7 @@ async function main(): Promise<void> {
     pipeline: pipelineRepo,
     sessions: sessionRepo,
     windowRepo,
+    mind: mindRepo,
     config,
     gateway: gatewayStub,
     clock: () => new Date(),
@@ -180,6 +186,24 @@ async function main(): Promise<void> {
   const sessionCount = await prisma.session.count({ where: { instanceId: instance.id } });
   assert.equal(sessionCount, 1, '同一 peer 不应重复建会话');
   process.stdout.write(`④ 会话唯一：${sessionCount} 个\n`);
+
+  // ⑤ M3 状态：三轮对话后应有且只有一行 AgentState，精力被消耗、时间戳推进
+  const state = await prisma.agentState.findUnique({ where: { instanceId: instance.id } });
+  assert.ok(state, '对话后应写入 AgentState');
+  assert.ok(state.energy <= 0.8, `回话应消耗精力，实际 ${state.energy}`);
+  assert.ok(state.lastDecayAt <= new Date(), 'lastDecayAt 不应在未来');
+  const stateRows = await prisma.agentState.count({ where: { instanceId: instance.id } });
+  assert.equal(stateRows, 1, 'AgentState 应按实例 upsert 成一行');
+  process.stdout.write(`⑤ AgentState 单行 upsert：energy=${state.energy.toFixed(3)}\n`);
+
+  // ⑥ M3 关系：亲密度随交互增长，且同一对方只有一行
+  const rel = await prisma.relationship.findUnique({
+    where: { instanceId_peerId: { instanceId: instance.id, peerId: 'peer-1' } },
+  });
+  assert.ok(rel, '对话后应写入 Relationship');
+  assert.ok(rel.affinity > 0, `亲密度应随交互增长，实际 ${rel.affinity}`);
+  assert.ok(rel.lastInteractionAt, 'lastInteractionAt 应有值');
+  process.stdout.write(`⑥ Relationship 单行 upsert：affinity=${rel.affinity}\n`);
 
   process.stdout.write('\nPIPELINE SMOKE PASSED\n');
 }

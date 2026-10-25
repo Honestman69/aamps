@@ -37,6 +37,13 @@ export type PromptContext = {
   channel: 'private' | 'group';
   /** 机器人自己的名字 */
   selfName: string;
+  /**
+   * 瞬态状态（M3）：只影响"语气提示"，不参与人格设定。
+   *
+   * 为什么不写进种子：种子是"它出生时是什么人"，state 是"它此刻累不累"。
+   * 混在一起会让模型把"你现在很困"当成性格的一部分，睡一觉就该变的东西被写死。
+   */
+  state?: { mood: number; energy: number } | null;
 };
 
 /** 拼装产物：system 消息 + few-shot 对话（examples 作为 user/assistant 成对塞进 messages 前） */
@@ -192,6 +199,33 @@ function buildBoundariesSection(seed: PersonaSeed): string {
 // ─────────────────────────── 主入口 ───────────────────────────
 
 /**
+ * 语气提示（M3）：把瞬态状态翻译成一句"此刻的感觉"。
+ *
+ * 两条纪律：
+ * 1. **只在偏离常态时说话**。精力 0.8 是默认值，每个 prompt 都写一句"你现在很精神"
+ *    等于噪声，还会被模型当成设定去演。
+ * 2. **说现象，不说指令**。写"回话会很短"而不是"请把回复控制在 20 字内"——后者是
+ *    运维式指令，模型会照做，但语气会僵。
+ */
+function buildToneSection(state: PromptContext['state']): string {
+  if (!state) {
+    return '';
+  }
+  const lines: string[] = [];
+  if (state.energy < 0.3) {
+    lines.push('你现在很困，回话会很短，也懒得展开。');
+  } else if (state.energy < 0.55) {
+    lines.push('你有点累了，说话比平时简短。');
+  }
+  if (state.mood <= -0.25) {
+    lines.push('你现在的情绪不太好，语气比平时冲一些。');
+  } else if (state.mood >= 0.25) {
+    lines.push('你现在心情不错，语气松一些。');
+  }
+  return lines.join('');
+}
+
+/**
  * 拼装 system prompt。
  *
  * 返回值里的 `examples` 是 few-shot，调用方要把它**插到对话历史之前**，
@@ -233,6 +267,12 @@ export function assemblePrompt(seed: PersonaSeed, context: PromptContext): Assem
   const boundaries = buildBoundariesSection(seed);
   if (boundaries) {
     sections.push(boundaries);
+  }
+
+  // ⑧ 语气提示（D020 顺序的最后一段）：此刻累不累、心情如何
+  const tone = buildToneSection(context.state);
+  if (tone) {
+    sections.push(tone);
   }
 
   return {
