@@ -55,5 +55,7 @@ export interface ISessionRepository {
     senderId: string | null;
     /** 回复的是哪条消息（引用），可空 */
     replyToMessageId?: string | null;
+    /** 内心独白（D036）：只落库供排查，**不回灌给下一轮** */
+    thinkJson?: string | null;
   }): Promise<StoredMessage>;
 }

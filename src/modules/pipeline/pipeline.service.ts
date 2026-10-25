@@ -55,6 +55,13 @@ import { decideAttention } from '../mind/attention/attention';
 import { parseAttentionPolicy } from '../mind/attention/policy';
 import { planTextReply, parseExpressionPolicy } from '../mind/expression/plan';
 import { messageSeed, seededRand } from '../mind/expression/rand';
+import { parseThinkPolicy } from '../mind/reflection/policy';
+import {
+  buildDirectorBlock,
+  buildThinkSystem,
+  parseThink,
+  type ThinkResult,
+} from '../mind/reflection/think';
 import { computeSignals } from '../mind/attention/signals';
 import {
   applyReply,
@@ -320,17 +327,32 @@ export class PipelineService {
       }),
     ];
 
-    // ⑨ 调网关（有图时指定视觉模型：主模型多半看不见图）
+    // ⑨ A 阶段：内心独白（D036）。失败/关掉都不影响回话，只是少一层"导演指令"
+    const thinkPolicy = parseThinkPolicy(persona?.behaviorJson ?? null);
+    const think = thinkPolicy.enabled
+      ? await this.runThink({
+          instanceId,
+          ownerUserId: owner.ownerUserId,
+          sessionId: session.id,
+          system: assembled.system,
+          messages,
+        })
+      : null;
+    const directedSystem = think
+      ? `${assembled.system}\n\n${buildDirectorBlock(think)}`
+      : assembled.system;
+
+    // ⑩ B 阶段：外显生成（有图时指定视觉模型：主模型多半看不见图）
     const result = await this.deps.gateway.chat({
       instanceId,
       ownerUserId: owner.ownerUserId,
       sessionId: session.id,
       purpose: 'chat',
-      messages,
+      messages: [{ role: 'system', content: directedSystem }, ...messages.slice(1)],
       ...(imageParts.length > 0 && config.visionModel ? { model: config.visionModel } : {}),
     });
 
-    // ⑩ 引用决策
+    // ⑪ 引用决策
     const facts = windowQuoteFacts(window);
     const quoteDecision = decideQuote({
       channel,
@@ -343,7 +365,7 @@ export class PipelineService {
       now,
     });
 
-    // ⑪ 出站（D033）：模型可以决定用图片或语音回，但**怎么发**由这里执行
+    // ⑫ 出站（D033）：模型可以决定用图片或语音回，但**怎么发**由这里执行
     await this.deliver({
       message,
       instanceId,
@@ -357,12 +379,43 @@ export class PipelineService {
       now,
       raw: result.text,
       quoteTarget: quoteDecision.quote ? message.id : undefined,
+      thinkJson: think ? JSON.stringify(think) : null,
       send,
     });
 
-    // ⑫ 交互回写：回一条要花精力，关系往前走一点
-    await this.persistMind(instanceId, applyReply(state));
+    // ⑬ 交互回写：回一条要花精力；情绪由这一轮的内心独白推动（D036）
+    await this.persistMind(instanceId, applyReply(state, { moodShift: think?.emotionShift ?? 0 }));
     await this.persistRelationship(instanceId, message, relationship, now, true);
+  }
+
+  /**
+   * A 阶段：让模型先想一遍（purpose=think → 走 modelCheap 记账）。
+   *
+   * 失败一律返回 null：think 是"让回复更好"的装饰，不是回话的必要条件（ARCHITECTURE 5）。
+   * 注意这里用 `messages.slice(1)`：原数组第 0 条是人格 system，A 阶段要换成"人格 + 思考指令"。
+   */
+  private async runThink(input: {
+    instanceId: string;
+    ownerUserId: string;
+    sessionId: string;
+    system: string;
+    messages: ChatMessage[];
+  }): Promise<ThinkResult | null> {
+    try {
+      const result = await this.deps.gateway.chat({
+        instanceId: input.instanceId,
+        ownerUserId: input.ownerUserId,
+        sessionId: input.sessionId,
+        purpose: 'think',
+        messages: [
+          { role: 'system', content: buildThinkSystem(input.system) },
+          ...input.messages.slice(1),
+        ],
+      });
+      return parseThink(result.text);
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -415,6 +468,8 @@ export class PipelineService {
     now: Date;
     raw: string;
     quoteTarget: string | undefined;
+    /** 内心独白：挂在第一条出站消息上，只落库供排查 */
+    thinkJson: string | null;
     send: SendAction;
   }): Promise<void> {
     const { message, config, caps, send } = input;
@@ -507,6 +562,8 @@ export class PipelineService {
         content: part.text,
         senderId: input.selfId,
         replyToMessageId: !quoted && quoteRef ? quoteRef : null,
+        // think 属于整条回复，只挂第一条：一条回复一份独白
+        ...(!quoted && input.thinkJson ? { thinkJson: input.thinkJson } : {}),
       });
       quoted = true;
     }

@@ -43,6 +43,8 @@ class FakeSessionRepo implements ISessionRepository {
   sessions: SessionRecord[] = [];
   inboundMessages: StoredMessage[] = [];
   outboundMessages: StoredMessage[] = [];
+  /** 出站消息携带的内心独白（D036） */
+  thinkJson: Array<string | null> = [];
 
   async ensureSession(input: {
     instanceId: string;
@@ -83,7 +85,9 @@ class FakeSessionRepo implements ISessionRepository {
     content: string;
     senderId: string | null;
     replyToMessageId?: string | null;
+    thinkJson?: string | null;
   }): Promise<StoredMessage> {
+    this.thinkJson.push(input.thinkJson ?? null);
     const rec: StoredMessage = {
       id: nextId(),
       sessionId: input.sessionId,
@@ -243,16 +247,42 @@ class FakeMindRepo implements IMindStateRepository {
 
 type GatewayStub = {
   chat: GatewayService['chat'];
-  /** 记录每次调用的入参：验证多模态消息与视觉模型路由 */
-  calls: Array<{ messages: unknown; model?: string }>;
+  /** 记录每次调用的入参：验证多模态消息、视觉模型路由与双阶段调用 */
+  calls: Array<{ messages: unknown; model?: string; purpose?: string }>;
 };
 
-function gatewayStub(outcome: { text?: string; error?: Error }): GatewayStub {
-  const calls: Array<{ messages: unknown; model?: string }> = [];
+/** 默认的内心独白（合法的 JSON，保证 B 阶段能拿到导演指令） */
+const DEFAULT_THINK = JSON.stringify({
+  want_to_reply: 0.6,
+  emotion_shift: 0.1,
+  intent: '随便聊聊',
+  key_points: ['接话'],
+  tone: '轻松',
+  length_hint: '短',
+});
+
+function gatewayStub(outcome: { text?: string; error?: Error; think?: string | null }): GatewayStub {
+  const calls: Array<{ messages: unknown; model?: string; purpose?: string }> = [];
   return {
     calls,
     chat: async (input) => {
-      calls.push({ messages: input.messages, ...(input.model ? { model: input.model } : {}) });
+      calls.push({
+        messages: input.messages,
+        ...(input.model ? { model: input.model } : {}),
+        purpose: input.purpose,
+      });
+      // A 阶段（think）：只返回结构化独白，不走 outcome.text
+      if (input.purpose === 'think') {
+        return {
+          text: outcome.think === null ? 'not json' : (outcome.think ?? DEFAULT_THINK),
+          model: 'deepseek-chat',
+          provider: 'deepseek',
+          credentialId: 'cred-1',
+          usage: { tokenIn: 5, tokenOut: 5 },
+          costCents: 0,
+          attempts: [],
+        };
+      }
       if (outcome.error) throw outcome.error;
       return {
         text: outcome.text ?? '你好呀',
@@ -370,6 +400,11 @@ function makeHarness(
     gateway,
     send,
   };
+}
+
+/** 取 chat 阶段的第 n 次调用（双阶段后 calls[0] 是 think） */
+function chatCall(target: { gateway: { calls: Array<{ messages: unknown; model?: string; purpose?: string }> } }, index = 0) {
+  return target.gateway.calls.filter((call) => call.purpose === 'chat')[index];
 }
 
 /** 让窗口取数返回"target 就是最新一条"的最小切片 */
@@ -558,7 +593,7 @@ describe('Pipeline 媒体（D033）', () => {
     await h.service.handle(IMAGE_MSG, h.send, { capabilities: CAPS });
 
     expect(h.images.calls).toEqual(['http://multimedia.nt.qq.com.cn/download?appid=1&fileid=x']);
-    const call = h.gateway.calls[0];
+    const call = chatCall(h);
     expect(call?.model).toBe('glm-4v');
     const messages = call?.messages as Array<{ role: string; content: unknown }>;
     const target = messages[messages.length - 1];
@@ -576,7 +611,7 @@ describe('Pipeline 媒体（D033）', () => {
     await h.service.handle(IMAGE_MSG, h.send, { capabilities: CAPS });
 
     expect(h.images.calls).toHaveLength(0);
-    const call = h.gateway.calls[0];
+    const call = chatCall(h);
     expect(call?.model).toBeUndefined();
     const messages = call?.messages as Array<{ content: unknown }>;
     expect(typeof messages[messages.length - 1]?.content).toBe('string');
@@ -667,7 +702,7 @@ describe('Pipeline 媒体（D033）', () => {
 
     await h.service.handle(msg, h.send, { capabilities: CAPS });
 
-    const messages = h.gateway.calls[0]?.messages as Array<{ role: string; content: unknown }>;
+    const messages = chatCall(h)?.messages as Array<{ role: string; content: unknown }>;
     const system = messages[0]?.content as string;
     expect(system).toContain('[img]');
     expect(system).not.toContain('[voice]');
@@ -732,7 +767,7 @@ describe('Pipeline 素材库（D034）', () => {
     const first = inbound();
     withAssets.windowRepo.slice = latestOnlySlice(first);
     await withAssets.service.handle(first, withAssets.send, { capabilities: CAPS });
-    const systemWith = (withAssets.gateway.calls[0]?.messages as Array<{ content: unknown }>)[0]
+    const systemWith = (chatCall(withAssets)?.messages as Array<{ content: unknown }>)[0]
       ?.content as string;
     expect(systemWith).toContain('猫猫震惊');
     expect(systemWith).toContain('[use]');
@@ -741,7 +776,7 @@ describe('Pipeline 素材库（D034）', () => {
     const second = inbound();
     withoutAssets.windowRepo.slice = latestOnlySlice(second);
     await withoutAssets.service.handle(second, withoutAssets.send, { capabilities: CAPS });
-    const systemWithout = (withoutAssets.gateway.calls[0]?.messages as Array<{ content: unknown }>)[0]
+    const systemWithout = (chatCall(withoutAssets)?.messages as Array<{ content: unknown }>)[0]
       ?.content as string;
     expect(systemWithout).not.toContain('[use]');
     // 但"存下来"的能力要一直有，否则第一张图永远进不了库
@@ -808,7 +843,19 @@ describe('Pipeline 表达层（M3-3）', () => {
     const texts = [LONG_REPLY, '第二句回复。'];
     const gateway = {
       calls: [] as Array<{ messages: unknown }>,
-      chat: async () => {
+      chat: async (input: { purpose?: string }) => {
+        // A 阶段（think）不占用 B 阶段的文本序列
+        if (input.purpose === 'think') {
+          return {
+            text: DEFAULT_THINK,
+            model: 'deepseek-chat',
+            provider: 'deepseek',
+            credentialId: 'cred-1',
+            usage: { tokenIn: 1, tokenOut: 1 },
+            costCents: 0,
+            attempts: [],
+          };
+        }
         const text = texts[call] ?? '嗯';
         call += 1;
         return {
@@ -838,5 +885,135 @@ describe('Pipeline 表达层（M3-3）', () => {
     // 第一条的多段必须连着，第二条排在最后，不能穿插
     expect(textsSent[textsSent.length - 1]).toBe('第二句回复。');
     expect(textsSent.slice(0, -1).join('')).toBe(LONG_REPLY);
+  });
+});
+
+describe('Pipeline 双阶段生成（M3-4 / D036）', () => {
+  const THINK = JSON.stringify({
+    want_to_reply: 0.8,
+    emotion_shift: 0.2,
+    intent: '他被工作烦到了，想吐槽',
+    key_points: ['先共情', '不问细节'],
+    tone: '有点心疼，别太用力',
+    length_hint: '短，一两句',
+  });
+
+  it('先 think 再生成：A 阶段用 think，B 阶段带上导演指令', async () => {
+    const h = makeHarness({
+      gateway: gatewayStub({ text: '听着就累。', think: THINK }),
+      persona: { ...PERSONA_LONG_OUTAGE, fallbacksJson: '{}', behaviorJson: '{}' },
+    });
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(h.gateway.calls.map((call) => call.purpose)).toEqual(['think', 'chat']);
+
+    const chatMessages = chatCall(h)?.messages as Array<{ role: string; content: unknown }>;
+    const system = chatMessages[0]?.content as string;
+    expect(system).toContain('他被工作烦到了');
+    expect(system).toContain('先共情');
+    expect(system).toContain('不要说出口');
+    // A 阶段的 system 是"人格 + 思考指令"，不能含导演指令
+    const thinkMessages = h.gateway.calls[0]?.messages as Array<{ content: unknown }>;
+    expect(thinkMessages[0]?.content as string).toContain('只输出一个 JSON');
+  });
+
+  it('情绪被推动：emotion_shift 写进 AgentState', async () => {
+    const h = makeHarness({
+      gateway: gatewayStub({ text: '听着就累。', think: THINK }),
+      persona: { ...PERSONA_LONG_OUTAGE, fallbacksJson: '{}', behaviorJson: '{}' },
+    });
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(h.mind.savedStates.at(-1)?.mood).toBeCloseTo(0.2, 5);
+  });
+
+  it('内心独白落库，但不进对话历史', async () => {
+    const h = makeHarness({
+      gateway: gatewayStub({ text: '听着就累。', think: THINK }),
+      persona: { ...PERSONA_LONG_OUTAGE, fallbacksJson: '{}', behaviorJson: '{}' },
+    });
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(h.sessions.thinkJson.filter(Boolean)).toHaveLength(1);
+    expect(h.sessions.thinkJson.at(-1)).toContain('他被工作烦到了');
+    // 落库内容是回复正文，不含独白
+    expect(h.sessions.outboundMessages[0]?.content).toBe('听着就累。');
+  });
+
+  it('think 返回的不是 JSON：跳过独白，照常回复', async () => {
+    const h = makeHarness({
+      gateway: gatewayStub({ text: '嗯嗯。', think: null }),
+      persona: { ...PERSONA_LONG_OUTAGE, fallbacksJson: '{}', behaviorJson: '{}' },
+    });
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(sentText(h.sent)).toEqual(['嗯嗯。']);
+    const system = (chatCall(h)?.messages as Array<{ content: unknown }>)[0]?.content as string;
+    expect(system).not.toContain('不要说出口');
+    expect(h.mind.savedStates.at(-1)?.mood).toBe(0);
+  });
+
+  it('think 抛错：不影响回话（装饰层不能变单点故障）', async () => {
+    let calls = 0;
+    const gateway = {
+      calls: [] as Array<{ messages: unknown; purpose?: string }>,
+      chat: async (input: { purpose?: string; messages: unknown }) => {
+        calls += 1;
+        gateway.calls.push({ messages: input.messages, purpose: input.purpose });
+        if (input.purpose === 'think') {
+          throw new Error('boom');
+        }
+        return {
+          text: '还在。',
+          model: 'deepseek-chat',
+          provider: 'deepseek',
+          credentialId: 'cred-1',
+          usage: { tokenIn: 1, tokenOut: 1 },
+          costCents: 0,
+          attempts: [],
+        };
+      },
+    };
+    const h = makeHarness({
+      gateway,
+      persona: { ...PERSONA_LONG_OUTAGE, fallbacksJson: '{}', behaviorJson: '{}' },
+    });
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(calls).toBe(2);
+    expect(sentText(h.sent)).toEqual(['还在。']);
+  });
+
+  it('behaviorJson 关掉 think：只调一次模型', async () => {
+    const h = makeHarness({
+      gateway: gatewayStub({ text: '嗯。' }),
+      persona: {
+        ...PERSONA_LONG_OUTAGE,
+        fallbacksJson: '{}',
+        behaviorJson: JSON.stringify({ think: { enabled: false } }),
+      },
+    });
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(h.gateway.calls.map((call) => call.purpose)).toEqual(['chat']);
+    expect(sentText(h.sent)).toEqual(['嗯。']);
   });
 });

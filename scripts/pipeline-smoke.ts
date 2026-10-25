@@ -48,9 +48,22 @@ let gatewayReply = '你好呀，我是小雅';
 /** 可变配置：媒体能力要显式打开（D033） */
 let agentConfig: typeof DEFAULT_AGENT_CONFIG = { ...DEFAULT_AGENT_CONFIG };
 
+/** A 阶段（think）返回的内心独白 */
+const THINK_JSON = JSON.stringify({
+  want_to_reply: 0.7,
+  emotion_shift: 0.2,
+  intent: '随便聊聊',
+  key_points: ['接话'],
+  tone: '轻松',
+  length_hint: '短',
+});
+
+/** 记录每次调用的 purpose：验证双阶段（think → chat） */
+const purposes: string[] = [];
+
 /** 固定返回"你好呀"的 Gateway stub，不真出网 */
 const gatewayStub = {
-  chat: async (input: unknown): Promise<{
+  chat: async (input: { purpose?: string }): Promise<{
     text: string;
     model: string;
     provider: string;
@@ -59,6 +72,18 @@ const gatewayStub = {
     costCents: number;
     attempts: never[];
   }> => {
+    purposes.push(input.purpose ?? 'chat');
+    if (input.purpose === 'think') {
+      return {
+        text: THINK_JSON,
+        model: 'deepseek-chat',
+        provider: 'deepseek',
+        credentialId: 'cred-1',
+        usage: { tokenIn: 5, tokenOut: 5 },
+        costCents: 0,
+        attempts: [],
+      };
+    }
     return {
       text: gatewayReply,
       model: 'deepseek-chat',
@@ -361,6 +386,29 @@ async function main(): Promise<void> {
   const used = await prisma.mediaAsset.findFirst({ where: { instanceId: instance.id } });
   assert.equal(used?.useCount, 1, '用过一次要记账');
   process.stdout.write(`⑨ 素材库：按别名取出并发送，useCount=${used?.useCount}\n`);
+
+  // ⑩ 双阶段生成（M3-4）：A 阶段 think 用 modelCheap，B 阶段带导演指令；独白落库
+  const thinkBefore = purposes.length;
+  gatewayReply = '听着就累。';
+  await pipeline.handle(
+    inbound({ instanceId: instance.id, plainText: '今天加班到十点', segments: [{ type: 'text', text: '今天加班到十点' }] }),
+    async (a) => {
+      sent.push(a);
+      return { messageId: 'out-think' };
+    },
+    { capabilities: CAPS },
+  );
+  assert.deepEqual(purposes.slice(thinkBefore), ['think', 'chat'], '应先 think 再 chat');
+  const thinkRow = await prisma.message.findFirst({
+    where: { sessionId: (await prisma.session.findFirst({ where: { instanceId: instance.id } }))!.id, role: 'assistant' },
+    orderBy: { createdAt: 'desc' },
+  });
+  assert.ok(thinkRow?.thinkJson, '回复应带上内心独白');
+  assert.ok(thinkRow?.thinkJson?.includes('随便聊聊'), '独白内容应落库');
+  // 情绪被这一轮推动（0.2）
+  const stateAfter = await prisma.agentState.findUnique({ where: { instanceId: instance.id } });
+  assert.ok((stateAfter?.mood ?? 0) > 0, `mood 应被推动，实际 ${stateAfter?.mood}`);
+  process.stdout.write(`⑩ 双阶段：think → chat，独白已落库，mood=${stateAfter?.mood?.toFixed(2)}\n`);
 
   process.stdout.write('\nPIPELINE SMOKE PASSED\n');
 }

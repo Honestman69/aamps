@@ -77,6 +77,7 @@ export class PrismaSessionRepository implements ISessionRepository {
     content: string;
     senderId: string | null;
     replyToMessageId?: string | null;
+    thinkJson?: string | null;
   }): Promise<StoredMessage> {
     const row = await this.prisma.message.create({
       data: {
@@ -88,6 +89,7 @@ export class PrismaSessionRepository implements ISessionRepository {
         segmentsJson: input.replyToMessageId
           ? JSON.stringify([{ type: 'reply', messageId: input.replyToMessageId }])
           : '[]',
+        ...(input.thinkJson ? { thinkJson: input.thinkJson } : {}),
       },
     });
 
