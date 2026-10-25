@@ -166,6 +166,7 @@ newjob/
 │  │  │  ├─ attention/         # 发言决策
 │  │  │  ├─ reflection/        # 内心独白
 │  │  │  └─ expression/        # 拆条、延迟、表情
+│  │  ├─ media/                # 多模态（D033）：URL 白名单、入站图片抓取、媒体意图、TTS
 │  │  ├─ memory/               # 工作记忆 / 情景记忆 / 语义记忆
 │  │  ├─ persona/              # 人设卡片与版本
 │  │  ├─ rules/                # 约束词与规则引擎
@@ -219,6 +220,19 @@ interface IPipe<I, O> {
 `sanitize`（长度截断、去掉 Markdown 残留、链接白名单） → `rateLimit`（全局发送节流） → `send`（Adapter） → `persist`（落库 + 写记忆）
 
 **为什么 attention 在 generate 之前**：这是省钱又拟人的关键。自用场景下 60%~80% 的群消息不该回，提前判掉既省 token 又避免"有问必答"。
+
+### 多模态的接缝（D033）
+
+多模态**不是新管道**，只是现有三段各加一次转译：
+
+| 位置 | 做什么 | 失败怎么办 |
+|---|---|---|
+| `context` 之后 / `generate` 之前 | 入站 `image` 段 → 下载 → base64 data URL → 拼成 `content: [text, image_url]`（只挂当前这条，历史图不重发） | 这张图丢掉，正文留「[图片]」，不影响说话 |
+| `generate` 的模型选择 | 带图时指定 `modelVision`，**不参与预算降级** | 没配 `modelVision` 就根本不下载图片 |
+| `express` 之前 | 解析模型输出的 `[img]url[/img]` / `[voice]text[/voice]` → 校验 URL → TTS 合成 → 拆成 1~2 条出站 | 校验不过就丢标记；TTS 失败就把那句话当文字说 |
+
+**媒体选择归模型、形态归代码**：模型只说"我想发这张图/这句话用语音"，引用、拆条、延迟、兜底话术
+仍然由 `src/` 决定（D030 / 硬性规则 11）。这条边界见 `DECISIONS.md` D033。
 
 ---
 

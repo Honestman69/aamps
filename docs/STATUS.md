@@ -6,7 +6,7 @@
 > 仓库里没有 `.env`、没有数据库，直接 `pnpm dev` 会失败。
 
 **最后更新**：2026-10-25
-**当前阶段**：**M3 进行中** —— M3-1 状态机（mood/energy/affinity）+ M3-2 发言决策（attention）已完成并接入 Pipeline。
+**当前阶段**：**M3 进行中** —— M3-1 状态机、M3-2 发言决策、**多模态（看图 / 发图 / 发语音，D033）** 已完成并接入 Pipeline。
 M2 及之前全部完成（私聊能对话）。
 
 **下一步（默认走这条）**：**M3-3 表达层（express）** —— 拆条（单条 ≤40 字，最多 3 条）、
@@ -14,6 +14,9 @@ M2 及之前全部完成（私聊能对话）。
 `src/modules/mind/expression/`，出口在 `PipelineService` 出站前（`OutboundAction` 可多条）。
 之后才是 **M3-4 双阶段生成（think）**：`emotion_shift` 喂给 `applyReply({ moodShift })`，
 把现在空转的 mood 真正推动起来。
+
+> **多模态要配三样才生效**（都在实例上）：`modelVision`（看图）、`ttsCredentialId` + `ttsModel`（发语音）。
+> 不配就是"能力不存在"——图片只留「[图片]」占位，prompt 里也不提 `[voice]`。
 
 **M2 已完成的完整链路**（`PipelineService.handle`）：
 入站消息 → 会话/消息落库 → 取 owner + 人设 + 配置（会话开关）→ 状态衰减 + 关系读取
@@ -529,6 +532,47 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 
 ---
 
+### ~~第 20 步：多模态——看图 / 发图 / 发语音~~ ✅ 已完成（D033）
+
+**做了什么**
+
+- [x] `prisma` 迁移 `media_capabilities`：`BotInstance` 增 `modelVision` / `ttsCredentialId` / `ttsModel` /
+      `ttsVoice` / `imageHosts`（全部实例级，随人格走，换 Provider 不动）
+- [x] `src/modules/media/image-url.ts`：远程 URL 白名单与私网拦截（IP 字面量 / 单标签域名 /
+      `*.local` / `user:pass` 全拒），入站允许 http、出站只允许 https
+- [x] `src/modules/media/fetcher.ts`：入站图片下载 → data URL（4MB 上限、8s 超时、失败只丢这一张）
+- [x] `src/modules/media/intent.ts`：媒体指令解析（独占一行、图片 ≤2、语音 ≤300 字）、
+      `stripStrayMediaTags` 防写错的标签漏给用户
+- [x] `src/modules/model/providers/openai-speech.ts` + `src/modules/media/tts.ts`：
+      OpenAI 兼容 `/audio/speech`，按内容 hash 落盘 mp3 并缓存，失败一律降级为文字
+- [x] `ChatMessage.content` 支持段数组；`GatewayInput.model` 支持指定视觉模型，
+      且视觉请求**不参与预算降级**
+- [x] Pipeline：入站图片挂在**当前这条**消息上（历史图不重发）；出站"文本+图片一条、语音单独一条"；
+      平台不支持语音时把语音内容改说成文字
+- [x] prompt 增「媒体能力」段：只列真的可用的通道
+- [x] **修 M2 遗留缺陷**：主链路按 owner 取 DEK（`RuntimeKeyStore.getForUser`），
+      此前用 chat session id 查密钥库，真机上必然拿不到 → 消息全被静默吞掉
+
+**验收**
+
+- `pnpm test` **382 个用例全绿**（新增 43：media 28 + pipeline 媒体 8 + prompt 4 + key store 4，另有既有夹具调整）
+- `pnpm typecheck` / `pnpm build` 通过
+- `pipeline-smoke` **7 项**全过（新增⑦：模型回"图片+语音"→ 发出 2 条，语音文件真实落盘）
+- `http-smoke` 31 项全过（独立库、端口 3111）
+- `pnpm check:local-data` PASSED（210 个已跟踪文件）
+
+**实现补充（后续不要改）**
+
+- **没配就不提**：prompt 里的媒体能力段由配置驱动。没配 TTS 就不写 `[voice]` ——
+  否则模型会说"我发你语音"，然后什么都没有。
+- **校验失败就丢，不原样发给用户**：`[img]http://127.0.0.1/...[/img]` 这类留在正文里就是垃圾。
+- **语音文件用内容 hash 命名**（`data/media/tts/<sha256 前 32 位>.mp3`），绝不用模型文本拼路径。
+  同一句话只存一份 = 天然缓存。**目前没有自动清理**（M6 的 worker 按 mtime 保留 N 天）。
+- **出站图片只在 https 白名单（可选）内**：图片是协议端去下载的，链到内网等于让它当内网探测器。
+- **语音失败 → 文字兜底**，包括"平台不支持语音"这种情况（`voiceAsText`），不要让回复凭空消失。
+
+---
+
 ### ~~第 19 步：M3-1/2 状态机 + 发言决策~~ ✅ 已完成
 
 **做了什么**
@@ -634,6 +678,7 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 
 - [x] 状态机（mood / energy / affinity）—— `mind/state/`（第 19 步，D032）
 - [x] 发言决策器 —— `mind/attention/`，判定在调模型之前（第 19 步，D032）
+- [x] 多模态：看图 / 用图片回复 / 发语音（第 20 步，D033）
 - [ ] 双阶段生成（内心独白 → 外显）—— 下一步 M3-4；`emotion_shift` 接 `applyReply({ moodShift })`
 - [ ] 表达层（拆条 / 打字延迟 / 表情）—— 下一步 M3-3，落在 `mind/expression/`
 - [x] **是否引用上一条** —— 机制已就位（D030，`persona/quote.ts` + `Persona.quoteTendency`），
@@ -702,6 +747,7 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 - [x] 2026-10-24 **会话窗口（D031）**：target 必在窗口、after 优先、afterTotals 用未裁剪统计；真实库冒烟
 - [x] 2026-10-24 **Pipeline 主链路（M2 收尾）**：会话/消息落库 + prompt 拼装 + 网关 + 引用 + 兜底，替换 pong 占位；295 单测
 - [x] 2026-10-25 **状态机与发言决策（M3-1/2，D032）**：mood/energy 纯函数衰减 + 亲密度累积、attention 判定前置到网关之前（判掉不花 token）、状态与关系回写 Pipeline；338 单测
+- [x] 2026-10-25 **多模态（D033）**：入站图片转多模态消息（独立视觉模型）、模型用独占行标记决定发图/发语音、TTS 落盘 mp3、出站 URL 白名单；顺带修掉"主链路按 chat session id 取 DEK"的 M2 缺陷；382 单测
 
 ---
 
@@ -746,3 +792,4 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 | 2026-10-24 | 追加 **D023**：人格与记忆作用域 = 单个社交平台账号；撤回 `Agent` 层（迁移 `persona_scope_back_to_instance`），D020 归属段作废、四层结构与演化闸门保留；143 单测全绿 |
 | 2026-10-24 | 建立分支纪律：M0 收尾与 M1 骨架分两次提交到 `feat/m1-adapter-and-instance`，合并前 typecheck / 112 单测 / build / 31 项冒烟 / 数据闸门全绿，`--no-ff` 合并并打标签 `m1-skeleton` |
 | 2026-10-25 | M3 开工：状态机（mood/energy 纯函数衰减 + 亲密度累积/衰减）与发言决策（attention 前置到网关之前、群里被 @ 必回、busy 只影响群聊）落地并接入 Pipeline；338 单测、pipeline-smoke 6 项、http-smoke 31 项全过；追加 **D032** |
+| 2026-10-25 | 多模态落地（D033）：`media/` 模块（URL 白名单、入站图片抓取、媒体意图解析、TTS）+ 实例字段迁移 `media_capabilities` + Pipeline 出站多媒体；修复主链路 DEK 取用键错误；382 单测、pipeline-smoke 7 项全过 |

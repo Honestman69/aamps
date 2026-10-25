@@ -144,12 +144,25 @@ Gateway 内部 8 步：
 1. **取路由**：`ModelRoute(instanceId, purpose)` → 目标 credential + model
 2. **预算检查**：按 `instanceId` 读当日/当月用量（人格级预算，D024），超限按 `budgetPolicy`：
    `downgrade`（切到 modelCheap 继续）/ `block`（不回复 + 通知 owner）
-3. **取密钥**：解密 `apiKeyEnc`（解密结果只在内存存活，绝不进日志）
+3. **取密钥**：解密 `apiKeyEnc`（解密结果只在内存存活，绝不进日志）。
+   消息主链路按 **`ownerUserId`** 取 DEK（`RuntimeKeyStore.getForUser`）——
+   消息来自协议端，没有浏览器登录会话可用（D033）
 4. **选适配器**：按 `provider.adaptor` 拿到 `openai-compatible | anthropic | gemini`
 5. **组装请求**：鉴权头、baseUrl、超时、stream 参数
 6. **发送**：`AbortController` 控制超时，流式逐块回调
 7. **失败处理**：见第 7 节
 8. **记账**：解析 `usage` → 写 `ModelUsage` → 更新凭据健康状态
+
+### 6.1 视觉与语音：同一个网关，两条不同的入口（D033）
+
+| 能力 | 配置 | 调用 | 备注 |
+|---|---|---|---|
+| 看图 | `BotInstance.modelVision` | `gateway.chat({ messages: [{type:'image_url',...}], model: modelVision })` | 主模型多半不支持 vision，所以**单独一个模型字段**；视觉请求不参与预算降级 |
+| 发语音 | `ttsCredentialId` + `ttsModel` + `ttsVoice` | `POST {baseUrl}/audio/speech`（`media/tts.ts`） | 与聊天 Key 分开；合成结果落 `data/media/tts/<hash>.mp3`，OneBot 的 `record.file` 用本地绝对路径 |
+
+语音**不经过 Gateway**：它不是补全，是一次二进制请求，塞进网关会让"重试/记账/降级"三套逻辑
+都要额外判断。它有自己的凭据查询（`ITtsCredentialRepository.findForUser`，owner 维度）
+与失败语义（返回 `{kind:'failed'}`，由 Pipeline 降级为文字）。
 
 ---
 
