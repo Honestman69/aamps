@@ -5,18 +5,21 @@
 > **换机器 / 全新克隆先读 [`AGENTS.md`](../AGENTS.md) 的「换机器 / 全新克隆」**——
 > 仓库里没有 `.env`、没有数据库，直接 `pnpm dev` 会失败。
 
-**最后更新**：2026-10-24
-**当前阶段**：**M2 已完成**（最小闭环打通：私聊能对话）。M1 已验收；P0-1（反向实例自监听）已完成。
-M2 各步：配置解析（12）、ModelGateway（13）、故障→话术映射（14）、预算拦截（15）、
-引用决策（16）、会话窗口（17）、Pipeline 主链路（18）。
+**最后更新**：2026-10-25
+**当前阶段**：**M3 进行中** —— M3-1 状态机（mood/energy/affinity）+ M3-2 发言决策（attention）已完成并接入 Pipeline。
+M2 及之前全部完成（私聊能对话）。
 
-**下一步（默认走这条）**：**M3 拟人** —— 状态机（mood/energy/affinity）、发言决策（attention）、
-双阶段生成（内心独白 → 外显）、表达层（拆条/打字延迟/表情）。M2 的 Pipeline 已经是完整的
-消息主链路，M3 是在它上面加 Pipe，不再推倒重来。
+**下一步（默认走这条）**：**M3-3 表达层（express）** —— 拆条（单条 ≤40 字，最多 3 条）、
+打字延迟（首条阅读时间 + 后续逐字）、群内被 @ 时的回 @、连续发送上限。落地位置是
+`src/modules/mind/expression/`，出口在 `PipelineService` 出站前（`OutboundAction` 可多条）。
+之后才是 **M3-4 双阶段生成（think）**：`emotion_shift` 喂给 `applyReply({ moodShift })`，
+把现在空转的 mood 真正推动起来。
 
 **M2 已完成的完整链路**（`PipelineService.handle`）：
-入站消息 → upsert 会话 + 落库 → 取 owner + 人设 → `buildWindow`（D031）→ 拼 system prompt（D020）
-→ `ModelGateway.chat`（D024 预算 / D025 熔断 / 记账）→ `decideQuote`（D030）→ 出站 + 落库。
+入站消息 → 会话/消息落库 → 取 owner + 人设 + 配置（会话开关）→ 状态衰减 + 关系读取
+→ `buildWindow`（D031）→ **attention 判定（M3，判掉就不花 token）** → 拼 system prompt（D020，含语气提示）
+→ `ModelGateway.chat`（D024 预算 / D025 熔断 / 记账）→ `decideQuote`（D030）→ 出站 + 落库
+→ 状态/关系回写。
 失败走 `faultToSlot` + `decideSpeak` + `resolveFallback`（D028/D026），可能静默。
 
 **另一条路（只在"准备上云"时才走）**：P0-2 部署拓扑选型（Tailscale 组网 vs 公网反代），
@@ -526,6 +529,55 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 
 ---
 
+### ~~第 19 步：M3-1/2 状态机 + 发言决策~~ ✅ 已完成
+
+**做了什么**
+
+- [x] `src/modules/mind/state/mind-state.ts`：`mood` 每小时向基线回归 8%；
+      `energy` 按 24 小时作息曲线收敛（τ=2.5h，深夜 0.40 / 上午 0.88 / 午后低谷 0.72）；
+      回一条扣 0.02；过期的 `busyUntil` 由衰减顺手清空
+- [x] `src/modules/mind/state/relationship.ts`：亲密度单次涨幅 = 私聊回话 1 / 群聊 0.6 /
+      只读不回 0.2，被 @ 再 +0.4，长消息最多 +0.4，单次封顶 2；7 天宽限期后每天 -1
+- [x] `src/modules/mind/state/ports.ts` + `prisma-mind-state.repository.ts`：
+      `AgentState` / `Relationship` 两张表按实例 upsert
+- [x] `src/modules/mind/attention/policy.ts`：从 `Persona.behaviorJson.attention` 解析阈值与权重，
+      **逐字段回落**默认（一个字段写错不连累其它字段）
+- [x] `src/modules/mind/attention/attention.ts`：`wake` 公式 + 阈值判定；
+      **群里被 @ 必回**（硬规则，不受阈值与精力影响）；`busy` 只抬高群聊阈值，不影响私聊
+- [x] `src/modules/mind/attention/signals.ts`：`followUp`（上一条是它说的，10 分钟内）与
+      `groupActivity`（10 分钟内条数 / 12）都从会话窗口推，不新增查询
+- [x] `persona/prompt.ts` 新增「语气提示」段（D020 顺序最后一段）：只在精力/情绪偏离常态时说话，
+      且说现象不说指令
+- [x] Pipeline 接入：配置提前读（会话开关）、状态先衰减再判定、判定不回则**不调模型**、
+      两条路径都回写状态与关系；状态层异常一律吞掉，不影响对话
+- [x] `scripts/pipeline-smoke.ts` 扩到 6 项：真实 SQL 验证 `AgentState` 单行 upsert 与
+      `Relationship` 亲密度增长
+
+**验收**
+
+- `pnpm test` **338 个用例全绿**（新增 43：state 11 + relationship 10 + attention 10 + policy 4 + prompt 4 + pipeline 4）
+- `pnpm typecheck` / `pnpm build` 通过
+- `pipeline-smoke` 6 项全过（energy 0.740 / affinity 3）
+- `http-smoke` 31 项全过（独立库 `zk.db`、端口 3111）
+- `pnpm check:local-data` PASSED（199 个已跟踪文件）
+
+**实现补充（后续不要改）**
+
+- **衰减的起点只有一个**：每次衰减的量都按 `lastDecayAt → now` 算，返回值的 `lastDecayAt` 推进到 `now`。
+  这样"漏写库一次"只会让下次从更早的起点重算（结果相同），不会叠加衰减。精力一旦写成
+  "每次调用扣一点"，查询与定时任务都会偷偷扣，最后表现为"人格莫名其妙没精神了"。
+- **时钟回拨不衰减**，但 `busyUntil` 是否过期照常判断——它是"此刻的事实"，与经过多少时间无关。
+- **`mood` 目前没有推动来源**：只有回归基线。真正的推动量来自 M3-4 内心独白的 `emotion_shift`；
+  现在凭文本猜情绪等于瞎猜，猜错比不动更糟。所以提示词里 mood 只在 `|mood| ≥ 0.25` 时出现，
+  日常几乎不会触发——这是刻意留白，不是漏做。
+- **attention 在网关之前**，这是它省钱的地方；因此它**看不到模型输出**，只判"要不要开口"，
+  判错了最多少说一句，不会答错。
+- **不用随机数**：同一组输入永远同一结论（可复现、可精确断言）。"偶尔看一眼不回"的随机性由
+  状态变化体现（精力在掉、亲密度在涨），比扔骰子更接近真实原因（D032）。
+- **会话静默 / 人工接管时连状态都不写**：那时说话的"不是它"，算进亲密度会让关系变成客服的关系。
+- **亲密度衰减只在写库时算一次**，算完把 `lastInteractionAt` 推到 now。写成"每次调用都扣一点"
+  会让同一段空窗被反复扣到归零。
+
 ---
 
 ## 任务看板
@@ -580,10 +632,10 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 
 ### M3 拟人
 
-- [ ] 状态机（mood / energy / affinity）
-- [ ] 发言决策器
-- [ ] 双阶段生成（内心独白 → 外显）
-- [ ] 表达层（拆条 / 打字延迟 / 表情）
+- [x] 状态机（mood / energy / affinity）—— `mind/state/`（第 19 步，D032）
+- [x] 发言决策器 —— `mind/attention/`，判定在调模型之前（第 19 步，D032）
+- [ ] 双阶段生成（内心独白 → 外显）—— 下一步 M3-4；`emotion_shift` 接 `applyReply({ moodShift })`
+- [ ] 表达层（拆条 / 打字延迟 / 表情）—— 下一步 M3-3，落在 `mind/expression/`
 - [x] **是否引用上一条** —— 机制已就位（D030，`persona/quote.ts` + `Persona.quoteTendency`），
       M3 接出站时调用 `decideQuote()` 即可。引用不是默认行为：真人只在这一句需要指回上文时才引用。
       M1 的占位回声曾经无条件引用（`replyToMessageId`），看着很机械，已去掉；协议层能力保留。
@@ -649,6 +701,7 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 - [x] 2026-10-24 **引用决策（D030）**：必要性硬判 + 人格倾向概率，模型不参与；未决问题 6 定稿
 - [x] 2026-10-24 **会话窗口（D031）**：target 必在窗口、after 优先、afterTotals 用未裁剪统计；真实库冒烟
 - [x] 2026-10-24 **Pipeline 主链路（M2 收尾）**：会话/消息落库 + prompt 拼装 + 网关 + 引用 + 兜底，替换 pong 占位；295 单测
+- [x] 2026-10-25 **状态机与发言决策（M3-1/2，D032）**：mood/energy 纯函数衰减 + 亲密度累积、attention 判定前置到网关之前（判掉不花 token）、状态与关系回写 Pipeline；338 单测
 
 ---
 
@@ -692,3 +745,4 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 | 2026-10-24 | 追加 **D024**：预算挂人格（`BotInstance`），超限 `downgrade`/`block`；删除 `Credential` 上的预算字段；迁移 `budget_moves_to_instance`；144 单测全绿 |
 | 2026-10-24 | 追加 **D023**：人格与记忆作用域 = 单个社交平台账号；撤回 `Agent` 层（迁移 `persona_scope_back_to_instance`），D020 归属段作废、四层结构与演化闸门保留；143 单测全绿 |
 | 2026-10-24 | 建立分支纪律：M0 收尾与 M1 骨架分两次提交到 `feat/m1-adapter-and-instance`，合并前 typecheck / 112 单测 / build / 31 项冒烟 / 数据闸门全绿，`--no-ff` 合并并打标签 `m1-skeleton` |
+| 2026-10-25 | M3 开工：状态机（mood/energy 纯函数衰减 + 亲密度累积/衰减）与发言决策（attention 前置到网关之前、群里被 @ 必回、busy 只影响群聊）落地并接入 Pipeline；338 单测、pipeline-smoke 6 项、http-smoke 31 项全过；追加 **D032** |

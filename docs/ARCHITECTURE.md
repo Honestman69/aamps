@@ -254,6 +254,11 @@ decide = wake > threshold(busy ? 0.75 : 0.55)
 
 私聊与群聊分开：私聊默认几乎必回（阈值 0.05），群聊才是决策重点。
 
+> **实现现状（M3-1，见 D032）**：`src/modules/mind/state/`（mood/energy 衰减 + 亲密度）与
+> `src/modules/mind/attention/`（阈值与权重来自 `Persona.behaviorJson.attention`）已接入 Pipeline，
+> 判定发生在**调模型之前**。与上式的差异只有两处：`busy` 只抬高群聊阈值（私聊的忙碌是延迟不是失联），
+> 以及**群里被 @ 必回**（硬规则，不参与阈值比较）。`reflection/`（内心独白）与 `expression/`（拆条延迟）尚未实现。
+
 ### 6.3 双阶段生成
 
 单次调用容易"工整"，两段式才自然：
