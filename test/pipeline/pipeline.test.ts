@@ -3,6 +3,8 @@ import { KeyLockedError, PLATFORM_CAPABILITIES } from '@newjob/contracts';
 import { describe, expect, it } from 'vitest';
 
 import type { AgentConfig } from '@/modules/config/types';
+import type { MediaAssetService, SaveOutcome } from '@/modules/media/assets/asset.service';
+import type { MediaAssetRecord } from '@/modules/media/assets/ports';
 import type { IImageFetcher, InboundImage } from '@/modules/media/fetcher';
 import type { TtsResult, TtsService } from '@/modules/media/tts';
 import type { MindState } from '@/modules/mind/state/mind-state';
@@ -98,6 +100,13 @@ class FakeSessionRepo implements ISessionRepository {
 class FakeImageFetcher implements IImageFetcher {
   calls: string[] = [];
   result: InboundImage | null = { dataUrl: 'data:image/png;base64,AAAA', bytes: 3 };
+  /** 素材库保存走的是原始字节通道 */
+  bytes: { data: Buffer; mime: string } | null = { data: Buffer.from('img'), mime: 'image/png' };
+
+  async fetch(url: string): Promise<{ data: Buffer; mime: string } | null> {
+    this.calls.push(url);
+    return this.bytes;
+  }
 
   async fetchAsDataUrl(url: string): Promise<InboundImage | null> {
     this.calls.push(url);
@@ -112,6 +121,52 @@ class FakeTts {
   async synthesize(input: { text: string; voice: string; model: string }): Promise<TtsResult> {
     this.calls.push({ text: input.text, voice: input.voice, model: input.model });
     return this.result;
+  }
+}
+
+class FakeAssetService {
+  /** 数组顺序即 prompt 里的顺序 */
+  aliases: string[] = [];
+  /** 别名 → 本地文件路径 */
+  files = new Map<string, string>();
+  saves: Array<{ alias: string; urls: string[] }> = [];
+  saveResult: SaveOutcome = {
+    kind: 'saved',
+    reusedFile: false,
+    asset: {
+      id: 'asset-1',
+      instanceId: 'inst-1',
+      alias: '猫猫',
+      kind: 'image',
+      sha256: 'a'.repeat(64),
+      ext: 'png',
+      mime: 'image/png',
+      bytes: 3,
+      tags: '',
+      useCount: 0,
+      lastUsedAt: null,
+      createdAt: new Date('2026-10-25T00:00:00'),
+    },
+  };
+
+  async listForPrompt(): Promise<Array<{ alias: string; tags: string }>> {
+    return this.aliases.map((alias) => ({ alias, tags: '' }));
+  }
+
+  async resolveForSend(
+    _instanceId: string,
+    alias: string,
+  ): Promise<{ filePath: string; asset: MediaAssetRecord } | null> {
+    const filePath = this.files.get(alias);
+    if (!filePath || this.saveResult.kind !== 'saved') {
+      return null;
+    }
+    return { filePath, asset: this.saveResult.asset };
+  }
+
+  async saveFromUrls(input: { alias: string; urls: readonly string[] }): Promise<SaveOutcome> {
+    this.saves.push({ alias: input.alias, urls: [...input.urls] });
+    return this.saveResult;
   }
 }
 
@@ -232,6 +287,7 @@ type Harness = {
   mind: FakeMindRepo;
   images: FakeImageFetcher;
   tts: FakeTts;
+  assets: FakeAssetService;
   sent: OutboundAction[];
   service: PipelineService;
   gateway: GatewayStub;
@@ -252,6 +308,7 @@ function makeHarness(
   const mind = new FakeMindRepo();
   const images = new FakeImageFetcher();
   const tts = new FakeTts();
+  const assets = new FakeAssetService();
   const sent: OutboundAction[] = [];
   const gateway = overrides.gateway ?? gatewayStub({});
   pipelineRepo.persona = overrides.persona === undefined ? null : overrides.persona;
@@ -277,6 +334,7 @@ function makeHarness(
     mind,
     images,
     tts: tts as unknown as TtsService,
+    assets: assets as unknown as MediaAssetService,
     config,
     gateway: gateway as unknown as GatewayService,
     clock: () => new Date('2026-10-24T12:00:00'),
@@ -295,6 +353,7 @@ function makeHarness(
     mind,
     images,
     tts,
+    assets,
     sent,
     service,
     gateway,
@@ -593,5 +652,83 @@ describe('Pipeline 媒体（D033）', () => {
     const system = messages[0]?.content as string;
     expect(system).toContain('[img]');
     expect(system).not.toContain('[voice]');
+  });
+});
+
+describe('Pipeline 素材库（D034）', () => {
+  it('模型用素材：图片段指向本地文件，正文不含标记', async () => {
+    const h = makeHarness({ gateway: gatewayStub({ text: '嘿嘿\n[use]猫猫震惊[/use]' }) });
+    h.assets.aliases = ['猫猫震惊'];
+    h.assets.files.set('猫猫震惊', '/media/assets/abc.png');
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    const action = h.sent[0];
+    expect(action?.kind).toBe('send');
+    if (action?.kind === 'send') {
+      expect(action.segments).toEqual([
+        { type: 'text', text: '嘿嘿' },
+        { type: 'image', url: '/media/assets/abc.png' },
+      ]);
+    }
+  });
+
+  it('模型编了一个不存在的名字：跳过图片，不发空消息', async () => {
+    const h = makeHarness({ gateway: gatewayStub({ text: '喏\n[use]不存在的图[/use]' }) });
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    const action = h.sent[0];
+    if (action?.kind === 'send') {
+      expect(action.segments.map((s) => s.type)).toEqual(['text']);
+    }
+  });
+
+  it('模型要存素材：把这条消息里的图片交给素材库', async () => {
+    const h = makeHarness({ gateway: gatewayStub({ text: '存好了\n[save]猫猫震惊[/save]' }) });
+    const msg = inbound({
+      segments: [
+        { type: 'text', text: '看这个' },
+        { type: 'image', url: 'http://multimedia.nt.qq.com.cn/download?fileid=x' },
+      ],
+      plainText: '看这个[图片]',
+    });
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(h.assets.saves).toEqual([
+      { alias: '猫猫震惊', urls: ['http://multimedia.nt.qq.com.cn/download?fileid=x'] },
+    ]);
+    // 存素材不产生额外出站，正文照发
+    expect(sentText(h.sent)).toEqual(['存好了']);
+  });
+
+  it('提示词里带上素材清单，没素材时不提 [use]', async () => {
+    const persona = { ...PERSONA_LONG_OUTAGE, fallbacksJson: '{}' };
+
+    const withAssets = makeHarness({ persona });
+    withAssets.assets.aliases = ['猫猫震惊', '摸头'];
+    const first = inbound();
+    withAssets.windowRepo.slice = latestOnlySlice(first);
+    await withAssets.service.handle(first, withAssets.send, { capabilities: CAPS });
+    const systemWith = (withAssets.gateway.calls[0]?.messages as Array<{ content: unknown }>)[0]
+      ?.content as string;
+    expect(systemWith).toContain('猫猫震惊');
+    expect(systemWith).toContain('[use]');
+
+    const withoutAssets = makeHarness({ persona });
+    const second = inbound();
+    withoutAssets.windowRepo.slice = latestOnlySlice(second);
+    await withoutAssets.service.handle(second, withoutAssets.send, { capabilities: CAPS });
+    const systemWithout = (withoutAssets.gateway.calls[0]?.messages as Array<{ content: unknown }>)[0]
+      ?.content as string;
+    expect(systemWithout).not.toContain('[use]');
+    // 但"存下来"的能力要一直有，否则第一张图永远进不了库
+    expect(systemWithout).toContain('[save]');
   });
 });

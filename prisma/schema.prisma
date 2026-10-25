@@ -199,6 +199,7 @@ model BotInstance {
   events        InstanceEvent[]
   relationships Relationship[]
   memories      MemoryItem[]
+  assets        MediaAsset[]
   usages        ModelUsage[]
 
   @@unique([platform, accountId])
@@ -414,6 +415,43 @@ model AgentState {
   busyUntil   DateTime?
   lastDecayAt DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+}
+
+// ─────────────────────────── 素材库（D034） ───────────────────────────
+
+/// 存下来的图片 / 表情。**别名是模型唯一可用的入口**：模型不能凭空给外链当素材，
+/// 只能用这里存在的名字——顺手把出站图片的 SSRF 面收到零（文件是我们自己落的）。
+model MediaAsset {
+  id         String      @id @default(cuid())
+  // 与人格/记忆同作用域：这个社交账号存的表情，不给另一个号用（D023）
+  instanceId String
+  instance   BotInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+
+  /// 别名：同实例内唯一。**软删后名字仍占位**，避免旧对话里的引用突然指到另一张图
+  alias String
+  kind  String @default("image") // 目前只有 image；voice 预留
+
+  /// 内容 hash 与文件类型：路径由 `assets/<sha256>.<ext>` 推出来，库里不存绝对路径
+  /// （换机器/换 MEDIA_DIR 之后旧记录不能失效）
+  sha256 String
+  ext    String @default("jpg")
+  mime   String @default("image/jpeg")
+  bytes  Int    @default(0)
+
+  /// 来源：inbound（对话里存的）| upload（后台上传，M4）
+  source String @default("inbound")
+  /// 自由标签（空格分隔），只供人工整理；检索以别名为准，不做语义检索（D034）
+  tags   String @default("")
+
+  useCount   Int       @default(0)
+  lastUsedAt DateTime?
+
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@unique([instanceId, alias])
+  @@index([instanceId, deletedAt, lastUsedAt])
 }
 
 // ─────────────────────────── 运行记录 ───────────────────────────

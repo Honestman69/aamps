@@ -15,6 +15,8 @@ import { AuthModule } from '../auth/auth.module';
 import { ConfigModule } from '../config/config.module';
 import { CONFIG_SERVICE } from '../config/tokens';
 import type { ResolvedConfig } from '../config/types';
+import { MediaAssetService } from '../media/assets/asset.service';
+import { PrismaMediaAssetRepository } from '../media/assets/repositories/prisma-media-asset.repository';
 import { LocalMediaFileStore } from '../media/file-store';
 import { HttpImageFetcher } from '../media/fetcher';
 import type { IImageFetcher } from '../media/fetcher';
@@ -35,6 +37,7 @@ import type { IPipelineRepository } from './ports';
 import { PrismaPipelineRepository } from './repositories/prisma-pipeline.repository';
 import {
   IMAGE_FETCHER,
+  MEDIA_ASSET_SERVICE,
   MIND_STATE_REPOSITORY,
   TTS_SERVICE,
   PIPELINE_REPOSITORY,
@@ -67,6 +70,16 @@ import {
       useFactory: (): IImageFetcher => new HttpImageFetcher(),
     },
     {
+      provide: MEDIA_ASSET_SERVICE,
+      useFactory: (prisma: PrismaService): MediaAssetService =>
+        new MediaAssetService({
+          repo: new PrismaMediaAssetRepository(prisma),
+          store: new LocalMediaFileStore(),
+          images: new HttpImageFetcher(),
+        }),
+      inject: [PrismaService],
+    },
+    {
       provide: TTS_SERVICE,
       useFactory: (prisma: PrismaService, keyStore: RuntimeKeyStore): TtsService =>
         new TtsService({
@@ -91,6 +104,7 @@ import {
         mind: IMindStateRepository,
         images: IImageFetcher,
         tts: TtsService,
+        assets: MediaAssetService,
         config: {
           get(
             instanceId: string,
@@ -99,7 +113,17 @@ import {
         },
         gateway: GatewayService,
       ): PipelineService =>
-        new PipelineService({ pipeline, sessions, windowRepo, mind, images, tts, config, gateway }),
+        new PipelineService({
+          pipeline,
+          sessions,
+          windowRepo,
+          mind,
+          images,
+          tts,
+          assets,
+          config,
+          gateway,
+        }),
       inject: [
         PIPELINE_REPOSITORY,
         SESSION_REPOSITORY,
@@ -107,6 +131,7 @@ import {
         MIND_STATE_REPOSITORY,
         IMAGE_FETCHER,
         TTS_SERVICE,
+        MEDIA_ASSET_SERVICE,
         CONFIG_SERVICE,
         GATEWAY_SERVICE,
       ],

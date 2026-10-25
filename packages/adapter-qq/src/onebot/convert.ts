@@ -46,6 +46,15 @@ function toSegment(raw: OneBotSegment): Segment {
       return { type: 'image', url: text(data.url) || text(data.file) };
     case 'face':
       return { type: 'face', id: text(data.id) };
+    // 商城/收藏表情（mface）在 QQ 里就是一张图。不映射的话会落到 unknown，
+    // 素材库就永远存不到真正的表情包（D034）
+    case 'mface': {
+      const url = text(data.url) || text(data.file);
+      if (!url) {
+        return { type: 'unknown', raw };
+      }
+      return { type: 'image', url };
+    }
     case 'at':
       return { type: 'at', userId: text(data.qq) };
     case 'reply':

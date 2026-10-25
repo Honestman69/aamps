@@ -47,6 +47,7 @@ import type {
 import { KeyLockedError } from '@newjob/contracts';
 
 import type { ResolvedConfig } from '../config/types';
+import type { MediaAssetService } from '../media/assets/asset.service';
 import type { IImageFetcher } from '../media/fetcher';
 import { parseMediaIntent, stripStrayMediaTags } from '../media/intent';
 import type { TtsService } from '../media/tts';
@@ -89,6 +90,8 @@ export type PipelineDeps = {
   images: IImageFetcher;
   /** 语音合成（D033）；失败降级为文字 */
   tts: TtsService;
+  /** 素材库（D034）：存表情/图片，按别名取用 */
+  assets: MediaAssetService;
   config: {
     get(
       instanceId: string,
@@ -222,6 +225,10 @@ export class PipelineService {
     const imageParts = await this.collectImageParts(message, config);
     const voiceReady =
       caps.media.voice && Boolean(config.ttsCredentialId && config.ttsModel);
+    // 素材清单（D034）：模型只能用库里真实存在的名字，所以清单必须跟 prompt 一起给它
+    const assetAliases = caps.media.image
+      ? (await this.deps.assets.listForPrompt(instanceId, 12).catch(() => [])).map((item) => item.alias)
+      : [];
 
     // ⑧ 拼 prompt（语气 + 只列真的可用的媒体通道）
     const assembled = persona
@@ -230,7 +237,11 @@ export class PipelineService {
           channel,
           selfName: owner.name,
           state: { mood: state.mood, energy: state.energy },
-          capabilities: { imageReply: caps.media.image, voiceReply: voiceReady },
+          capabilities: {
+            imageReply: caps.media.image,
+            voiceReply: voiceReady,
+            assets: assetAliases,
+          },
         })
       : {
           system: '你是一个有自己性格的人。',
@@ -281,6 +292,7 @@ export class PipelineService {
     // ⑪ 出站（D033）：模型可以决定用图片或语音回，但**怎么发**由这里执行
     await this.deliver({
       message,
+      instanceId,
       sessionId: session.id,
       selfId: owner.accountId,
       ownerUserId: owner.ownerUserId,
@@ -333,6 +345,7 @@ export class PipelineService {
    */
   private async deliver(input: {
     message: InboundMessage;
+    instanceId: string;
     sessionId: string;
     selfId: string;
     ownerUserId: string;
@@ -351,6 +364,16 @@ export class PipelineService {
     const bodyText = stripStrayMediaTags(media.text);
     // 语音发不出去时（平台不支持 / 没配 TTS），这句话按文字说
     const spokenFallback = media.voice ?? media.voiceAsText;
+
+    // 存素材（D034）：只存**这条消息里真实存在的图**，不接受模型自己编的链接
+    if (media.saves.length > 0) {
+      const urls = message.segments
+        .filter((segment): segment is Extract<Segment, { type: 'image' }> => segment.type === 'image')
+        .map((segment) => segment.url);
+      await this.deps.assets
+        .saveFromUrls({ instanceId: input.instanceId, alias: media.saves[0] as string, urls })
+        .catch(() => null);
+    }
 
     // 语音先合成再发送：合成失败时才知道要不要把这句话并回正文
     let voicePath: string | null = null;
@@ -380,6 +403,15 @@ export class PipelineService {
     for (const url of media.images) {
       segments.push({ type: 'image', url });
     }
+    // 素材库的图：按别名查真实文件。查不到就跳过（模型编的名字不该变成一条空消息）
+    for (const alias of media.uses) {
+      const resolved = await this.deps.assets
+        .resolveForSend(input.instanceId, alias)
+        .catch(() => null);
+      if (resolved) {
+        segments.push({ type: 'image', url: resolved.filePath });
+      }
+    }
 
     if (segments.length > 0) {
       const action: OutboundAction = {
@@ -389,8 +421,8 @@ export class PipelineService {
         ...(input.quoteTarget ? { replyToMessageId: input.quoteTarget } : {}),
       };
       await send(action);
-      const content =
-        textOut || (media.images.length > 0 ? '[图片]' : '');
+      const hasImage = segments.some((segment) => segment.type === 'image');
+      const content = textOut || (hasImage ? '[图片]' : '');
       await this.deps.sessions.saveOutbound({
         sessionId: input.sessionId,
         content,

@@ -16,6 +16,7 @@
 
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
+import path from 'node:path';
 
 import { PrismaClient } from '@prisma/client';
 import { PLATFORM_CAPABILITIES } from '@newjob/contracts';
@@ -24,7 +25,9 @@ import type { InboundMessage, OutboundAction } from '@newjob/contracts';
 import { encryptWithDek, randomDek } from '../src/common/crypto';
 import { RuntimeKeyStore } from '../src/modules/auth/runtime-key-store';
 import { GatewayService } from '../src/modules/model/gateway/gateway.service';
-import { HttpImageFetcher } from '../src/modules/media/fetcher';
+import { MediaAssetService } from '../src/modules/media/assets/asset.service';
+import { PrismaMediaAssetRepository } from '../src/modules/media/assets/repositories/prisma-media-asset.repository';
+import type { IImageFetcher } from '../src/modules/media/fetcher';
 import { LocalMediaFileStore } from '../src/modules/media/file-store';
 import { TtsService } from '../src/modules/media/tts';
 import { PrismaMindStateRepository } from '../src/modules/mind/state/repositories/prisma-mind-state.repository';
@@ -141,6 +144,21 @@ async function main(): Promise<void> {
   };
 
   // 语音合成：不真的出网，只验证"调度 + 落盘 + 出站段"这条链
+  // 图片抓取：不出网，直接给固定字节（冒烟验证的是落盘与出站段，不是图床）
+  const imageFetcher: IImageFetcher = {
+    fetch: async () => ({ data: Buffer.from('smoke-png-bytes'), mime: 'image/png' }),
+    fetchAsDataUrl: async () => ({
+      dataUrl: 'data:image/png;base64,c21va2UtcG5nLWJ5dGVz',
+      bytes: 16,
+    }),
+  };
+  const mediaDir = `${process.cwd()}/data/media-smoke`;
+  const assetService = new MediaAssetService({
+    repo: new PrismaMediaAssetRepository(prisma),
+    store: new LocalMediaFileStore(mediaDir),
+    images: imageFetcher,
+  });
+
   const tts = new TtsService({
     credentials: {
       findForUser: async () => ({
@@ -152,7 +170,7 @@ async function main(): Promise<void> {
       }),
     },
     keyStore,
-    store: new LocalMediaFileStore(`${process.cwd()}/data/media-smoke`),
+    store: new LocalMediaFileStore(mediaDir),
     speak: async () => Buffer.from('ID3-fake-mp3'),
   });
 
@@ -162,8 +180,9 @@ async function main(): Promise<void> {
     sessions: sessionRepo,
     windowRepo,
     mind: mindRepo,
-    images: new HttpImageFetcher(),
+    images: imageFetcher,
     tts,
+    assets: assetService,
     config,
     gateway: gatewayStub,
     clock: () => new Date(),
@@ -276,6 +295,59 @@ async function main(): Promise<void> {
     }
   }
   process.stdout.write(`⑦ 媒体：文本+图片 1 条、语音 1 条，语音已落盘\n`);
+
+  // ⑧ 素材库存（D034）：模型说"存下来"，代码把这条消息里的图落盘并建别名
+  agentConfig = { ...DEFAULT_AGENT_CONFIG };
+  gatewayReply = '存好了\n[save]猫猫[/save]';
+  const imageMsg = inbound({
+    instanceId: instance.id,
+    segments: [
+      { type: 'text', text: '看这个' },
+      { type: 'image', url: 'http://multimedia.nt.qq.com.cn/download?fileid=x' },
+    ],
+    plainText: '看这个[图片]',
+  });
+  await pipeline.handle(
+    imageMsg,
+    async (a) => {
+      sent.push(a);
+      return { messageId: 'out-save' };
+    },
+    { capabilities: CAPS },
+  );
+
+  const stored = await prisma.mediaAsset.findMany({ where: { instanceId: instance.id } });
+  assert.equal(stored.length, 1, '应存下一条素材');
+  assert.equal(stored[0]?.alias, '猫猫');
+  const assetPath = path.join(mediaDir, 'assets', `${stored[0]?.sha256}.${stored[0]?.ext}`);
+  assert.ok(existsSync(assetPath), `素材文件应存在：${assetPath}`);
+  process.stdout.write(`⑧ 素材库：别名「${stored[0]?.alias}」已落盘（${stored[0]?.bytes} 字节）\n`);
+
+  // ⑨ 素材库取：模型用别名，出站 image 段指向本地文件
+  gatewayReply = '喏\n[use]猫猫[/use]';
+  const useBefore = sent.length;
+  await pipeline.handle(
+    inbound({ instanceId: instance.id, plainText: '再来一张', segments: [{ type: 'text', text: '再来一张' }] }),
+    async (a) => {
+      sent.push(a);
+      return { messageId: 'out-use' };
+    },
+    { capabilities: CAPS },
+  );
+
+  const useActions = sent.slice(useBefore);
+  assert.equal(useActions.length, 1, '用素材应发一条');
+  const useAction = useActions[0];
+  assert.equal(useAction?.kind, 'send');
+  if (useAction?.kind === 'send') {
+    const image = useAction.segments.find((seg) => seg.type === 'image');
+    assert.ok(image && image.type === 'image', '应带一个图片段');
+    // 路径分隔符随平台变，按"同一个文件"判断而不是按字符串
+    assert.equal(path.resolve(image.url), path.resolve(assetPath), '图片段应指向素材库文件');
+  }
+  const used = await prisma.mediaAsset.findFirst({ where: { instanceId: instance.id } });
+  assert.equal(used?.useCount, 1, '用过一次要记账');
+  process.stdout.write(`⑨ 素材库：按别名取出并发送，useCount=${used?.useCount}\n`);
 
   process.stdout.write('\nPIPELINE SMOKE PASSED\n');
 }

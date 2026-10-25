@@ -94,3 +94,51 @@ describe('stripStrayMediaTags', () => {
     expect(stripStrayMediaTags('这是 [重点] 内容')).toBe('这是 [重点] 内容');
   });
 });
+
+describe('素材库指令（D034）', () => {
+  it('用素材：别名进 uses，不混进正文', () => {
+    const intent = parseMediaIntent('哈哈哈\n[use]猫猫震惊[/use]', both);
+    expect(intent.uses).toEqual(['猫猫震惊']);
+    expect(intent.text).toBe('哈哈哈');
+    expect(intent.images).toEqual([]);
+  });
+
+  it('存素材：最多一条，第二条被丢', () => {
+    const intent = parseMediaIntent('[save]猫猫[/save]\n[save]狗子[/save]', both);
+    expect(intent.saves).toEqual(['猫猫']);
+    expect(intent.dropped).toEqual([{ kind: 'save', reason: 'too_many' }]);
+  });
+
+  it('外链与素材共用图片数量上限', () => {
+    const raw = [
+      '[img]https://example.com/1.jpg[/img]',
+      '[img]https://example.com/2.jpg[/img]',
+      '[use]猫猫[/use]',
+    ].join('\n');
+    const intent = parseMediaIntent(raw, both);
+    expect(intent.images).toHaveLength(2);
+    expect(intent.uses).toHaveLength(0);
+    expect(intent.dropped[0]).toEqual({ kind: 'use', reason: 'too_many' });
+  });
+
+  it('平台不支持图片时，use/save 都不生效', () => {
+    const intent = parseMediaIntent('[use]猫猫[/use]\n[save]狗子[/save]', {
+      allowImage: false,
+      allowVoice: false,
+    });
+    expect(intent.uses).toEqual([]);
+    expect(intent.saves).toEqual([]);
+    expect(intent.dropped.map((d) => d.kind)).toEqual(['use', 'save']);
+  });
+
+  it('空别名被丢弃', () => {
+    const intent = parseMediaIntent('[use][/use]\n[save]   [/save]', both);
+    expect(intent.uses).toEqual([]);
+    expect(intent.saves).toEqual([]);
+    expect(intent.dropped.map((d) => d.reason)).toEqual(['empty', 'empty']);
+  });
+
+  it('写错的 use/save 标签不会漏给用户', () => {
+    expect(stripStrayMediaTags('好的\n[use]猫猫[/uses]\n嗯')).toBe('好的\n嗯');
+  });
+});

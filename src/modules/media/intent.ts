@@ -37,14 +37,19 @@ export type MediaOptions = {
 };
 
 export type DroppedMedia = {
-  kind: 'image' | 'voice';
+  kind: 'image' | 'voice' | 'use' | 'save';
   reason: 'disabled' | 'too_many' | 'bad_url' | 'bad_scheme' | 'ip_literal' | 'private_host' | 'has_credentials' | 'not_allowlisted' | 'empty';
 };
 
 export type MediaIntent = {
   /** 剥离媒体指令后的正文（可能为空串） */
   text: string;
+  /** 外链图片（`[img]https://…[/img]`） */
   images: string[];
+  /** 素材库别名（`[use]名字[/use]`）。是否真的存在由调用方查库决定 */
+  uses: string[];
+  /** 要存下来的素材别名（`[save]名字[/save]`），最多一条 */
+  saves: string[];
   voice: string | null;
   /**
    * 语法合法、但当前发不出去（平台不支持语音 / 没配 TTS）的语音内容。
@@ -58,11 +63,17 @@ export type MediaIntent = {
 
 const IMAGE_LINE = /^\s*\[img\]\s*([\s\S]*?)\s*\[\/img\]\s*$/;
 const VOICE_LINE = /^\s*\[voice\]\s*([\s\S]*?)\s*\[\/voice\]\s*$/;
+const USE_LINE = /^\s*\[use\]\s*([\s\S]*?)\s*\[\/use\]\s*$/;
+const SAVE_LINE = /^\s*\[save\]\s*([\s\S]*?)\s*\[\/save\]\s*$/;
 
 export function parseMediaIntent(raw: string, options: MediaOptions): MediaIntent {
   const hosts = parseHostAllowlist(options.imageHosts ?? '');
   const images: string[] = [];
+  const uses: string[] = [];
+  const saves: string[] = [];
   const dropped: DroppedMedia[] = [];
+  /** 图片总数（外链 + 素材）共用同一个上限：一条回复里图太多会变成刷屏 */
+  const imageCount = (): number => images.length + uses.length;
   const kept: string[] = [];
   let voice: string | null = null;
   let voiceAsText: string | null = null;
@@ -75,7 +86,7 @@ export function parseMediaIntent(raw: string, options: MediaOptions): MediaInten
         dropped.push({ kind: 'image', reason: 'disabled' });
         continue;
       }
-      if (images.length >= MAX_IMAGES_PER_REPLY) {
+      if (imageCount() >= MAX_IMAGES_PER_REPLY) {
         dropped.push({ kind: 'image', reason: 'too_many' });
         continue;
       }
@@ -85,6 +96,44 @@ export function parseMediaIntent(raw: string, options: MediaOptions): MediaInten
         continue;
       }
       images.push(check.url.toString());
+      continue;
+    }
+
+    const useMatch = USE_LINE.exec(line);
+    if (useMatch) {
+      const alias = (useMatch[1] ?? '').trim();
+      if (!options.allowImage) {
+        dropped.push({ kind: 'use', reason: 'disabled' });
+        continue;
+      }
+      if (!alias) {
+        dropped.push({ kind: 'use', reason: 'empty' });
+        continue;
+      }
+      if (imageCount() >= MAX_IMAGES_PER_REPLY) {
+        dropped.push({ kind: 'use', reason: 'too_many' });
+        continue;
+      }
+      uses.push(alias);
+      continue;
+    }
+
+    const saveMatch = SAVE_LINE.exec(line);
+    if (saveMatch) {
+      const alias = (saveMatch[1] ?? '').trim();
+      if (!options.allowImage) {
+        dropped.push({ kind: 'save', reason: 'disabled' });
+        continue;
+      }
+      if (!alias) {
+        dropped.push({ kind: 'save', reason: 'empty' });
+        continue;
+      }
+      if (saves.length >= 1) {
+        dropped.push({ kind: 'save', reason: 'too_many' });
+        continue;
+      }
+      saves.push(alias);
       continue;
     }
 
@@ -113,7 +162,7 @@ export function parseMediaIntent(raw: string, options: MediaOptions): MediaInten
     kept.push(line);
   }
 
-  return { text: kept.join('\n').trim(), images, voice, voiceAsText, dropped };
+  return { text: kept.join('\n').trim(), images, uses, saves, voice, voiceAsText, dropped };
 }
 
 /**
@@ -125,7 +174,7 @@ export function parseMediaIntent(raw: string, options: MediaOptions): MediaInten
 export function stripStrayMediaTags(text: string): string {
   return text
     .split(/\r?\n/)
-    .filter((line) => !/^\s*\[\/?(img|voice)\b/i.test(line))
+    .filter((line) => !/^\s*\[\/?(img|voice|use|save)\b/i.test(line))
     .join('\n')
     .trim();
 }

@@ -42,7 +42,12 @@ export type PromptContext = {
    * 没配 TTS 就不提语音 —— 模型不会去用一个它不知道不存在的通道，
    * 而"提了但发不出去"会表现为它说了"我发你语音"然后什么都没发。
    */
-  capabilities?: { imageReply: boolean; voiceReply: boolean } | null;
+  capabilities?: {
+    imageReply: boolean;
+    voiceReply: boolean;
+    /** 素材库里的别名（D034）：模型只能从这些名字里挑 */
+    assets?: string[];
+  } | null;
   /**
    * 瞬态状态（M3）：只影响"语气提示"，不参与人格设定。
    *
@@ -224,10 +229,22 @@ function buildMediaSection(capabilities: PromptContext['capabilities']): string 
   if (!capabilities || (!capabilities.imageReply && !capabilities.voiceReply)) {
     return '';
   }
+  const assets = capabilities.assets ?? [];
   const lines = ['你手上的聊天工具还支持这些，规则要严格遵守：'];
   if (capabilities.imageReply) {
     lines.push(
       '- 想把一张图片发给对方时，单独写一行：[img]图片链接[/img]。链接必须是你真的确定存在的公开 https 图片地址；拿不准就别发。',
+    );
+  }
+  // 没存过任何素材时**不提** [use]：否则模型会编一个名字，然后发不出去
+  if (capabilities.imageReply && assets.length > 0) {
+    lines.push(
+      `- 你手边存着这些图，想发其中一张就单独写一行：[use]名字[/use]。现在有：${assets.join('、')}。只能用这些名字，不要编。`,
+    );
+  }
+  if (capabilities.imageReply) {
+    lines.push(
+      '- 对方发了图你想留着以后用，就单独写一行：[save]给它起的名字[/save]（两到六个字，好记、别和已有的重名）。',
     );
   }
   if (capabilities.voiceReply) {
