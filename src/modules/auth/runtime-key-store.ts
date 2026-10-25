@@ -72,6 +72,33 @@ export class RuntimeKeyStore {
     return state.dek;
   }
 
+  /**
+   * 按用户取一份未过期的 DEK。
+   *
+   * 为什么需要它：**消息主链路没有登录会话**。QQ 消息来自协议端，不来自浏览器，
+   * 它手里只有一个 chat session id 和 ownerUserId。而解密 API Key 必须有 DEK
+   * （D003/D005），DEK 又是挂在登录会话上的。两者对不上，表现就是"机器人收到消息
+   * 却一条都不回"（`KeyLockedError` 被主链路当成"没解锁"静默处理）。
+   *
+   * 语义：该用户的**任一**未过期解锁态都可以用 —— DEK 是用户级的（同一个密码派生出同一份），
+   * 多端登录只是各持一份副本。过期的直接跳过，不返回，也不在这里清理（清理归调用清理的路径）。
+   *
+   * 找不到仍然抛 `KeyLockedError`：这是"owner 需要去后台登录一次"，不是可以降级的故障。
+   */
+  getForUser(userId: string): Buffer {
+    const now = this.clock().getTime();
+    for (const state of this.sessions.values()) {
+      if (state.userId !== userId) {
+        continue;
+      }
+      if (state.expiresAt.getTime() <= now) {
+        continue;
+      }
+      return state.dek;
+    }
+    throw new KeyLockedError();
+  }
+
   /** 取完整状态（解锁时间、过期时间），供后台状态条使用 */
   getState(sessionId: string): UnlockState | null {
     const state = this.sessions.get(sessionId);
