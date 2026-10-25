@@ -175,6 +175,7 @@ async function main(): Promise<void> {
   });
 
   const sent: OutboundAction[] = [];
+  const sleeps: number[] = [];
   const pipeline = new PipelineService({
     pipeline: pipelineRepo,
     sessions: sessionRepo,
@@ -186,6 +187,10 @@ async function main(): Promise<void> {
     config,
     gateway: gatewayStub,
     clock: () => new Date(),
+    // 表达层会等几秒（M3-3）；冒烟只验证"有没有请求延迟"，不真的等
+    sleep: async (ms: number) => {
+      sleeps.push(ms);
+    },
   });
 
   // ① 第一条消息：私聊，回最后一条 → 不引用
@@ -219,6 +224,9 @@ async function main(): Promise<void> {
     );
   }
   assert.equal(sent.length, 3, '三轮对话应出站 3 次');
+  // 表达层：每条前面都要请求一次延迟（拟人），且延迟有下限
+  assert.ok(sleeps.length >= 3, `应请求过延迟，实际 ${sleeps.length}`);
+  assert.ok(sleeps.every((ms) => ms > 0), '延迟应为正数');
   // 每轮都是即时回复（target 就是最新一条），私聊都不应引用
   for (const a of sent) {
     if (a.kind === 'send') {
@@ -275,16 +283,20 @@ async function main(): Promise<void> {
   );
 
   const mediaActions = sent.slice(mediaBefore);
-  assert.equal(mediaActions.length, 2, '应发出两条：文本+图片、语音');
+  // M3-3 起：文本、图片、语音分别是独立的一条（真人也这么发）
+  assert.equal(mediaActions.length, 3, '应发出三条：文本、图片、语音');
   const mediaText = mediaActions[0];
   assert.equal(mediaText?.kind, 'send');
   if (mediaText?.kind === 'send') {
     assert.equal(mediaText.segments[0]?.type, 'text');
-    assert.equal(mediaText.segments[1]?.type, 'image');
-    const image = mediaText.segments[1];
+  }
+  const mediaImage = mediaActions[1];
+  assert.equal(mediaImage?.kind, 'send');
+  if (mediaImage?.kind === 'send') {
+    const image = mediaImage.segments[0];
     assert.ok(image?.type === 'image' && image.url === 'https://example.com/cat.jpg');
   }
-  const mediaVoice = mediaActions[1];
+  const mediaVoice = mediaActions[2];
   assert.equal(mediaVoice?.kind, 'send');
   if (mediaVoice?.kind === 'send') {
     assert.equal(mediaVoice.segments[0]?.type, 'voice');
@@ -294,7 +306,7 @@ async function main(): Promise<void> {
       assert.ok(existsSync(voice.url), `语音文件应存在：${voice.url}`);
     }
   }
-  process.stdout.write(`⑦ 媒体：文本+图片 1 条、语音 1 条，语音已落盘\n`);
+  process.stdout.write(`⑦ 媒体：文本 / 图片 / 语音各 1 条，语音已落盘\n`);
 
   // ⑧ 素材库存（D034）：模型说"存下来"，代码把这条消息里的图落盘并建别名
   agentConfig = { ...DEFAULT_AGENT_CONFIG };
@@ -336,11 +348,12 @@ async function main(): Promise<void> {
   );
 
   const useActions = sent.slice(useBefore);
-  assert.equal(useActions.length, 1, '用素材应发一条');
-  const useAction = useActions[0];
-  assert.equal(useAction?.kind, 'send');
-  if (useAction?.kind === 'send') {
-    const image = useAction.segments.find((seg) => seg.type === 'image');
+  // 文本一条 + 图片一条（M3-3 起图片单独发）
+  assert.equal(useActions.length, 2, '用素材应发文本与图片各一条');
+  const useImage = useActions[1];
+  assert.equal(useImage?.kind, 'send');
+  if (useImage?.kind === 'send') {
+    const image = useImage.segments.find((seg) => seg.type === 'image');
     assert.ok(image && image.type === 'image', '应带一个图片段');
     // 路径分隔符随平台变，按"同一个文件"判断而不是按字符串
     assert.equal(path.resolve(image.url), path.resolve(assetPath), '图片段应指向素材库文件');

@@ -53,6 +53,8 @@ import { parseMediaIntent, stripStrayMediaTags } from '../media/intent';
 import type { TtsService } from '../media/tts';
 import { decideAttention } from '../mind/attention/attention';
 import { parseAttentionPolicy } from '../mind/attention/policy';
+import { planTextReply, parseExpressionPolicy } from '../mind/expression/plan';
+import { messageSeed, seededRand } from '../mind/expression/rand';
 import { computeSignals } from '../mind/attention/signals';
 import {
   applyReply,
@@ -100,6 +102,11 @@ export type PipelineDeps = {
   };
   gateway: GatewayService;
   clock?: () => Date;
+  /**
+   * 延迟执行器（M3-3）。默认 `setTimeout`；测试里注入空实现，否则每条用例都要真等几秒。
+   * 称之为"注入点"而不是"可选项"：延迟是这个模块的正常行为，不是错误分支。
+   */
+  sleep?: (ms: number) => Promise<void>;
 };
 
 /** 出站回调：生产里是当前实例 adapter 的 send，测试里是收集器 */
@@ -109,7 +116,29 @@ export class PipelineService {
   /** scope（instanceId:sessionId）→ slot → 发言时间点。纯限频状态，丢了只多几句 */
   private readonly fallbackLog = new Map<string, Map<string, Date[]>>();
 
+  /**
+   * 每个会话的串行队列。
+   *
+   * 为什么需要：表达层会"等几秒再发"（拟人）。没有串行，两条相隔 1 秒的消息会
+   * 各自等各自的，最后交错发出去——比秒回还不像人。串行之后，同一个人的第二条消息
+   * 会等它把第一条说完，这正是真人的行为。
+   *
+   * 队列按 `instanceId + 会话` 分片，不阻塞别的会话；进程内 Map，丢了只影响"同时来两条"。
+   */
+  private readonly sessionQueue = new Map<string, Promise<void>>();
+
   constructor(private readonly deps: PipelineDeps) {}
+
+  private async wait(ms: number): Promise<void> {
+    if (ms <= 0) {
+      return;
+    }
+    if (this.deps.sleep) {
+      await this.deps.sleep(ms);
+      return;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, ms));
+  }
 
   private now(): Date {
     return this.deps.clock?.() ?? new Date();
@@ -130,8 +159,32 @@ export class PipelineService {
     if (!message.plainText.trim() && message.segments.length === 0) {
       return;
     }
+
+    const key = `${message.instanceId}:${message.session.kind}:${message.session.peerId}`;
+    const previous = this.sessionQueue.get(key) ?? Promise.resolve();
+    const current = previous.then(
+      () => this.runOnce(message, send, options.capabilities),
+      () => this.runOnce(message, send, options.capabilities),
+    );
+    this.sessionQueue.set(key, current);
     try {
-      await this.process(message, send, options.capabilities);
+      await current;
+    } finally {
+      // 只清理自己这一条：否则会把后来者的队列项删掉，串行就断了
+      if (this.sessionQueue.get(key) === current) {
+        this.sessionQueue.delete(key);
+      }
+    }
+  }
+
+  /** 处理一条消息并吞掉所有异常（永不 throw），串行队列里跑的就是它 */
+  private async runOnce(
+    message: InboundMessage,
+    send: SendAction,
+    capabilities: PlatformCapabilities,
+  ): Promise<void> {
+    try {
+      await this.process(message, send, capabilities);
     } catch (err) {
       await this.handleFailure(message, send, err instanceof Error ? err : new Error(String(err)));
     }
@@ -201,6 +254,7 @@ export class PipelineService {
 
     // ⑥ 发言人决策（M3）：判定在调模型之前，判掉就不花 token
     const signals = computeSignals(window, now);
+    const expression = parseExpressionPolicy(persona?.behaviorJson ?? null);
     const attention = decideAttention(
       {
         channel,
@@ -298,6 +352,9 @@ export class PipelineService {
       ownerUserId: owner.ownerUserId,
       config,
       caps,
+      expression,
+      busy: isBusy(state, now),
+      now,
       raw: result.text,
       quoteTarget: quoteDecision.quote ? message.id : undefined,
       send,
@@ -351,11 +408,17 @@ export class PipelineService {
     ownerUserId: string;
     config: ResolvedConfig['config'];
     caps: PlatformCapabilities;
+    /** 表达层参数（决策来自人设 behaviorJson.expression） */
+    expression: ReturnType<typeof parseExpressionPolicy>;
+    /** 当前是否忙碌（影响打字延迟） */
+    busy: boolean;
+    now: Date;
     raw: string;
     quoteTarget: string | undefined;
     send: SendAction;
   }): Promise<void> {
     const { message, config, caps, send } = input;
+    const channel: 'private' | 'group' = message.session.kind === 'group' ? 'group' : 'private';
     const media = parseMediaIntent(input.raw, {
       allowImage: caps.media.image,
       allowVoice: caps.media.voice && Boolean(config.ttsCredentialId && config.ttsModel),
@@ -396,43 +459,78 @@ export class PipelineService {
       textOut = textOut ? `${textOut}\n${spokenFallback}` : spokenFallback;
     }
 
-    const segments: Segment[] = [];
-    if (textOut) {
-      segments.push({ type: 'text', text: textOut });
-    }
-    for (const url of media.images) {
-      segments.push({ type: 'image', url });
-    }
-    // 素材库的图：按别名查真实文件。查不到就跳过（模型编的名字不该变成一条空消息）
+    // 图片（外链 + 素材库）：素材查不到就跳过，不编、不发空消息
+    const images: string[] = [...media.images];
     for (const alias of media.uses) {
       const resolved = await this.deps.assets
         .resolveForSend(input.instanceId, alias)
         .catch(() => null);
       if (resolved) {
-        segments.push({ type: 'image', url: resolved.filePath });
+        images.push(resolved.filePath);
       }
     }
 
-    if (segments.length > 0) {
-      const action: OutboundAction = {
+    // 表达层（M3-3）：拆条 + 每条前的延迟 + 群里回 @
+    const parts = textOut
+      ? planTextReply({
+          text: textOut,
+          channel,
+          isMentioned: message.isMentioned,
+          senderId: message.sender.id,
+          quoted: input.quoteTarget !== undefined,
+          ctx: { busy: input.busy, now: input.now },
+          policy: input.expression,
+          // 同一条消息重放得到同一套延迟/拆法，出问题能复现
+          rand: seededRand(messageSeed(`${message.instanceId}:${channel}:${message.session.peerId}`, message.id)),
+        })
+      : [];
+
+    // 引用与 @ 都只挂在第一条：一条回复只提醒对方一次才自然
+    let quoted = false;
+    const quoteRef = input.quoteTarget;
+
+    for (const part of parts) {
+      await this.wait(part.delayMs);
+      const segments: Segment[] = [];
+      if (part.mentionUserId) {
+        segments.push({ type: 'at', userId: part.mentionUserId });
+      }
+      segments.push({ type: 'text', text: part.text });
+      await send({
         kind: 'send',
         session: message.session,
         segments,
-        ...(input.quoteTarget ? { replyToMessageId: input.quoteTarget } : {}),
-      };
-      await send(action);
-      const hasImage = segments.some((segment) => segment.type === 'image');
-      const content = textOut || (hasImage ? '[图片]' : '');
+        ...(!quoted && quoteRef ? { replyToMessageId: quoteRef } : {}),
+      });
       await this.deps.sessions.saveOutbound({
         sessionId: input.sessionId,
-        content,
+        content: part.text,
         senderId: input.selfId,
-        replyToMessageId: input.quoteTarget ?? null,
+        replyToMessageId: !quoted && quoteRef ? quoteRef : null,
       });
+      quoted = true;
+    }
+
+    if (images.length > 0) {
+      // 发图前停一下：连续文字后立刻甩图，比文字本身更像机器人
+      await this.wait(quoted ? input.expression.delay.mediaDelayMs : 0);
+      await send({
+        kind: 'send',
+        session: message.session,
+        segments: images.map((url): Segment => ({ type: 'image', url })),
+        ...(!quoted && quoteRef ? { replyToMessageId: quoteRef } : {}),
+      });
+      await this.deps.sessions.saveOutbound({
+        sessionId: input.sessionId,
+        content: '[图片]',
+        senderId: input.selfId,
+        replyToMessageId: !quoted && quoteRef ? quoteRef : null,
+      });
+      quoted = true;
     }
 
     if (voicePath) {
-      // 语音不带引用：引用挂在文字那条上，一条消息只引用一次才自然
+      await this.wait(input.expression.delay.mediaDelayMs);
       await send({
         kind: 'send',
         session: message.session,

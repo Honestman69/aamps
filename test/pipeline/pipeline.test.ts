@@ -172,8 +172,11 @@ class FakeAssetService {
 
 class FakeWindowRepo implements ISessionWindowRepository {
   slice: WindowSlice | null = null;
-  async loadSlice(): Promise<WindowSlice | null> {
-    return this.slice;
+  /** 按 target 分片覆盖：并发/串行场景里两条消息的 target 不同 */
+  byTarget = new Map<string, WindowSlice>();
+
+  async loadSlice(input: { targetMessageId: string }): Promise<WindowSlice | null> {
+    return this.byTarget.get(input.targetMessageId) ?? this.slice;
   }
 }
 
@@ -289,6 +292,8 @@ type Harness = {
   tts: FakeTts;
   assets: FakeAssetService;
   sent: OutboundAction[];
+  /** 表达层请求过的延迟（毫秒），按调用顺序 */
+  sleeps: number[];
   service: PipelineService;
   gateway: GatewayStub;
   send: (action: OutboundAction) => Promise<{ messageId: string }>;
@@ -310,6 +315,7 @@ function makeHarness(
   const tts = new FakeTts();
   const assets = new FakeAssetService();
   const sent: OutboundAction[] = [];
+  const sleeps: number[] = [];
   const gateway = overrides.gateway ?? gatewayStub({});
   pipelineRepo.persona = overrides.persona === undefined ? null : overrides.persona;
 
@@ -338,6 +344,10 @@ function makeHarness(
     config,
     gateway: gateway as unknown as GatewayService,
     clock: () => new Date('2026-10-24T12:00:00'),
+    // 表达层会等几秒再发（M3-3）。测试里不能真等，否则每条用例几秒
+    sleep: async (ms: number) => {
+      sleeps.push(ms);
+    },
   };
 
   const service = new PipelineService(deps);
@@ -355,6 +365,7 @@ function makeHarness(
     tts,
     assets,
     sent,
+    sleeps,
     service,
     gateway,
     send,
@@ -381,7 +392,12 @@ function latestOnlySlice(msg: InboundMessage): WindowSlice {
 const sentText = (sent: OutboundAction[]): string[] =>
   sent
     .filter((a): a is Extract<OutboundAction, { kind: 'send' }> => a.kind === 'send')
-    .map((a) => (a.segments[0]?.type === 'text' ? a.segments[0].text : ''));
+    .map((a) =>
+      a.segments
+        .filter((segment): segment is Extract<typeof segment, { type: 'text' }> => segment.type === 'text')
+        .map((segment) => segment.text)
+        .join(''),
+    );
 
 // ── 测试 ──
 
@@ -573,12 +589,12 @@ describe('Pipeline 媒体（D033）', () => {
 
     await h.service.handle(msg, h.send, { capabilities: CAPS });
 
-    const action = h.sent[0];
-    expect(action?.kind).toBe('send');
-    if (action?.kind === 'send') {
-      expect(action.segments.map((s) => s.type)).toEqual(['text', 'image']);
-      expect(action.segments[0]).toEqual({ type: 'text', text: '给你看' });
-      expect(action.segments[1]).toEqual({ type: 'image', url: 'https://example.com/cat.jpg' });
+    // M3-3 起：文字与图片分两条发（真人不会把图和话塞在同一条里）
+    expect(sentText(h.sent).filter(Boolean)).toEqual(['给你看']);
+    const imageAction = h.sent[1];
+    expect(imageAction?.kind).toBe('send');
+    if (imageAction?.kind === 'send') {
+      expect(imageAction.segments).toEqual([{ type: 'image', url: 'https://example.com/cat.jpg' }]);
     }
   });
 
@@ -610,7 +626,10 @@ describe('Pipeline 媒体（D033）', () => {
     const kinds = h.sent.map((a) =>
       a.kind === 'send' ? a.segments.map((s) => s.type).join('+') : a.kind,
     );
-    expect(kinds).toEqual(['text', 'voice']);
+    // 文本可能被拆成多条（M3-3），但语音永远是最后一条独立的
+    expect(kinds.filter((kind) => kind === 'voice')).toHaveLength(1);
+    expect(kinds[kinds.length - 1]).toBe('voice');
+    expect(kinds[0]).toContain('text');
   });
 
   it('TTS 失败：语音内容降级为文字，不留空白回复', async () => {
@@ -665,13 +684,10 @@ describe('Pipeline 素材库（D034）', () => {
 
     await h.service.handle(msg, h.send, { capabilities: CAPS });
 
-    const action = h.sent[0];
-    expect(action?.kind).toBe('send');
-    if (action?.kind === 'send') {
-      expect(action.segments).toEqual([
-        { type: 'text', text: '嘿嘿' },
-        { type: 'image', url: '/media/assets/abc.png' },
-      ]);
+    expect(sentText(h.sent).filter(Boolean)).toEqual(['嘿嘿']);
+    const imageAction = h.sent[1];
+    if (imageAction?.kind === 'send') {
+      expect(imageAction.segments).toEqual([{ type: 'image', url: '/media/assets/abc.png' }]);
     }
   });
 
@@ -730,5 +746,97 @@ describe('Pipeline 素材库（D034）', () => {
     expect(systemWithout).not.toContain('[use]');
     // 但"存下来"的能力要一直有，否则第一张图永远进不了库
     expect(systemWithout).toContain('[save]');
+  });
+});
+
+describe('Pipeline 表达层（M3-3）', () => {
+  const LONG_REPLY =
+    '今天下班路上看到一只橘猫蹲在便利店门口，特别胖，一动不动。' +
+    '它一直盯着我手里的关东煮，我就分了一小块鱼丸给它。' +
+    '结果它吃完就跑了，一点情面都不给。';
+
+  it('长回复拆成多条，每条发出前都有延迟', async () => {
+    const h = makeHarness({ gateway: gatewayStub({ text: LONG_REPLY }) });
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(h.sent.length).toBeGreaterThan(1);
+    expect(h.sent.length).toBeLessThanOrEqual(3);
+    // 拆出来的每条都要等一会儿再发（拟人），且总延迟有上限
+    expect(h.sleeps.length).toBe(h.sent.length);
+    expect(h.sleeps.every((ms) => ms > 0)).toBe(true);
+    expect(h.sleeps.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(12_000);
+    // 内容不丢
+    expect(sentText(h.sent).join('')).toBe(LONG_REPLY);
+  });
+
+  it('群里被 @：第一条先 @ 回对方', async () => {
+    const h = makeHarness();
+    const msg = inbound({
+      session: { kind: 'group', peerId: 'group-1' },
+      isMentioned: true,
+    });
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    const first = h.sent[0];
+    expect(first?.kind).toBe('send');
+    if (first?.kind === 'send') {
+      expect(first.segments[0]).toEqual({ type: 'at', userId: 'peer-1' });
+    }
+  });
+
+  it('私聊不 @，也不会多出一条空消息', async () => {
+    const h = makeHarness();
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(h.sent).toHaveLength(1);
+    const action = h.sent[0];
+    if (action?.kind === 'send') {
+      expect(action.segments.some((segment) => segment.type === 'at')).toBe(false);
+    }
+  });
+
+  it('同一会话串行：后一条等前一条说完，不会交错', async () => {
+    let call = 0;
+    const texts = [LONG_REPLY, '第二句回复。'];
+    const gateway = {
+      calls: [] as Array<{ messages: unknown }>,
+      chat: async () => {
+        const text = texts[call] ?? '嗯';
+        call += 1;
+        return {
+          text,
+          model: 'deepseek-chat',
+          provider: 'deepseek',
+          credentialId: 'cred-1',
+          usage: { tokenIn: 1, tokenOut: 1 },
+          costCents: 0,
+          attempts: [],
+        };
+      },
+    };
+
+    const h = makeHarness({ gateway });
+    const first = inbound();
+    const second = inbound();
+    h.windowRepo.byTarget.set(first.id, latestOnlySlice(first));
+    h.windowRepo.byTarget.set(second.id, latestOnlySlice(second));
+
+    // 不 await 第一条，直接来第二条：模拟"打字期间又收到一条"
+    const p1 = h.service.handle(first, h.send, { capabilities: CAPS });
+    const p2 = h.service.handle(second, h.send, { capabilities: CAPS });
+    await Promise.all([p1, p2]);
+
+    const textsSent = sentText(h.sent).filter(Boolean);
+    // 第一条的多段必须连着，第二条排在最后，不能穿插
+    expect(textsSent[textsSent.length - 1]).toBe('第二句回复。');
+    expect(textsSent.slice(0, -1).join('')).toBe(LONG_REPLY);
   });
 });
