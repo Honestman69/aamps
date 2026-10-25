@@ -11,9 +11,16 @@
 import { Module } from '@nestjs/common';
 
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { AuthModule } from '../auth/auth.module';
 import { ConfigModule } from '../config/config.module';
 import { CONFIG_SERVICE } from '../config/tokens';
 import type { ResolvedConfig } from '../config/types';
+import { LocalMediaFileStore } from '../media/file-store';
+import { HttpImageFetcher } from '../media/fetcher';
+import type { IImageFetcher } from '../media/fetcher';
+import { PrismaTtsCredentialRepository } from '../media/repositories/prisma-tts-credential.repository';
+import { TtsService } from '../media/tts';
+import { RuntimeKeyStore } from '../auth/runtime-key-store';
 import { PrismaMindStateRepository } from '../mind/state/repositories/prisma-mind-state.repository';
 import type { IMindStateRepository } from '../mind/state/ports';
 import { ModelModule } from '../model/model.module';
@@ -27,7 +34,9 @@ import { PipelineService } from './pipeline.service';
 import type { IPipelineRepository } from './ports';
 import { PrismaPipelineRepository } from './repositories/prisma-pipeline.repository';
 import {
+  IMAGE_FETCHER,
   MIND_STATE_REPOSITORY,
+  TTS_SERVICE,
   PIPELINE_REPOSITORY,
   PIPELINE_SERVICE,
   SESSION_REPOSITORY,
@@ -35,7 +44,7 @@ import {
 } from './tokens';
 
 @Module({
-  imports: [ConfigModule, ModelModule],
+  imports: [AuthModule, ConfigModule, ModelModule],
   providers: [
     {
       provide: PIPELINE_REPOSITORY,
@@ -54,6 +63,20 @@ import {
       inject: [PrismaService],
     },
     {
+      provide: IMAGE_FETCHER,
+      useFactory: (): IImageFetcher => new HttpImageFetcher(),
+    },
+    {
+      provide: TTS_SERVICE,
+      useFactory: (prisma: PrismaService, keyStore: RuntimeKeyStore): TtsService =>
+        new TtsService({
+          credentials: new PrismaTtsCredentialRepository(prisma),
+          keyStore,
+          store: new LocalMediaFileStore(),
+        }),
+      inject: [PrismaService, RuntimeKeyStore],
+    },
+    {
       provide: MIND_STATE_REPOSITORY,
       useFactory: (prisma: PrismaService): IMindStateRepository =>
         new PrismaMindStateRepository(prisma),
@@ -66,6 +89,8 @@ import {
         sessions: ISessionRepository,
         windowRepo: ISessionWindowRepository,
         mind: IMindStateRepository,
+        images: IImageFetcher,
+        tts: TtsService,
         config: {
           get(
             instanceId: string,
@@ -74,12 +99,14 @@ import {
         },
         gateway: GatewayService,
       ): PipelineService =>
-        new PipelineService({ pipeline, sessions, windowRepo, mind, config, gateway }),
+        new PipelineService({ pipeline, sessions, windowRepo, mind, images, tts, config, gateway }),
       inject: [
         PIPELINE_REPOSITORY,
         SESSION_REPOSITORY,
         SESSION_WINDOW_REPOSITORY,
         MIND_STATE_REPOSITORY,
+        IMAGE_FETCHER,
+        TTS_SERVICE,
         CONFIG_SERVICE,
         GATEWAY_SERVICE,
       ],

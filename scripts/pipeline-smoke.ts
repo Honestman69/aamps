@@ -15,13 +15,18 @@
  */
 
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 
 import { PrismaClient } from '@prisma/client';
+import { PLATFORM_CAPABILITIES } from '@newjob/contracts';
 import type { InboundMessage, OutboundAction } from '@newjob/contracts';
 
 import { encryptWithDek, randomDek } from '../src/common/crypto';
 import { RuntimeKeyStore } from '../src/modules/auth/runtime-key-store';
 import { GatewayService } from '../src/modules/model/gateway/gateway.service';
+import { HttpImageFetcher } from '../src/modules/media/fetcher';
+import { LocalMediaFileStore } from '../src/modules/media/file-store';
+import { TtsService } from '../src/modules/media/tts';
 import { PrismaMindStateRepository } from '../src/modules/mind/state/repositories/prisma-mind-state.repository';
 import { PrismaPipelineRepository } from '../src/modules/pipeline/repositories/prisma-pipeline.repository';
 import { PipelineService } from '../src/modules/pipeline/pipeline.service';
@@ -32,6 +37,13 @@ import { DEFAULT_AGENT_CONFIG } from '../src/modules/config/types';
 const prisma = new PrismaClient();
 const DEK = randomDek();
 const SESSION = 'smoke-session';
+/** QQ 的能力声明：图片与语音都支持 */
+const CAPS = PLATFORM_CAPABILITIES.qq;
+
+/** 可变回复：用来切换"模型决定用图片/语音回"的场景 */
+let gatewayReply = '你好呀，我是小雅';
+/** 可变配置：媒体能力要显式打开（D033） */
+let agentConfig: typeof DEFAULT_AGENT_CONFIG = { ...DEFAULT_AGENT_CONFIG };
 
 /** 固定返回"你好呀"的 Gateway stub，不真出网 */
 const gatewayStub = {
@@ -45,7 +57,7 @@ const gatewayStub = {
     attempts: never[];
   }> => {
     return {
-      text: '你好呀，我是小雅',
+      text: gatewayReply,
       model: 'deepseek-chat',
       provider: 'deepseek',
       credentialId: 'cred-1',
@@ -123,10 +135,26 @@ async function main(): Promise<void> {
 
   const config = {
     get: async () => ({
-      config: DEFAULT_AGENT_CONFIG,
+      config: agentConfig,
       sessionFlags: { aiPaused: false, reviewMode: false, muted: false },
     }),
   };
+
+  // 语音合成：不真的出网，只验证"调度 + 落盘 + 出站段"这条链
+  const tts = new TtsService({
+    credentials: {
+      findForUser: async () => ({
+        id: 'cred-tts',
+        provider: 'openai',
+        baseUrl: 'https://api.example.com/v1',
+        authStyle: 'bearer',
+        apiKeyEnc: encryptWithDek('sk-smoke-tts', DEK),
+      }),
+    },
+    keyStore,
+    store: new LocalMediaFileStore(`${process.cwd()}/data/media-smoke`),
+    speak: async () => Buffer.from('ID3-fake-mp3'),
+  });
 
   const sent: OutboundAction[] = [];
   const pipeline = new PipelineService({
@@ -134,6 +162,8 @@ async function main(): Promise<void> {
     sessions: sessionRepo,
     windowRepo,
     mind: mindRepo,
+    images: new HttpImageFetcher(),
+    tts,
     config,
     gateway: gatewayStub,
     clock: () => new Date(),
@@ -143,7 +173,7 @@ async function main(): Promise<void> {
   await pipeline.handle(inbound({ instanceId: instance.id, plainText: '你好', segments: [{ type: 'text', text: '你好' }] }), async (a) => {
     sent.push(a);
     return { messageId: 'out-1' };
-  });
+  }, { capabilities: CAPS });
 
   assert.equal(sent.length, 1, '第一条消息应出站一次');
   const first = sent[0];
@@ -166,6 +196,7 @@ async function main(): Promise<void> {
         sent.push(a);
         return { messageId: 'out-x' };
       },
+      { capabilities: CAPS },
     );
   }
   assert.equal(sent.length, 3, '三轮对话应出站 3 次');
@@ -204,6 +235,47 @@ async function main(): Promise<void> {
   assert.ok(rel.affinity > 0, `亲密度应随交互增长，实际 ${rel.affinity}`);
   assert.ok(rel.lastInteractionAt, 'lastInteractionAt 应有值');
   process.stdout.write(`⑥ Relationship 单行 upsert：affinity=${rel.affinity}\n`);
+
+  // ⑦ M3 媒体（D033）：模型自己决定用图片和语音回，代码负责执行
+  agentConfig = {
+    ...DEFAULT_AGENT_CONFIG,
+    ttsCredentialId: 'cred-tts',
+    ttsModel: 'tts-1',
+    ttsVoice: 'nova',
+  };
+  gatewayReply = '给你看\n[img]https://example.com/cat.jpg[/img]\n[voice]晚安[/voice]';
+
+  const mediaBefore = sent.length;
+  await pipeline.handle(
+    inbound({ instanceId: instance.id, plainText: '发张图', segments: [{ type: 'text', text: '发张图' }] }),
+    async (a) => {
+      sent.push(a);
+      return { messageId: 'out-media' };
+    },
+    { capabilities: CAPS },
+  );
+
+  const mediaActions = sent.slice(mediaBefore);
+  assert.equal(mediaActions.length, 2, '应发出两条：文本+图片、语音');
+  const mediaText = mediaActions[0];
+  assert.equal(mediaText?.kind, 'send');
+  if (mediaText?.kind === 'send') {
+    assert.equal(mediaText.segments[0]?.type, 'text');
+    assert.equal(mediaText.segments[1]?.type, 'image');
+    const image = mediaText.segments[1];
+    assert.ok(image?.type === 'image' && image.url === 'https://example.com/cat.jpg');
+  }
+  const mediaVoice = mediaActions[1];
+  assert.equal(mediaVoice?.kind, 'send');
+  if (mediaVoice?.kind === 'send') {
+    assert.equal(mediaVoice.segments[0]?.type, 'voice');
+    const voice = mediaVoice.segments[0];
+    if (voice?.type === 'voice') {
+      // 落盘必须是真实的本地文件：NapCat 的 record.file 要的是可读路径
+      assert.ok(existsSync(voice.url), `语音文件应存在：${voice.url}`);
+    }
+  }
+  process.stdout.write(`⑦ 媒体：文本+图片 1 条、语音 1 条，语音已落盘\n`);
 
   process.stdout.write('\nPIPELINE SMOKE PASSED\n');
 }

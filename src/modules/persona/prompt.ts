@@ -38,6 +38,12 @@ export type PromptContext = {
   /** 机器人自己的名字 */
   selfName: string;
   /**
+   * 对话能力（D033）：只把**这台机器真的能做**的事写进 prompt。
+   * 没配 TTS 就不提语音 —— 模型不会去用一个它不知道不存在的通道，
+   * 而"提了但发不出去"会表现为它说了"我发你语音"然后什么都没发。
+   */
+  capabilities?: { imageReply: boolean; voiceReply: boolean } | null;
+  /**
    * 瞬态状态（M3）：只影响"语气提示"，不参与人格设定。
    *
    * 为什么不写进种子：种子是"它出生时是什么人"，state 是"它此刻累不累"。
@@ -207,6 +213,34 @@ function buildBoundariesSection(seed: PersonaSeed): string {
  * 2. **说现象，不说指令**。写"回话会很短"而不是"请把回复控制在 20 字内"——后者是
  *    运维式指令，模型会照做，但语气会僵。
  */
+/**
+ * 媒体能力说明（D033）。
+ *
+ * 为什么用"独占一行的标记"而不是让它自然语言描述：
+ * 自然语言（"我发你一张图"）无法被执行，只会变成一句空话。
+ * 标记必须独占一行，是为了让正文里顺手提到 `[img]` 时不被误判成指令。
+ */
+function buildMediaSection(capabilities: PromptContext['capabilities']): string {
+  if (!capabilities || (!capabilities.imageReply && !capabilities.voiceReply)) {
+    return '';
+  }
+  const lines = ['你手上的聊天工具还支持这些，规则要严格遵守：'];
+  if (capabilities.imageReply) {
+    lines.push(
+      '- 想把一张图片发给对方时，单独写一行：[img]图片链接[/img]。链接必须是你真的确定存在的公开 https 图片地址；拿不准就别发。',
+    );
+  }
+  if (capabilities.voiceReply) {
+    lines.push(
+      '- 想用语音说一句时，单独写一行：[voice]要说的话[/voice]。语音适合短句和带情绪的回应，不适合念长段。',
+    );
+  }
+  lines.push(
+    '这些标记不要解释、不要和别的字写在同一行；大部分时候还是正常打字，用多了很假。',
+  );
+  return lines.join('\n');
+}
+
 function buildToneSection(state: PromptContext['state']): string {
   if (!state) {
     return '';
@@ -269,7 +303,13 @@ export function assemblePrompt(seed: PersonaSeed, context: PromptContext): Assem
     sections.push(boundaries);
   }
 
-  // ⑧ 语气提示（D020 顺序的最后一段）：此刻累不累、心情如何
+  // ⑧ 媒体能力（D033）：只列真的可用的通道
+  const media = buildMediaSection(context.capabilities);
+  if (media) {
+    sections.push(media);
+  }
+
+  // ⑨ 语气提示（D020 顺序的最后一段）：此刻累不累、心情如何
   const tone = buildToneSection(context.state);
   if (tone) {
     sections.push(tone);

@@ -91,6 +91,15 @@ export function resolveConfig(bundle: ConfigBundle): ResolvedConfig {
   }
   // 预算只有实例层：人设和会话都不该改它。否则"换个会话"就能绕过限额。
 
+  // ── 多模态（D033）──
+  // 同样是实例层：换 Key 不改人格，换人格也不该偷偷换掉"这台机器能不能发语音"。
+  if (hasText(instance.modelVision)) set('visionModel', instance.modelVision, 'instance');
+  if (hasText(instance.ttsCredentialId)) set('ttsCredentialId', instance.ttsCredentialId, 'instance');
+  if (hasText(instance.ttsModel)) set('ttsModel', instance.ttsModel, 'instance');
+  if (hasText(instance.ttsVoice)) set('ttsVoice', instance.ttsVoice, 'instance');
+  // 白名单允许空串：空 = 不限域名（但仍受协议与私网拦截约束），这是"没配"的语义
+  if (typeof instance.imageHosts === 'string') set('imageHosts', instance.imageHosts.trim(), 'instance');
+
   // ── 人设层 ──
   // 这一版人设层不改上面任何字段：行为参数属于 M3 表达层，现在透传只为了将来有落点。
   // 保留这个分支是刻意的：让"人设层存在但不生效"显式可见，而不是让人误以为漏了实现。

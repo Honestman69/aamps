@@ -38,10 +38,18 @@
  * - express（拆条 / 打字延迟 / 表情 / 夜间静默 / 连发上限）
  */
 
-import type { InboundMessage, OutboundAction } from '@newjob/contracts';
+import type {
+  InboundMessage,
+  OutboundAction,
+  PlatformCapabilities,
+  Segment,
+} from '@newjob/contracts';
 import { KeyLockedError } from '@newjob/contracts';
 
 import type { ResolvedConfig } from '../config/types';
+import type { IImageFetcher } from '../media/fetcher';
+import { parseMediaIntent, stripStrayMediaTags } from '../media/intent';
+import type { TtsService } from '../media/tts';
 import { decideAttention } from '../mind/attention/attention';
 import { parseAttentionPolicy } from '../mind/attention/policy';
 import { computeSignals } from '../mind/attention/signals';
@@ -55,7 +63,7 @@ import {
 import type { IMindStateRepository } from '../mind/state/ports';
 import { nextAffinity, type RelationshipSnapshot } from '../mind/state/relationship';
 import { GatewayFailedError, GatewayService } from '../model/gateway/gateway.service';
-import type { ChatMessage } from '../model/providers/openai-compatible';
+import type { ChatMessage, ContentPart } from '../model/providers/openai-compatible';
 import { parseFallbacks, resolveFallback } from '../persona/fallbacks';
 import { decideSpeak, faultToSlot, type SpeakFailureReason } from '../persona/fault-slot';
 import { assemblePrompt } from '../persona/prompt';
@@ -77,6 +85,10 @@ export type PipelineDeps = {
   windowRepo: ISessionWindowRepository;
   /** 心智状态（M3）：mood / energy / affinity */
   mind: IMindStateRepository;
+  /** 入站图片 → data URL（D033）；失败只丢这一张图 */
+  images: IImageFetcher;
+  /** 语音合成（D033）；失败降级为文字 */
+  tts: TtsService;
   config: {
     get(
       instanceId: string,
@@ -106,18 +118,27 @@ export class PipelineService {
    * @param send 出站回调。之所以作为参数而不是依赖注入：send 绑定到"当前这条连接
    *             的 adapter"，每个实例的 adapter 不同，不能全局注入一个。
    */
-  async handle(message: InboundMessage, send: SendAction): Promise<void> {
-    if (!message.plainText.trim()) {
+  async handle(
+    message: InboundMessage,
+    send: SendAction,
+    options: { capabilities: PlatformCapabilities },
+  ): Promise<void> {
+    // 纯图片消息的 plainText 是「[图片]」，非空；真正该丢的是空消息
+    if (!message.plainText.trim() && message.segments.length === 0) {
       return;
     }
     try {
-      await this.process(message, send);
+      await this.process(message, send, options.capabilities);
     } catch (err) {
       await this.handleFailure(message, send, err instanceof Error ? err : new Error(String(err)));
     }
   }
 
-  private async process(message: InboundMessage, send: SendAction): Promise<void> {
+  private async process(
+    message: InboundMessage,
+    send: SendAction,
+    caps: PlatformCapabilities,
+  ): Promise<void> {
     const instanceId = message.instanceId;
     const channel: 'private' | 'group' = message.session.kind === 'group' ? 'group' : 'private';
 
@@ -139,6 +160,8 @@ export class PipelineService {
       this.deps.pipeline.findActivePersona(instanceId),
       this.deps.config.get(instanceId, { sessionId: session.id }),
     ]);
+
+    const config = resolved.config;
 
     // ③ 治理：人工接管 / 会话静默 → 只入库，不说话，也不动状态
     //    人接管期间的对话不属于"它"的经历，记进亲密度会让关系变成人工客服的关系
@@ -195,13 +218,19 @@ export class PipelineService {
       return;
     }
 
-    // ⑦ 拼 prompt（带上此刻的语气）
+    // ⑦ 看图（D033）：只有配了视觉模型才真的去下载图片
+    const imageParts = await this.collectImageParts(message, config);
+    const voiceReady =
+      caps.media.voice && Boolean(config.ttsCredentialId && config.ttsModel);
+
+    // ⑧ 拼 prompt（语气 + 只列真的可用的媒体通道）
     const assembled = persona
       ? assemblePrompt(persona, {
           peerName: message.sender.name || session.peerName,
           channel,
           selfName: owner.name,
           state: { mood: state.mood, energy: state.energy },
+          capabilities: { imageReply: caps.media.image, voiceReply: voiceReady },
         })
       : {
           system: '你是一个有自己性格的人。',
@@ -217,20 +246,26 @@ export class PipelineService {
         const prefix = channel === 'group' && role === 'user' && m.senderName
           ? `${m.senderName}：`
           : '';
-        return { role, content: `${prefix}${m.content}` };
+        const text = `${prefix}${m.content}`;
+        // 图片只挂在"当前这条"上：历史图片不重发，否则每一轮都在为同一张图付费
+        if (m.id === inbound.id && imageParts.length > 0) {
+          return { role, content: [{ type: 'text', text }, ...imageParts] };
+        }
+        return { role, content: text };
       }),
     ];
 
-    // ⑧ 调网关
+    // ⑨ 调网关（有图时指定视觉模型：主模型多半看不见图）
     const result = await this.deps.gateway.chat({
       instanceId,
       ownerUserId: owner.ownerUserId,
       sessionId: session.id,
       purpose: 'chat',
       messages,
+      ...(imageParts.length > 0 && config.visionModel ? { model: config.visionModel } : {}),
     });
 
-    // ⑨ 引用决策
+    // ⑩ 引用决策
     const facts = windowQuoteFacts(window);
     const quoteDecision = decideQuote({
       channel,
@@ -243,24 +278,141 @@ export class PipelineService {
       now,
     });
 
-    // ⑩ 出站 + 落库
-    const action: OutboundAction = {
-      kind: 'send',
-      session: message.session,
-      segments: [{ type: 'text', text: result.text }],
-      ...(quoteDecision.quote ? { replyToMessageId: message.id } : {}),
-    };
-    await send(action);
-    await this.deps.sessions.saveOutbound({
+    // ⑪ 出站（D033）：模型可以决定用图片或语音回，但**怎么发**由这里执行
+    await this.deliver({
+      message,
       sessionId: session.id,
-      content: result.text,
-      senderId: owner.accountId,
-      replyToMessageId: quoteDecision.quote ? message.id : null,
+      selfId: owner.accountId,
+      ownerUserId: owner.ownerUserId,
+      config,
+      caps,
+      raw: result.text,
+      quoteTarget: quoteDecision.quote ? message.id : undefined,
+      send,
     });
 
-    // ⑪ 交互回写：回一条要花精力，关系往前走一点
+    // ⑫ 交互回写：回一条要花精力，关系往前走一点
     await this.persistMind(instanceId, applyReply(state));
     await this.persistRelationship(instanceId, message, relationship, now, true);
+  }
+
+  /**
+   * 入站图片 → 多模态段。
+   *
+   * 没配视觉模型时**完全不下载**：图片只是 prompt 里的「[图片]」占位，
+   * 下载了也没人看，白花一次外网请求（还可能把图床的限频引到自己身上）。
+   */
+  private async collectImageParts(
+    message: InboundMessage,
+    config: ResolvedConfig['config'],
+  ): Promise<ContentPart[]> {
+    if (!config.visionModel) {
+      return [];
+    }
+    const urls = message.segments
+      .filter((segment): segment is Extract<Segment, { type: 'image' }> => segment.type === 'image')
+      .map((segment) => segment.url)
+      .filter((url) => url.length > 0)
+      .slice(0, 3);
+
+    const parts: ContentPart[] = [];
+    for (const url of urls) {
+      const image = await this.deps.images.fetchAsDataUrl(url);
+      if (image) {
+        parts.push({ type: 'image_url', image_url: { url: image.dataUrl } });
+      }
+    }
+    return parts;
+  }
+
+  /**
+   * 出站编排：文本 + 图片合成一条，语音单独一条。
+   *
+   * 为什么语音要单独发：QQ 里一条消息同时带文字和语音，客户端常常只显示其中一个，
+   * 而且语音条本身在聊天记录里就是一个独立气泡 —— 分开发也更像人。
+   */
+  private async deliver(input: {
+    message: InboundMessage;
+    sessionId: string;
+    selfId: string;
+    ownerUserId: string;
+    config: ResolvedConfig['config'];
+    caps: PlatformCapabilities;
+    raw: string;
+    quoteTarget: string | undefined;
+    send: SendAction;
+  }): Promise<void> {
+    const { message, config, caps, send } = input;
+    const media = parseMediaIntent(input.raw, {
+      allowImage: caps.media.image,
+      allowVoice: caps.media.voice && Boolean(config.ttsCredentialId && config.ttsModel),
+      imageHosts: config.imageHosts,
+    });
+    const bodyText = stripStrayMediaTags(media.text);
+    // 语音发不出去时（平台不支持 / 没配 TTS），这句话按文字说
+    const spokenFallback = media.voice ?? media.voiceAsText;
+
+    // 语音先合成再发送：合成失败时才知道要不要把这句话并回正文
+    let voicePath: string | null = null;
+    if (media.voice && config.ttsCredentialId && config.ttsModel) {
+      const tts = await this.deps.tts.synthesize({
+        ownerUserId: input.ownerUserId,
+        credentialId: config.ttsCredentialId,
+        model: config.ttsModel,
+        voice: config.ttsVoice,
+        text: media.voice,
+      });
+      if (tts.kind === 'ok') {
+        voicePath = tts.filePath;
+      }
+    }
+
+    // 语音没合成出来（含"没配 TTS""平台不支持"）：把要说的话并进正文，不要让这条回复消失
+    let textOut = bodyText;
+    if (spokenFallback && !voicePath) {
+      textOut = textOut ? `${textOut}\n${spokenFallback}` : spokenFallback;
+    }
+
+    const segments: Segment[] = [];
+    if (textOut) {
+      segments.push({ type: 'text', text: textOut });
+    }
+    for (const url of media.images) {
+      segments.push({ type: 'image', url });
+    }
+
+    if (segments.length > 0) {
+      const action: OutboundAction = {
+        kind: 'send',
+        session: message.session,
+        segments,
+        ...(input.quoteTarget ? { replyToMessageId: input.quoteTarget } : {}),
+      };
+      await send(action);
+      const content =
+        textOut || (media.images.length > 0 ? '[图片]' : '');
+      await this.deps.sessions.saveOutbound({
+        sessionId: input.sessionId,
+        content,
+        senderId: input.selfId,
+        replyToMessageId: input.quoteTarget ?? null,
+      });
+    }
+
+    if (voicePath) {
+      // 语音不带引用：引用挂在文字那条上，一条消息只引用一次才自然
+      await send({
+        kind: 'send',
+        session: message.session,
+        segments: [{ type: 'voice', url: voicePath }],
+      });
+      await this.deps.sessions.saveOutbound({
+        sessionId: input.sessionId,
+        content: `[语音] ${media.voice ?? ''}`.trim(),
+        senderId: input.selfId,
+        replyToMessageId: null,
+      });
+    }
   }
 
   // ── 状态与关系（失败不阻断对话） ──

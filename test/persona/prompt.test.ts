@@ -170,3 +170,29 @@ describe('语气提示（M3 瞬态状态）', () => {
     expect(system.indexOf('情绪不太好')).toBeGreaterThan(system.indexOf('不爱谈'));
   });
 });
+
+describe('媒体能力说明（D033）', () => {
+  it('不传能力时完全不提图片与语音', () => {
+    const { system } = assemblePrompt(seed(), ctx());
+    expect(system).not.toContain('[img]');
+    expect(system).not.toContain('[voice]');
+  });
+
+  it('只支持图片时只提图片', () => {
+    const { system } = assemblePrompt(seed(), ctx({ capabilities: { imageReply: true, voiceReply: false } }));
+    expect(system).toContain('[img]');
+    expect(system).not.toContain('[voice]');
+  });
+
+  it('两项都可用时都在，且要求标记独占一行', () => {
+    const { system } = assemblePrompt(seed(), ctx({ capabilities: { imageReply: true, voiceReply: true } }));
+    expect(system).toContain('[img]');
+    expect(system).toContain('[voice]');
+    expect(system).toContain('单独写一行');
+  });
+
+  it('提醒不要滥用：避免每句都带媒体', () => {
+    const { system } = assemblePrompt(seed(), ctx({ capabilities: { imageReply: true, voiceReply: true } }));
+    expect(system).toContain('正常打字');
+  });
+});

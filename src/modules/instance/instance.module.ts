@@ -52,7 +52,7 @@ import { INSTANCE_REPOSITORY, INSTANCE_SERVICE } from './tokens';
         audit: AuditService,
         configCache: { invalidate(instanceId: string): number },
         credentials: { findForUser(userId: string, id: string): Promise<unknown | null> },
-        pipeline: { handle(message: unknown, send: unknown): Promise<void> },
+        pipeline: { handle(message: unknown, send: unknown, options: unknown): Promise<void> },
       ): InstanceService =>
         new InstanceService({ instances, keyStore, registry, runtime, audit, configCache, credentials, pipeline }),
       inject: [

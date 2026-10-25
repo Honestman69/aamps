@@ -13,7 +13,21 @@
 
 import type { ClassifiedError } from '../gateway/classify';
 
-export type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
+/**
+ * 多模态内容段（D033）。
+ *
+ * `content` 允许是字符串或段数组：纯文本走字符串（各家都认），
+ * 带图片时走 `[{type:'text'},{type:'image_url'}]`（OpenAI vision 的通用形状，
+ * 智谱 / 通义 / 硅基流动的兼容层都认这一套）。
+ */
+export type ContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
+export type ChatMessage = {
+  role: 'system' | 'user' | 'assistant';
+  content: string | ContentPart[];
+};
 
 export type ProviderChatRequest = {
   model: string;

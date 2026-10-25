@@ -34,6 +34,12 @@ export type GatewayInput = {
   sessionId: string;
   purpose: GatewayPurpose;
   messages: ChatMessage[];
+  /**
+   * 指定模型（D033）：看图必须走视觉模型，不能用 `modelMain`，
+   * 否则图片会让不支持 vision 的模型直接 400。
+   * 指定后**不参与预算降级**——没有比视觉模型更便宜的"能看图"的替代。
+   */
+  model?: string;
   /** 外部取消（锁定/停机） */
   signal?: AbortSignal;
 };
@@ -143,8 +149,10 @@ export class GatewayService {
   async chat(input: GatewayInput): Promise<GatewayResult> {
     const { config } = await this.deps.config.get(input.instanceId, { sessionId: input.sessionId });
 
-    // 必须先解锁：Key 是密文，没有 DEK 就没有明文（D005）
-    const dek = this.deps.keyStore.get(input.sessionId);
+    // 必须先解锁：Key 是密文，没有 DEK 就没有明文（D005）。
+    // 注意这里按 **ownerUserId** 取，而不是 chat sessionId：消息来自协议端，
+    // 没有登录会话可用（见 RuntimeKeyStore.getForUser 的说明）。
+    const dek = this.deps.keyStore.getForUser(input.ownerUserId);
 
     // 预算判定放在解锁**之后**：两个原因可能同时成立（没解锁 + 已超预算），
     // 报"预算耗尽"会让 owner 去改配置，而真正的问题是他自己还没登录。
@@ -270,7 +278,7 @@ export class GatewayService {
     input: GatewayInput,
     config: AgentConfig,
   ): Promise<{ model: string; downgraded: boolean; over?: 'daily' | 'monthly' }> {
-    const original = input.purpose === 'chat' ? config.modelMain : config.modelCheap;
+    const original = input.model ?? (input.purpose === 'chat' ? config.modelMain : config.modelCheap);
 
     if (config.dailyBudgetCents === 0 && config.monthlyBudgetCents === 0) {
       return { model: original, downgraded: false };
@@ -308,6 +316,11 @@ export class GatewayService {
     }
 
     if (decision.mode === 'downgrade') {
+      // 视觉请求不能降级到看不见图的模型：那样只会得到一条答非所问的回复，
+      // 还不如多花一点钱把这张图看懂（D033）
+      if (input.model) {
+        return { model: input.model, downgraded: false, over: decision.over };
+      }
       return { model: decision.model, downgraded: true, over: decision.over };
     }
 

@@ -21,6 +21,7 @@ import {
   type IAdapter,
   type InboundMessage,
   type OutboundAction,
+  type PlatformCapabilities,
 } from '@newjob/contracts';
 
 import { decryptWithDek, encryptWithDek, tokenDigest, verifyTokenDigest } from '../../common/crypto';
@@ -90,6 +91,8 @@ export type InstanceDeps = {
     handle(
       message: InboundMessage,
       send: (action: OutboundAction) => Promise<{ messageId: string }>,
+      /** 平台能力（D012/D033）：多媒体由能力声明决定，主服务不看平台字符串 */
+      options: { capabilities: PlatformCapabilities },
     ): Promise<void>;
   };
 };
@@ -140,6 +143,10 @@ export class InstanceService {
     if (input.credentialId) {
       await this.assertCredentialOwned(actor.userId, input.credentialId);
     }
+    // 语音合成的 Key 也必须属于本人：否则等于拿别人的账去合成
+    if (input.ttsCredentialId) {
+      await this.assertCredentialOwned(actor.userId, input.ttsCredentialId);
+    }
 
     const row = await this.deps.instances.createForUser({
       tenantId: actor.tenantId,
@@ -163,6 +170,11 @@ export class InstanceService {
       modelCheap: input.modelCheap ?? null,
       modelFallback: input.modelFallback ?? null,
       modelTemperature: input.modelTemperature,
+      modelVision: input.modelVision ?? null,
+      ttsCredentialId: input.ttsCredentialId ?? null,
+      ttsModel: input.ttsModel ?? null,
+      ...(input.ttsVoice !== undefined ? { ttsVoice: input.ttsVoice } : {}),
+      ...(input.imageHosts !== undefined ? { imageHosts: input.imageHosts } : {}),
     });
 
     await this.deps.audit.record({
@@ -224,6 +236,18 @@ export class InstanceService {
     if (input.modelCheap !== undefined) patch.modelCheap = input.modelCheap;
     if (input.modelFallback !== undefined) patch.modelFallback = input.modelFallback;
     if (input.modelTemperature !== undefined) patch.modelTemperature = input.modelTemperature;
+
+    // 多模态（D033）：改这些不需要重连，只影响后续消息
+    if (input.modelVision !== undefined) patch.modelVision = input.modelVision;
+    if (input.ttsCredentialId !== undefined) {
+      if (input.ttsCredentialId !== null) {
+        await this.assertCredentialOwned(actor.userId, input.ttsCredentialId);
+      }
+      patch.ttsCredentialId = input.ttsCredentialId;
+    }
+    if (input.ttsModel !== undefined) patch.ttsModel = input.ttsModel;
+    if (input.ttsVoice !== undefined) patch.ttsVoice = input.ttsVoice;
+    if (input.imageHosts !== undefined) patch.imageHosts = input.imageHosts;
 
     // 预算是人格级配置（D024）：改它不需要重连，也不碰任何密钥
     if (input.dailyBudgetCents !== undefined) patch.dailyBudgetCents = input.dailyBudgetCents;
@@ -582,6 +606,9 @@ export class InstanceService {
       // 没有注入 Pipeline（理论上不该发生，装配时一定注入）—— 静默，别回 pong 误导
       return;
     }
-    void pipeline.handle(message, (action) => adapter.send(action));
+    void pipeline.handle(message, (action) => adapter.send(action), {
+      // 能力由适配器声明，主服务不判断平台字符串（D012）
+      capabilities: adapter.capabilities,
+    });
   }
 }

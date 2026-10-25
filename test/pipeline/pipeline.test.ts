@@ -1,8 +1,10 @@
 import type { InboundMessage, OutboundAction } from '@newjob/contracts';
-import { KeyLockedError } from '@newjob/contracts';
+import { KeyLockedError, PLATFORM_CAPABILITIES } from '@newjob/contracts';
 import { describe, expect, it } from 'vitest';
 
 import type { AgentConfig } from '@/modules/config/types';
+import type { IImageFetcher, InboundImage } from '@/modules/media/fetcher';
+import type { TtsResult, TtsService } from '@/modules/media/tts';
 import type { MindState } from '@/modules/mind/state/mind-state';
 import type { IMindStateRepository } from '@/modules/mind/state/ports';
 import type { RelationshipSnapshot } from '@/modules/mind/state/relationship';
@@ -13,6 +15,9 @@ import type { ISessionRepository, SessionRecord, StoredMessage } from '@/modules
 import type { ISessionWindowRepository, WindowSlice } from '@/modules/session/ports';
 
 // ── 假实现 ──
+
+/** QQ 的能力声明：图片与语音都支持，正好用来验证媒体通道 */
+const CAPS = PLATFORM_CAPABILITIES.qq;
 
 let msgSeq = 0;
 const nextId = () => `m-${++msgSeq}`;
@@ -90,6 +95,26 @@ class FakeSessionRepo implements ISessionRepository {
   }
 }
 
+class FakeImageFetcher implements IImageFetcher {
+  calls: string[] = [];
+  result: InboundImage | null = { dataUrl: 'data:image/png;base64,AAAA', bytes: 3 };
+
+  async fetchAsDataUrl(url: string): Promise<InboundImage | null> {
+    this.calls.push(url);
+    return this.result;
+  }
+}
+
+class FakeTts {
+  calls: Array<{ text: string; voice: string; model: string }> = [];
+  result: TtsResult = { kind: 'ok', filePath: '/tmp/tts/fake.mp3' };
+
+  async synthesize(input: { text: string; voice: string; model: string }): Promise<TtsResult> {
+    this.calls.push({ text: input.text, voice: input.voice, model: input.model });
+    return this.result;
+  }
+}
+
 class FakeWindowRepo implements ISessionWindowRepository {
   slice: WindowSlice | null = null;
   async loadSlice(): Promise<WindowSlice | null> {
@@ -160,11 +185,16 @@ class FakeMindRepo implements IMindStateRepository {
 
 type GatewayStub = {
   chat: GatewayService['chat'];
+  /** 记录每次调用的入参：验证多模态消息与视觉模型路由 */
+  calls: Array<{ messages: unknown; model?: string }>;
 };
 
 function gatewayStub(outcome: { text?: string; error?: Error }): GatewayStub {
+  const calls: Array<{ messages: unknown; model?: string }> = [];
   return {
-    chat: async () => {
+    calls,
+    chat: async (input) => {
+      calls.push({ messages: input.messages, ...(input.model ? { model: input.model } : {}) });
       if (outcome.error) throw outcome.error;
       return {
         text: outcome.text ?? '你好呀',
@@ -200,6 +230,8 @@ type Harness = {
   windowRepo: FakeWindowRepo;
   pipelineRepo: FakePipelineRepo;
   mind: FakeMindRepo;
+  images: FakeImageFetcher;
+  tts: FakeTts;
   sent: OutboundAction[];
   service: PipelineService;
   gateway: GatewayStub;
@@ -211,12 +243,15 @@ function makeHarness(
     gateway?: GatewayStub;
     persona?: ActivePersona | null;
     sessionFlags?: { aiPaused?: boolean; reviewMode?: boolean; muted?: boolean };
+    config?: Partial<AgentConfig>;
   } = {},
 ): Harness {
   const sessions = new FakeSessionRepo();
   const windowRepo = new FakeWindowRepo();
   const pipelineRepo = new FakePipelineRepo();
   const mind = new FakeMindRepo();
+  const images = new FakeImageFetcher();
+  const tts = new FakeTts();
   const sent: OutboundAction[] = [];
   const gateway = overrides.gateway ?? gatewayStub({});
   pipelineRepo.persona = overrides.persona === undefined ? null : overrides.persona;
@@ -226,7 +261,7 @@ function makeHarness(
       config: AgentConfig;
       sessionFlags: { aiPaused: boolean; reviewMode: boolean; muted: boolean };
     }> => ({
-      config: { modelMain: 'deepseek-chat' } as AgentConfig,
+      config: { modelMain: 'deepseek-chat', ...(overrides.config ?? {}) } as AgentConfig,
       sessionFlags: {
         aiPaused: overrides.sessionFlags?.aiPaused ?? false,
         reviewMode: overrides.sessionFlags?.reviewMode ?? false,
@@ -240,8 +275,10 @@ function makeHarness(
     sessions,
     windowRepo,
     mind,
+    images,
+    tts: tts as unknown as TtsService,
     config,
-    gateway: gateway as GatewayService,
+    gateway: gateway as unknown as GatewayService,
     clock: () => new Date('2026-10-24T12:00:00'),
   };
 
@@ -256,6 +293,8 @@ function makeHarness(
     windowRepo,
     pipelineRepo,
     mind,
+    images,
+    tts,
     sent,
     service,
     gateway,
@@ -293,7 +332,7 @@ describe('Pipeline 主链路', () => {
     const msg = inbound();
     h.windowRepo.slice = latestOnlySlice(msg);
 
-    await h.service.handle(msg, h.send);
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
 
     expect(h.sessions.inboundMessages).toHaveLength(1);
     expect(h.sessions.outboundMessages).toHaveLength(1);
@@ -303,7 +342,7 @@ describe('Pipeline 主链路', () => {
 
   it('空消息不回', async () => {
     const h = makeHarness();
-    await h.service.handle(inbound({ plainText: '   ', segments: [] }), h.send);
+    await h.service.handle(inbound({ plainText: '   ', segments: [] }), h.send, { capabilities: CAPS });
     expect(h.sessions.inboundMessages).toHaveLength(0);
     expect(h.sent).toHaveLength(0);
   });
@@ -313,7 +352,7 @@ describe('Pipeline 主链路', () => {
     const msg = inbound();
     h.windowRepo.slice = latestOnlySlice(msg);
 
-    await h.service.handle(msg, h.send);
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
 
     const action = h.sent[0];
     expect(action?.kind).toBe('send');
@@ -328,7 +367,7 @@ describe('Pipeline 主链路', () => {
     const msg = inbound();
     h.windowRepo.slice = latestOnlySlice(msg);
 
-    await h.service.handle(msg, h.send);
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
     expect(h.sent).toHaveLength(0);
   });
 });
@@ -339,7 +378,7 @@ describe('Pipeline 状态与发言决策（M3）', () => {
     const msg = inbound();
     h.windowRepo.slice = latestOnlySlice(msg);
 
-    await h.service.handle(msg, h.send);
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
 
     expect(sentText(h.sent)).toEqual(['你好呀']);
     expect(h.mind.savedStates).toHaveLength(1);
@@ -357,7 +396,7 @@ describe('Pipeline 状态与发言决策（M3）', () => {
     });
     h.windowRepo.slice = latestOnlySlice(msg);
 
-    await h.service.handle(msg, h.send);
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
 
     expect(sentText(h.sent)).toHaveLength(0);
     expect(h.sessions.inboundMessages).toHaveLength(1);
@@ -371,7 +410,7 @@ describe('Pipeline 状态与发言决策（M3）', () => {
     const msg = inbound({ session: { kind: 'group', peerId: 'group-1' }, isMentioned: true });
     h.windowRepo.slice = latestOnlySlice(msg);
 
-    await h.service.handle(msg, h.send);
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
 
     expect(sentText(h.sent)).toEqual(['你好呀']);
   });
@@ -381,7 +420,7 @@ describe('Pipeline 状态与发言决策（M3）', () => {
     const msg = inbound();
     h.windowRepo.slice = latestOnlySlice(msg);
 
-    await h.service.handle(msg, h.send);
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
 
     expect(h.sent).toHaveLength(0);
     expect(h.mind.savedStates).toHaveLength(0);
@@ -398,7 +437,7 @@ describe('Pipeline 故障兜底（D028）', () => {
 
     const msg = inbound();
     h.windowRepo.slice = latestOnlySlice(msg);
-    await h.service.handle(msg, h.send);
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
 
     expect(sentText(h.sent)).toEqual(['我这会儿有点事，晚点找你']);
   });
@@ -407,7 +446,7 @@ describe('Pipeline 故障兜底（D028）', () => {
     const h = makeHarness({ gateway: gatewayStub({ error: new KeyLockedError() }) });
     const msg = inbound();
     h.windowRepo.slice = latestOnlySlice(msg);
-    await h.service.handle(msg, h.send);
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
     expect(h.sent).toHaveLength(0);
   });
 
@@ -420,10 +459,139 @@ describe('Pipeline 故障兜底（D028）', () => {
     for (let i = 0; i < 3; i += 1) {
       const msg = inbound();
       h.windowRepo.slice = latestOnlySlice(msg);
-      await h.service.handle(msg, h.send);
+      await h.service.handle(msg, h.send, { capabilities: CAPS });
     }
 
     // longOutage 6 小时内只回一次
     expect(sentText(h.sent)).toHaveLength(1);
+  });
+});
+
+describe('Pipeline 媒体（D033）', () => {
+  const IMAGE_MSG = inbound({
+    segments: [
+      { type: 'text', text: '看这个' },
+      { type: 'image', url: 'http://multimedia.nt.qq.com.cn/download?appid=1&fileid=x' },
+    ],
+    plainText: '看这个[图片]',
+  });
+
+  it('配了视觉模型：下载图片、发多模态内容、路由到视觉模型', async () => {
+    const h = makeHarness({ config: { visionModel: 'glm-4v' } });
+    h.windowRepo.slice = latestOnlySlice(IMAGE_MSG);
+
+    await h.service.handle(IMAGE_MSG, h.send, { capabilities: CAPS });
+
+    expect(h.images.calls).toEqual(['http://multimedia.nt.qq.com.cn/download?appid=1&fileid=x']);
+    const call = h.gateway.calls[0];
+    expect(call?.model).toBe('glm-4v');
+    const messages = call?.messages as Array<{ role: string; content: unknown }>;
+    const target = messages[messages.length - 1];
+    expect(Array.isArray(target?.content)).toBe(true);
+    const parts = target?.content as Array<{ type: string; text?: string; image_url?: { url: string } }>;
+    expect(parts[0]).toEqual({ type: 'text', text: '看这个[图片]' });
+    expect(parts[1]?.type).toBe('image_url');
+    expect(parts[1]?.image_url?.url).toContain('data:image/png;base64,');
+  });
+
+  it('没配视觉模型：完全不下载图片，消息保持纯文本', async () => {
+    const h = makeHarness();
+    h.windowRepo.slice = latestOnlySlice(IMAGE_MSG);
+
+    await h.service.handle(IMAGE_MSG, h.send, { capabilities: CAPS });
+
+    expect(h.images.calls).toHaveLength(0);
+    const call = h.gateway.calls[0];
+    expect(call?.model).toBeUndefined();
+    const messages = call?.messages as Array<{ content: unknown }>;
+    expect(typeof messages[messages.length - 1]?.content).toBe('string');
+  });
+
+  it('模型用图片回复：发 image 段，正文不含标记', async () => {
+    const h = makeHarness({ gateway: gatewayStub({ text: '给你看\n[img]https://example.com/cat.jpg[/img]' }) });
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    const action = h.sent[0];
+    expect(action?.kind).toBe('send');
+    if (action?.kind === 'send') {
+      expect(action.segments.map((s) => s.type)).toEqual(['text', 'image']);
+      expect(action.segments[0]).toEqual({ type: 'text', text: '给你看' });
+      expect(action.segments[1]).toEqual({ type: 'image', url: 'https://example.com/cat.jpg' });
+    }
+  });
+
+  it('内网图片链接被拦：不发图片，也不把标记漏给用户', async () => {
+    const h = makeHarness({ gateway: gatewayStub({ text: '看\n[img]http://127.0.0.1/a.jpg[/img]' }) });
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    const action = h.sent[0];
+    if (action?.kind === 'send') {
+      expect(action.segments.map((s) => s.type)).toEqual(['text']);
+      expect(JSON.stringify(action.segments)).not.toContain('[img]');
+    }
+  });
+
+  it('模型用语音回复：文字一条 + 语音一条', async () => {
+    const h = makeHarness({
+      gateway: gatewayStub({ text: '好呀\n[voice]那我先睡啦[/voice]' }),
+      config: { ttsCredentialId: 'cred-tts', ttsModel: 'tts-1', ttsVoice: 'nova' },
+    });
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(h.tts.calls).toEqual([{ text: '那我先睡啦', voice: 'nova', model: 'tts-1' }]);
+    const kinds = h.sent.map((a) =>
+      a.kind === 'send' ? a.segments.map((s) => s.type).join('+') : a.kind,
+    );
+    expect(kinds).toEqual(['text', 'voice']);
+  });
+
+  it('TTS 失败：语音内容降级为文字，不留空白回复', async () => {
+    const h = makeHarness({
+      gateway: gatewayStub({ text: '[voice]晚安[/voice]' }),
+      config: { ttsCredentialId: 'cred-tts', ttsModel: 'tts-1' },
+    });
+    h.tts.result = { kind: 'failed', reason: 'synth' };
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(sentText(h.sent)).toEqual(['晚安']);
+  });
+
+  it('平台不支持语音（能力声明生效）：不发语音，改说文字', async () => {
+    const h = makeHarness({
+      gateway: gatewayStub({ text: '[voice]晚安[/voice]' }),
+      config: { ttsCredentialId: 'cred-tts', ttsModel: 'tts-1' },
+    });
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: PLATFORM_CAPABILITIES.douyin });
+
+    expect(h.tts.calls).toHaveLength(0);
+    expect(sentText(h.sent)).toEqual(['晚安']);
+  });
+
+  it('没配 TTS 时 prompt 不提语音，模型也就不会用', async () => {
+    const h = makeHarness({ persona: { ...PERSONA_LONG_OUTAGE, fallbacksJson: '{}' } });
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    const messages = h.gateway.calls[0]?.messages as Array<{ role: string; content: unknown }>;
+    const system = messages[0]?.content as string;
+    expect(system).toContain('[img]');
+    expect(system).not.toContain('[voice]');
   });
 });
