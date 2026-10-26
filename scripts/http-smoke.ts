@@ -264,6 +264,73 @@ async function main(): Promise<void> {
   assert.equal(res.status, 200, JSON.stringify(res.body));
   assert.equal(res.body.name, '改过名的实例');
 
+  // ── 人设（M4-1：编辑器的后端） ──
+  step('人设：新建草稿 → 201，只有 name 必填');
+  res = await call('POST', `/api/instances/${instanceId}/personas`, {
+    name: '小雅',
+    tagline: '22 岁，话多、心软',
+    identity: { name: '小雅', age: '22' },
+  });
+  assert.equal(res.status, 201, JSON.stringify(res.body));
+  assert.equal(res.body.status, 'draft');
+  assert.equal(res.body.version, 1);
+  assert.equal(res.body.active, false);
+  const personaId = String(res.body.id);
+
+  step('人设：列表里能看到它，且默认不含归档');
+  res = await call('GET', `/api/instances/${instanceId}/personas`);
+  assert.equal(res.status, 200);
+  assert.equal((res.body as unknown[]).length, 1);
+  assert.equal(res.body[0].id, personaId);
+
+  step('人设：草稿不能启用 → 409（先发布）');
+  res = await call('POST', `/api/personas/${personaId}/activate`);
+  assert.equal(res.status, 409, JSON.stringify(res.body));
+
+  step('人设：发布 → 200，带 publishedAt');
+  res = await call('POST', `/api/personas/${personaId}/publish`);
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(res.body.status, 'published');
+  assert.ok(res.body.publishedAt);
+
+  step('人设：启用 → 200，active=true');
+  res = await call('POST', `/api/personas/${personaId}/activate`);
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(res.body.active, true);
+
+  step('人设：改已发布内容 → 版本 +1（改动即新版）');
+  res = await call('PATCH', `/api/personas/${personaId}`, { tagline: '改过的定位' });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(res.body.version, 2);
+  assert.equal(res.body.tagline, '改过的定位');
+
+  step('人设：行为参数拼错字段 → 400（不能"保存成功但没生效"）');
+  res = await call('PATCH', `/api/personas/${personaId}`, {
+    behavior: { attention: { thresholdGrop: 0.4 } },
+  });
+  assert.equal(res.status, 400);
+
+  step('人设：合法行为参数 → 200 并原样存下');
+  res = await call('PATCH', `/api/personas/${personaId}`, {
+    behavior: { expression: { typingCps: 6 }, think: { enabled: false } },
+  });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.deepEqual((res.body.behavior as Record<string, unknown>).expression, { typingCps: 6 });
+
+  step('人设：不存在 / 不属于本人 → 404');
+  res = await call('GET', '/api/personas/no-such-persona');
+  assert.equal(res.status, 404);
+
+  step('人设：归档 → 200，并解除实例的激活指针');
+  res = await call('POST', `/api/personas/${personaId}/archive`);
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(res.body.status, 'archived');
+  assert.equal(res.body.active, false);
+  res = await call('GET', `/api/instances/${instanceId}/personas`);
+  assert.deepEqual(res.body, [], '归档后默认列表应为空');
+  res = await call('GET', `/api/instances/${instanceId}/personas?includeArchived=1`);
+  assert.equal((res.body as unknown[]).length, 1);
+
   step('实例：不存在的 id → 404');
   res = await call('POST', '/api/instances/no-such-instance/connect');
   assert.equal(res.status, 404);

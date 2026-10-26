@@ -8,6 +8,7 @@ import { ConfigModule as AgentConfigModule } from './modules/config/config.modul
 import { ModelModule } from './modules/model/model.module';
 import { CredentialModule } from './modules/credential/credential.module';
 import { InstanceModule } from './modules/instance/instance.module';
+import { PersonaModule } from './modules/persona/persona.module';
 
 /**
  * Prisma 作为全局单例，所有模块共用一条连接。
@@ -31,6 +32,7 @@ class PrismaModule {}
     AgentConfigModule,
     ModelModule,
     InstanceModule,
+    PersonaModule,
   ],
 })
 export class AppModule {}

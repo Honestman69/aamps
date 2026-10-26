@@ -32,6 +32,12 @@ export const AuditAction = {
   InstanceDelete: 'instance.delete',
   InstanceConnect: 'instance.connect',
   InstanceDisconnect: 'instance.disconnect',
+  /** 人设：内容是私人设定，审计里只记 name/status/version，不记正文 */
+  PersonaCreate: 'persona.create',
+  PersonaUpdate: 'persona.update',
+  PersonaPublish: 'persona.publish',
+  PersonaArchive: 'persona.archive',
+  PersonaActivate: 'persona.activate',
   UserLogin: 'user.login',
   UserLoginFailed: 'user.login_failed',
   UserCreate: 'user.create',
