@@ -6,16 +6,16 @@
 > 仓库里没有 `.env`、没有数据库，直接 `pnpm dev` 会失败。
 
 **最后更新**：2026-10-25
-**当前阶段**：**M3 已完成**（拟人：状态机 / 发言决策 / 双阶段生成 / 表达层，外加多模态与素材库），
-已合并 `main` 并打标签 `m3-persona`。
+**当前阶段**：**M4 进行中** —— 人设的增删改查/发布/归档/启用 API 已完成（第 24 步）；
+前端工程（Vue3）尚未开始。M3 已完成并打标签 `m3-persona`。
 M2 及之前全部完成（私聊能对话）。
 
-**下一步（默认走这条）**：**M4 管理后台** —— Vue3 工程 + 登录页 + 人设编辑器 + 密钥管理页。
-但**先做一件事**：现在所有配置只能改库或走 HTTP 接口（`modelVision` / `ttsCredentialId` / 素材列表都没有界面），
-M4 的第一页应该是"实例设置"，把 D033/D034 那批字段暴露出来，否则它们实际上是不可用的。
+**下一步（默认走这条）**：**M4-2 前端工程** —— `web/` 下 Vue3 + Vite + TS 脚手架，
+先做三页：登录 → 实例设置（含 `modelVision` / `ttsCredentialId` / `ttsModel` / `imageHosts`）
+→ 人设编辑器（消费第 24 步的 persona API）。
+登录直接复用现有 cookie 会话（`POST /api/auth/login`），不引入新鉴权。
 
-M4 之前可选的一条：**M5 的记忆与自主**里的反思任务——它是唯一能给 `mood`/`SelfState` 长期演化的东西；
-不做它，人格只会"当下像人"，不会"越聊越熟"。
+做完 M4-2 再补：密钥管理页、素材库管理页（`MediaAsset` 目前只能靠对话产生，没有后台入口）。
 
 > **多模态要配三样才生效**（都在实例上）：`modelVision`（看图）、`ttsCredentialId` + `ttsModel`（发语音）。
 > 不配就是"能力不存在"——图片只留「[图片]」占位，prompt 里也不提 `[voice]`。
@@ -535,6 +535,50 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 
 ---
 
+### ~~第 24 步：M4-1 人设 API——增删改查 / 发布 / 归档 / 启用~~ ✅ 已完成（D037）
+
+**做了什么**
+
+- [x] `src/modules/persona/dto.ts`：入参出参都是**对象**（不是 JSON 字符串），
+      `behavior` / `fallbacks` / `identity` / `examples` / `promptBlocks` 全部 zod 严格校验
+      （拼错字段名 400，而不是"保存成功但没生效"）
+- [x] `ports.ts` + `prisma-persona.repository.ts`：所有读都带 `instance.ownerUserId`，
+      没有 `findById`；列表默认不含归档
+- [x] `persona.service.ts`：生命周期规则（D037）—— 草稿不能启用、改已发布即 version+1 并刷新快照、
+      发布幂等、归档顺手解除 `activePersonaId`、每个写动作留审计（只记 name/status/version）
+- [x] `persona.controller.ts`：7 个路由（列表/新建/详情/更新/发布/归档/启用），全部走 `SessionGuard`
+- [x] 审计新增 5 个 action（`persona.create/update/publish/archive/activate`）
+
+**验收**
+
+- `pnpm test` **479 个用例全绿**（新增 27：persona service 13 + dto 14）
+- `pnpm typecheck` / `pnpm build` 通过
+- `http-smoke` **42 项**全过（新增 10 项人设流程：新建草稿→列表→草稿启用被拒→发布→启用→
+  改已发布升版本→拼错字段 400→合法参数落库→404→归档并解除激活）
+- `pnpm check:local-data` PASSED（235 个文件）
+
+**接口清单（M4-2 前端直接用）**
+
+```
+GET    /api/instances/:instanceId/personas[?includeArchived=1]
+POST   /api/instances/:instanceId/personas
+GET    /api/personas/:id
+PATCH  /api/personas/:id
+POST   /api/personas/:id/publish
+POST   /api/personas/:id/archive
+POST   /api/personas/:id/activate
+```
+
+**实现补充（后续不要改）**
+
+- **改已发布的人设 = 新版**（version+1 + 刷新快照）。不要改成"退回草稿"：那会让线上瞬间没有人设。
+- **草稿不能启用**：409 并提示"请先发布"。
+- **归档解除激活**：否则排查时会看到"archived 人设在生效"。
+- **审计不记人设正文**：内容可能很长、也可能含私人设定。
+- **出参把 JSON 字段还原成对象**，库里的脏 JSON 宽容回落空结构（编辑页不该被一条坏数据打挂）。
+
+---
+
 ### ~~第 23 步：M3-4 双阶段生成——内心独白 → 外显~~ ✅ 已完成（D036）
 
 **做了什么**
@@ -791,8 +835,9 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 
 > 目标：M1~M3 阶段**没有页面**，操作一律走 HTTP 接口（`scripts/connect-instance.ts` 是临时的连接入口）。
 
+- [x] 人设 API（第 24 步，D037）
 - [ ] Vue3 工程 + 登录页
-- [ ] 人设编辑器
+- [ ] 人设编辑器（后端已就绪，只差界面）
 - [ ] 规则/约束词配置
 - [ ] 密钥管理页 + 新增向导（强制测试连接）
 - [ ] 会话查看
@@ -900,4 +945,5 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 | 2026-10-25 | 多模态落地（D033）：`media/` 模块（URL 白名单、入站图片抓取、媒体意图解析、TTS）+ 实例字段迁移 `media_capabilities` + Pipeline 出站多媒体；修复主链路 DEK 取用键错误；382 单测、pipeline-smoke 7 项全过 |
 | 2026-10-25 | 素材库落地（D034）：`MediaAsset` 迁移 + `assets/` 服务与仓储 + `[save]`/`[use]` 指令 + prompt 清单 + 适配器 `mface` 映射；407 单测、pipeline-smoke 9 项全过 |
 | 2026-10-25 | 表达层落地（D035）：拆条（不丢内容）/ 打字延迟（只乘不减、12s 上限）/ 回 @ / 同会话串行 / 消息级种子；文本、图片、语音分开发；433 单测 |
+| 2026-10-26 | 人设 API 落地（D037）：生命周期（草稿/发布/归档/启用）+ 严格校验 + 审计；479 单测、http-smoke 42 项 |
 | 2026-10-25 | 双阶段生成落地（D036）+ M3 收尾：think→导演指令→外显、独白落库不回灌、emotion_shift 推动 mood；452 单测 / smoke 10 项 / http-smoke 32 项全过；合并 main 打标签 `m3-persona` |

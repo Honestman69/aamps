@@ -169,7 +169,7 @@ newjob/
 │  │  ├─ media/                # 多模态（D033）：URL 白名单、入站图片抓取、媒体意图、TTS
 │  │  │  └─ assets/            # 素材库（D034）：存图/表情、按别名取用、内容去重
 │  │  ├─ memory/               # 工作记忆 / 情景记忆 / 语义记忆
-│  │  ├─ persona/              # 人设卡片与版本
+│  │  ├─ persona/              # 人设卡片与版本（M4：CRUD + 发布/归档/启用，D037）
 │  │  ├─ rules/                # 约束词与规则引擎
 │  │  ├─ model/                # 【模型接入】见 MODEL-ACCESS.md
 │  │  │  ├─ catalog/           # Provider 预设与模型目录（含定价）
