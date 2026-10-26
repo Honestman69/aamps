@@ -33,7 +33,9 @@ import { TtsService } from '../src/modules/media/tts';
 import { PrismaMindStateRepository } from '../src/modules/mind/state/repositories/prisma-mind-state.repository';
 import { PrismaPipelineRepository } from '../src/modules/pipeline/repositories/prisma-pipeline.repository';
 import { PipelineService } from '../src/modules/pipeline/pipeline.service';
+import { PrismaSessionAdminRepository } from '../src/modules/session/repositories/prisma-session-admin.repository';
 import { PrismaSessionRepository } from '../src/modules/session/repositories/prisma-session.repository';
+import { SessionAdminService } from '../src/modules/session/session-admin.service';
 import { PrismaSessionWindowRepository } from '../src/modules/session/repositories/prisma-session-window.repository';
 import { DEFAULT_AGENT_CONFIG } from '../src/modules/config/types';
 
@@ -409,6 +411,54 @@ async function main(): Promise<void> {
   const stateAfter = await prisma.agentState.findUnique({ where: { instanceId: instance.id } });
   assert.ok((stateAfter?.mood ?? 0) > 0, `mood 应被推动，实际 ${stateAfter?.mood}`);
   process.stdout.write(`⑩ 双阶段：think → chat，独白已落库，mood=${stateAfter?.mood?.toFixed(2)}\n`);
+
+  // ⑪ 会话查看（D043）：真实 SQL 上的列表与分页
+  const adminSessions = new SessionAdminService({
+    sessions: new PrismaSessionAdminRepository(prisma),
+  });
+  const listed = await adminSessions.listSessions({ userId: user.id }, instance.id, { limit: 20 });
+  assert.equal(listed.items.length, 1, '应只有一个会话（同一 peer 只 upsert 出一条）');
+  assert.ok(listed.total >= 1);
+  const summaryRow = listed.items[0]!;
+  assert.ok(summaryRow.messageCount > 0, `消息条数应实时算出来，实际 ${summaryRow.messageCount}`);
+  assert.equal(summaryRow.lastMessage?.role, 'assistant', '最后一条应是机器人的回复');
+  // 实时统计必须与真实条数一致（Session.messageCount 列从未被维护，不能拿它充数）
+  const realCount = await prisma.message.count({ where: { sessionId: summaryRow.id } });
+  assert.equal(summaryRow.messageCount, realCount, '实时条数必须等于库里真实条数');
+
+  const page = await adminSessions.listMessages({ userId: user.id }, summaryRow.id, { limit: 5 });
+  assert.equal(page.hasMore, true, '超过 5 条时应标记还有更早的');
+  assert.equal(page.items.length, 5);
+  // 返回按时间升序（界面从前到后读）
+  const times = page.items.map((item) => Date.parse(item.createdAt));
+  assert.deepEqual(times, [...times].sort((a, b) => a - b), '消息应按时间升序返回');
+  const older = await adminSessions.listMessages({ userId: user.id }, summaryRow.id, {
+    limit: 5,
+    before: page.items[0]!.id,
+  });
+  assert.ok(older.items.length > 0, '游标翻页应能取到更早的消息');
+  assert.ok(
+    Date.parse(older.items[0]!.createdAt) <= Date.parse(page.items[0]!.createdAt),
+    '更早那页的时间不应晚于当前页最早那条',
+  );
+  // 别人的会话读不到
+  const otherUser = await prisma.user.create({
+    data: {
+      tenantId: user.tenantId,
+      username: 'smoke_other',
+      role: 'user',
+      passwordHash: 'x',
+      keySalt: 'y',
+    },
+  });
+  await assert.rejects(
+    () => adminSessions.listMessages({ userId: otherUser.id }, summaryRow.id, { limit: 5 }),
+    /会话不存在/,
+    '别人的会话必须 404',
+  );
+  process.stdout.write(
+    `⑪ 会话查看：${listed.items.length} 个会话 / ${summaryRow.messageCount} 条消息 / 游标翻页 OK\n`,
+  );
 
   process.stdout.write('\nPIPELINE SMOKE PASSED\n');
 }

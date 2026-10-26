@@ -534,6 +534,59 @@ async function main(): Promise<void> {
   );
   assert.equal(res.status, 200, JSON.stringify(res.body));
   assert.equal(res.body.unlocked, true);
+  const memberCookie2 = (res.setCookie ?? '').split(';')[0] ?? '';
+
+  // ── 会话查看（D043）──
+  // 自建一个实例：前面的实例到这一步已经被删掉了，借用它会让用例依赖执行顺序
+  step('会话：新建一个空实例，列表返回空 + total=0');
+  res = await call('POST', '/api/instances', {
+    name: '会话冒烟',
+    accountId: '10009000',
+    adapterMode: 'client',
+    endpoint: 'ws://127.0.0.1:1/onebot/v11/ws',
+  });
+  assert.equal(res.status, 201, JSON.stringify(res.body));
+  const sessionInstanceId = String(res.body.id);
+
+  res = await call('GET', `/api/instances/${sessionInstanceId}/sessions`);
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.deepEqual(res.body.items, []);
+  assert.equal(res.body.total, 0);
+
+  step('会话：未登录 → 401');
+  res = await request('GET', `/api/instances/${sessionInstanceId}/sessions`, undefined, '');
+  assert.equal(res.status, 401);
+
+  step('会话：实例不存在 → 404（不是空列表）');
+  res = await call('GET', '/api/instances/no-such-instance/sessions');
+  assert.equal(res.status, 404, JSON.stringify(res.body));
+
+  step('会话：limit 越界 / 未知参数 → 400（query 也严格校验）');
+  res = await call('GET', `/api/instances/${sessionInstanceId}/sessions?limit=0`);
+  assert.equal(res.status, 400);
+  res = await call('GET', `/api/instances/${sessionInstanceId}/sessions?unknown=1`);
+  assert.equal(res.status, 400);
+
+  step('会话：别人的实例 → 404（看不到别人的聊天记录）');
+  res = await request(
+    'GET',
+    `/api/instances/${sessionInstanceId}/sessions`,
+    undefined,
+    memberCookie2,
+  );
+  assert.equal(res.status, 404, JSON.stringify(res.body));
+
+  step('消息：不存在的会话 → 404');
+  res = await call('GET', '/api/sessions/no-such-session/messages');
+  assert.equal(res.status, 404, JSON.stringify(res.body));
+  assert.equal(res.body.code, 'SESSION_NOT_FOUND');
+
+  step('消息：limit 越界 → 400');
+  res = await call('GET', '/api/sessions/whatever/messages?limit=999');
+  assert.equal(res.status, 400);
+
+  res = await call('DELETE', `/api/instances/${sessionInstanceId}`);
+  assert.equal(res.status, 200);
 
   step('用户：不能停用自己 → 403（没有第二个管理员时无法恢复）');
   res = await call('PATCH', `/api/admin/users/${String(self.id)}`, { status: 'disabled' });

@@ -10,6 +10,7 @@ import { CredentialModule } from './modules/credential/credential.module';
 import { InstanceModule } from './modules/instance/instance.module';
 import { MediaModule } from './modules/media/media.module';
 import { PersonaModule } from './modules/persona/persona.module';
+import { SessionModule } from './modules/session/session.module';
 
 /**
  * Prisma 作为全局单例，所有模块共用一条连接。
@@ -35,6 +36,7 @@ class PrismaModule {}
     InstanceModule,
     MediaModule,
     PersonaModule,
+    SessionModule,
   ],
 })
 export class AppModule {}

@@ -215,6 +215,10 @@ function goPersona(row: Instance): void {
   void router.push({ name: 'instance-persona', params: { id: row.id } });
 }
 
+function goSessions(row: Instance): void {
+  void router.push({ name: 'instance-sessions', params: { id: row.id } });
+}
+
 function goAssets(row: Instance): void {
   void router.push({ name: 'instance-assets', params: { id: row.id } });
 }
@@ -279,10 +283,11 @@ function goAssets(row: Instance): void {
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="320" align="right">
+        <el-table-column label="操作" width="370" align="right">
           <template #default="{ row }">
             <div class="actions">
               <el-button link type="primary" @click="goSettings(row)">设置</el-button>
+              <el-button link type="primary" @click="goSessions(row)">会话</el-button>
               <el-button link type="primary" @click="goPersona(row)">人设</el-button>
               <el-button link type="primary" @click="goAssets(row)">素材</el-button>
               <el-button link :loading="busyId === row.id" @click="connect(row)">连接</el-button>

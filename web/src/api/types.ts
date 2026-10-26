@@ -277,3 +277,51 @@ export type UpdateUserInput = Partial<{
   role: 'user' | 'superadmin';
   status: 'active' | 'disabled';
 }>;
+
+/** 会话摘要（D043）。`messageCount` 是服务端实时算的，不是 Session 表那列 */
+export type SessionSummary = {
+  id: string;
+  kind: 'private' | 'group';
+  peerId: string;
+  peerName: string | null;
+  lastActiveAt: string;
+  messageCount: number;
+  /** 人工接管：AI 不回，消息照收 */
+  aiPaused: boolean;
+  reviewMode: boolean;
+  muted: boolean;
+  lastMessage: {
+    role: string;
+    content: string;
+    senderName: string | null;
+    createdAt: string;
+  } | null;
+};
+
+/** 内心独白（D036）：看记录时能知道"它当时怎么想的" */
+export type MessageThink = {
+  wantToReply: number;
+  emotionShift: number;
+  intent: string;
+  keyPoints: string[];
+  tone: string;
+  lengthHint: string;
+};
+
+export type SessionMessage = {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  senderName: string | null;
+  content: string;
+  createdAt: string;
+  /** 这条消息里出现过哪些媒体类型（image / voice / at / reply）；**不含 URL** */
+  media: string[];
+  think: MessageThink | null;
+  blocked: boolean;
+  blockReason: string | null;
+};
+
+export type MessagePage = {
+  items: SessionMessage[];
+  hasMore: boolean;
+};

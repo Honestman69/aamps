@@ -17,6 +17,7 @@ import type {
   AdapterManifest,
   AdminUser,
   CreateUserInput,
+  MessagePage,
   Credential,
   Instance,
   InstancePatch,
@@ -25,6 +26,7 @@ import type {
   MediaAssetList,
   Persona,
   PersonaPatch,
+  SessionSummary,
   UpdateUserInput,
   UserMutationResult,
 } from './types';
@@ -173,6 +175,33 @@ export const api = {
       input: { newPassword: string; confirmUsername: string },
     ): Promise<{ dekVersion: number; disabledCredentials: number; clearedSessions: number }> =>
       request('POST', `/api/admin/users/${encodeURIComponent(id)}/reset-password`, input),
+  },
+
+  /**
+   * 会话查看（D043）。**只读**：只有两个 GET，没有删除消息的入口。
+   */
+  sessions: {
+    list: (instanceId: string, options?: { limit?: number }): Promise<{ items: SessionSummary[]; total: number }> => {
+      const query = options?.limit ? `?limit=${options.limit}` : '';
+      return request('GET', `/api/instances/${encodeURIComponent(instanceId)}/sessions${query}`);
+    },
+    messages: (
+      sessionId: string,
+      options?: { limit?: number; before?: string },
+    ): Promise<MessagePage> => {
+      const params = new URLSearchParams();
+      if (options?.limit) {
+        params.set('limit', String(options.limit));
+      }
+      if (options?.before) {
+        params.set('before', options.before);
+      }
+      const query = params.toString();
+      return request(
+        'GET',
+        `/api/sessions/${encodeURIComponent(sessionId)}/messages${query ? `?${query}` : ''}`,
+      );
+    },
   },
 
   personas: {

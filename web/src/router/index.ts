@@ -45,6 +45,12 @@ export const router = createRouter({
           meta: { title: '人设' },
         },
         {
+          path: 'instances/:id/sessions',
+          name: 'instance-sessions',
+          component: () => import('@/views/SessionsView.vue'),
+          meta: { title: '会话记录' },
+        },
+        {
           path: 'instances/:id/assets',
           name: 'instance-assets',
           component: () => import('@/views/AssetsView.vue'),
