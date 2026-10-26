@@ -159,21 +159,25 @@
 
 这比运行时判断可靠得多——运行时判断会在某次重构、某个新增接口、某次"临时排查问题"里被绕过。
 
-### 4.1 用户管理接口（部分已实现）
+### 4.1 用户管理接口（已实现）
 
-写这节时全是"预留"，现在**四条已经落地**，状态如下：
+写这节时全是"预留"，现在**六条已经落地**，状态如下：
 
 | 状态 | 方法 | 路径 | 说明 |
 |---|---|---|---|
-| ✅ | GET | `/api/admin/users` | 列表（绝不返回 wrappedDek / keySalt） |
-| 未实现 | POST | `/api/admin/users` | 创建用户（生成 keySalt，等用户首次登录时生成 DEK）—— 现在只能靠 `BOOTSTRAP_ADMIN_*` 建第一个 |
-| 未实现 | PATCH | `/api/admin/users/:id` | 改显示名、角色、启停 |
+| ✅ | GET | `/api/admin/users` | 列表（绝不返回 wrappedDek / keySalt），带 `isSelf` |
+| ✅ | POST | `/api/admin/users` | 创建用户：只生成 `keySalt`，`wrappedDek` 留空，等用户首次登录时生成 DEK（D042） |
+| ✅ | PATCH | `/api/admin/users/:id` | 改显示名 / 角色 / 启停；改角色或停用会**撤销该用户全部会话**，停用还会清掉内存 DEK（D042） |
 | ✅ | POST | `/api/auth/password` | **本人改密码**：校验旧密码，重包裹 DEK，Key 不受影响 |
 | ✅ | POST | `/api/admin/users/:id/reset-password` | **管理员重置**：销毁 `wrappedDek`，该用户 Key 全部报废，见 5.1 |
 | ✅ | GET | `/api/admin/audit` | 审计日志；另有 `POST /api/admin/audit/verify` 校验哈希链 |
 | 未实现 | GET | `/api/admin/usage/summary` | 全站用量聚合（不含单 Key 明细）—— `ModelUsage` 有数据，只差接口 |
 
-> 未实现的三条没有占位路由：路由是加得回来的，而"文档说有、实际 404"会让排查的人多绕半小时。
+> 未实现的两条没有占位路由：路由是加得回来的，而"文档说有、实际 404"会让排查的人多绕半小时。
+
+**建号为什么不能生成 DEK**（D042）：一旦建号方持有对方的 DEK，他就成了"能解开对方所有 API Key"
+的人，零知识体系当场作废。所以 `POST /api/admin/users` 只写盐，DEK 由用户首次登录时用
+**他自己的密码**派生 KEK 再包裹。管理员因此永远看不到别人的 Key 明文 —— 这不是限制，是设计。
 
 ---
 
