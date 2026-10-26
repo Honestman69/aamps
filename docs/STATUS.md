@@ -6,21 +6,16 @@
 > 仓库里没有 `.env`、没有数据库，直接 `pnpm dev` 会失败。
 
 **最后更新**：2026-10-26
-**当前阶段**：**M4 进行中** —— 人设 API（第 24 步）+ **前端工程与静态托管（第 25 步）** 已完成：
-`web/` 下 Vue3 + Vite + TS，登录 / 实例列表 / 实例设置 / 人设编辑器 / 密钥四页可用，
-构建产物由主服务同源托管。M3 已完成并打标签 `m3-persona`。
+**当前阶段**：**M4 进行中** —— 人设 API（第 24 步）、前端工程与静态托管（第 25 步）、
+**素材库管理（第 26 步）** 已完成。后台已有五页 + 素材库：登录 / 实例列表 / 实例设置 /
+人设编辑器 / 密钥 / 素材。M3 已完成并打标签 `m3-persona`。
 
-**下一步（默认走这条）**：**M4-3 素材库管理页** —— 它需要先补后端：
-`GET /api/instances/:id/assets`（列表，含 `useCount` / `lastUsedAt` / 体积）与
-`DELETE /api/assets/:id`（软删）。D034 里写了"存失败时后台素材列表能立刻看出没存上"，
-而那个列表现在**还不存在** —— 这是 M4 剩下的第一个真实缺口。
+**下一步（默认走这条）**：**M4-4 让 `manifest.configFields` 真正驱动"新建实例"表单**。
+这是 D013 承诺的"新增平台不改前端"目前唯一没兑现的一环：适配器声明的是
+`mode` / `wsUrl` / `accessToken` / `selfId`，实例列是 `adapterMode` / `endpoint` / `accessToken` / `accountId`，
+两者之间缺一张**由适配器自己提供**的映射（放在 `packages/adapter-qq`，`src/` 与 `web/` 都不许写平台知识）。
 
 之后依次：会话查看（需要新增只读接口）、管理员页（`/api/admin/users` 与 `/api/admin/audit` 已有，纯前端）。
-
-**已知缺口（不是 bug，是没做）**：
-- `manifest.configFields` 目前**没有**驱动"新建实例"表单。适配器声明的字段名（`wsUrl` / `selfId`）
-  与实例列名（`endpoint` / `accountId`）不同，映射必须放在后端，前端硬写映射表等于把平台知识搬回前端（违背 D013）。
-  在第 25 步里用的是实例的契约字段，等后端补一张映射表之后再切到 manifest 驱动。
 
 > **多模态要配三样才生效**（都在实例上）：`modelVision`（看图）、`ttsCredentialId` + `ttsModel`（发语音）。
 > 不配就是"能力不存在"——图片只留「[图片]」占位，prompt 里也不提 `[voice]`。
@@ -540,6 +535,47 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 
 ---
 
+### ~~第 26 步：M4-3 素材库管理——可观测、可删~~ ✅ 已完成（D039）
+
+**为什么先做这个**：D034 写了"存失败时后台素材列表能立刻看出没存上"，
+而那个列表此前**不存在** —— 模型说了"存好了"却没存上时，用户无处可查。
+
+**做了什么**
+
+- [x] `MediaModule`：把素材库 / 图片抓取 / 语音合成从 Pipeline 私有提升为模块级，
+      Pipeline 变成它的消费者（不再在 `pipeline.module.ts` 里 `new` 这些实现）
+- [x] 仓储加 5 个**带 owner** 的方法：`listForUser` / `countForUser` / `statsForUser` /
+      `findForUser` / `softDeleteForUser`，where 一律 `instance: { ownerUserId }`
+- [x] `MediaAdminService`：列表 + 统计、软删、取文件；删除记审计（`asset.delete`，只记别名与字节数）
+- [x] 三个接口：`GET /api/instances/:id/assets`、`DELETE /api/instances/:id/assets/:assetId`、
+      `GET /api/instances/:id/assets/:assetId/file`（流式返回字节，`private, max-age=300`）
+- [x] 前端 `AssetsView`：统计条（用量/上限、占用、已删）、缩略图网格、含已删除开关、
+      删除二次确认、破图降级（不再显示裂图图标）
+- [x] 入口：实例列表行内「素材」、实例设置「打开素材库」
+
+**验收**
+
+- `pnpm test` **489 个用例全绿**（新增 10：列表过滤与分页、软删 + 审计、幂等删除、404、文件丢失）
+- `pnpm typecheck` / `pnpm web:typecheck` / `pnpm build` / `pnpm web:build` 全部通过
+- `http-smoke` **52 项**（新增 4：空列表带统计、非法 query 400、删除不存在 404、取不存在文件 404 JSON）
+- `pipeline-smoke` 10 项；`check:local-data` PASSED（263 文件）
+- **真浏览器**（Chrome headless + CDP）：缩略图 `naturalWidth=96` 真的渲染出来、
+  点删除 → 确认框 → 卡片消失且统计 +1、全程无运行期异常
+
+**实现补充（后续不要改）**
+
+- **只读 + 软删**：不做改名（旧对话里的 `[use]名字[/use]` 会指到别处）、
+  不做上传（没有上传通道）、不做批量删（没有撤销，误点就没了）。
+- **`fileUrl` 由服务端拼**：前端拿到的就是完整地址，路径结构不进浏览器。
+- **文件用流式返回，不用 `reply.sendFile()`**：那是 `@fastify/static` 的相对根（`web/dist`），
+  素材在 `data/media`，两个根混用极易写错。
+- **「文件丢了」与「素材不存在」分开报**：前者是 `ASSET_FILE_MISSING`。
+  用户手工清过 `data/media`、或换机器没搬媒体目录时，必须能看出是盘的问题。
+- **删除幂等**：已经删过的再删返回成功但**不重复记审计**（否则双击删除看起来像删了两个）。
+- **素材文件仍无自动清理**：`data/media/assets` 按内容去重后增长很慢，清理归 M6 的 worker。
+
+---
+
 ### ~~第 25 步：M4-2 前端工程与静态托管~~ ✅ 已完成（D038）
 
 **做了什么**
@@ -887,7 +923,7 @@ POST   /api/personas/:id/activate
 - [x] 实例设置（把多模态那几个只能改库的字段暴露出来）
 - [x] 人设编辑器（第 25 步）
 - [x] 密钥管理页（新增 / 轮换 / 启停 / 删除；"强制测试连接"仍未做）
-- [ ] 素材库管理页（**先补后端 API**，第 26 步）
+- [x] 素材库管理页（第 26 步，D039）
 - [ ] 会话查看
 - [ ] 规则/约束词配置（红线独立存放，需先定 API 形状）
 
@@ -995,5 +1031,6 @@ POST   /api/personas/:id/activate
 | 2026-10-25 | 素材库落地（D034）：`MediaAsset` 迁移 + `assets/` 服务与仓储 + `[save]`/`[use]` 指令 + prompt 清单 + 适配器 `mface` 映射；407 单测、pipeline-smoke 9 项全过 |
 | 2026-10-25 | 表达层落地（D035）：拆条（不丢内容）/ 打字延迟（只乘不减、12s 上限）/ 回 @ / 同会话串行 / 消息级种子；文本、图片、语音分开发；433 单测 |
 | 2026-10-26 | 人设 API 落地（D037）：生命周期（草稿/发布/归档/启用）+ 严格校验 + 审计；479 单测、http-smoke 42 项 |
+| 2026-10-26 | 素材库管理落地（D039）：`MediaModule` 提升 + 带 owner 的仓储方法 + 列表/删除/取文件三个接口 + 素材页；489 单测、http-smoke 52 项、真浏览器验证缩略图与删除交互 |
 | 2026-10-26 | 前端工程落地（D038）：`web/`（Vue3 + Vite + Element Plus）五页 + 主服务同源托管 SPA + 冒烟补 6 项托管断言；479 单测、http-smoke 48 项、真浏览器验证通过 |
 | 2026-10-25 | 双阶段生成落地（D036）+ M3 收尾：think→导演指令→外显、独白落库不回灌、emotion_shift 推动 mood；452 单测 / smoke 10 项 / http-smoke 32 项全过；合并 main 打标签 `m3-persona` |

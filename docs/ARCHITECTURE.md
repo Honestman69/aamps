@@ -167,6 +167,8 @@ newjob/
 │  │  │  ├─ reflection/        # 内心独白
 │  │  │  └─ expression/        # 拆条、延迟、表情
 │  │  ├─ media/                # 多模态（D033）：URL 白名单、入站图片抓取、媒体意图、TTS
+│  │  │  ├─ media.module.ts     # M4 起独立成模块：Pipeline 与后台都消费它（D039）
+│  │  │  ├─ media.controller.ts # 素材管理 API：列表 / 软删 / 取文件
 │  │  │  └─ assets/            # 素材库（D034）：存图/表情、按别名取用、内容去重
 │  │  ├─ memory/               # 工作记忆 / 情景记忆 / 语义记忆
 │  │  ├─ persona/              # 人设卡片与版本（M4：CRUD + 发布/归档/启用，D037）
@@ -242,6 +244,11 @@ interface IPipe<I, O> {
 **素材库（D034）是这条边界的延续**：`[save]名字[/save]` / `[use]名字[/use]` 里的"名字"是模型唯一的入口，
 它不能给 URL。库里存的每张图都至少被真实抓取过一次（`assets/<sha256>.<ext>`），
 所以"发图"这个动作对外只有两种来源：**公网白名单 URL** 或 **我们自己落盘的文件**。
+
+**管理面（M4，D039）**：`GET /api/instances/:id/assets`、`DELETE .../assets/:assetId`、
+`GET .../assets/:assetId/file`。三个动作对应三件事：**看见它存了什么**（隐私）、
+**删掉不想留的**（软删，名字继续占位）、**给缩略图供字节**（同源 + 会话 cookie）。
+刻意没有改名、上传、批量删 —— 理由见 D039。
 
 ---
 
