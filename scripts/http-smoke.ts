@@ -14,7 +14,9 @@
  */
 
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { createServer } from 'node:net';
+import { resolve } from 'node:path';
 import type { AddressInfo } from 'node:net';
 
 const BASE = process.env.BASE_URL ?? 'http://127.0.0.1:3111';
@@ -421,6 +423,52 @@ async function main(): Promise<void> {
   cookie = 'aamps_sid=forged-session-id.deadbeef';
   res = await call('GET', '/api/auth/me');
   assert.equal(res.status, 401);
+
+  // ── 管理后台托管（M4-2）──
+  // 只在产物存在时验证：纯后端开发不构建前端，也不该被这条卡住
+  if (existsSync(resolve(process.cwd(), 'web/dist/index.html'))) {
+    step('后台首页 → 200 HTML，且含挂载点');
+    const home = await fetch(`${BASE}/`, { headers: { accept: 'text/html' } });
+    assert.equal(home.status, 200);
+    assert.ok(home.headers.get('content-type')?.includes('text/html'));
+    assert.ok((await home.text()).includes('<div id="app">'));
+
+    step('前台路由刷新 → 回落 index.html（不会 404）');
+    const deep = await fetch(`${BASE}/instances/whatever/settings`, {
+      headers: { accept: 'text/html' },
+    });
+    assert.equal(deep.status, 200);
+    assert.ok((await deep.text()).includes('<div id="app">'));
+
+    step('未知接口不回落 → 404 + JSON（前端不会拿到 HTML）');
+    const api404 = await fetch(`${BASE}/api/no-such-route`);
+    assert.equal(api404.status, 404);
+    assert.ok(api404.headers.get('content-type')?.includes('json'));
+
+    step('接口鉴权不受静态托管影响 → /api/auth/me 仍是 401 JSON');
+    const me = await fetch(`${BASE}/api/auth/me`);
+    assert.equal(me.status, 401);
+    assert.ok(me.headers.get('content-type')?.includes('json'));
+
+    step('带 hash 的产物 → 长缓存 immutable');
+    const indexHtml = await (await fetch(`${BASE}/`)).text();
+    const assetPath = /(\/assets\/[^"']+\.js)/.exec(indexHtml)?.[1];
+    assert.ok(assetPath, 'index.html 里应引用 assets 下的 js');
+    const asset = await fetch(`${BASE}${assetPath}`);
+    assert.equal(asset.status, 200);
+    assert.ok(
+      (asset.headers.get('cache-control') ?? '').includes('immutable'),
+      '带 hash 的资源应该长缓存',
+    );
+
+    step('目录穿越 → 403（不是"找不到就回首页"）');
+    const traversal = await fetch(`${BASE}/..%2f..%2fpackage.json`, {
+      headers: { accept: 'text/html' },
+    });
+    assert.equal(traversal.status, 403);
+  } else {
+    step('跳过后台托管检查（未构建 web/dist）');
+  }
 
   process.stdout.write('\nHTTP SMOKE PASSED\n');
 }

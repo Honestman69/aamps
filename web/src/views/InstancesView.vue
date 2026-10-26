@@ -1,0 +1,415 @@
+<script setup lang="ts">
+/**
+ * 实例列表。
+ *
+ * 一个 QQ 号 = 一条实例（D007）：想换号就新建一条、把旧的停掉，
+ * 代码里没有任何写死的账号或地址，所以这个页面是"接入新平台账号"的唯一入口。
+ *
+ * 关于"新建"表单：这里用的是实例的**契约字段**（accountId / endpoint / adapterMode / accessToken），
+ * 不是 `manifest.configFields`。原因见 STATUS M4 的已知缺口 —— 适配器声明的字段名
+ * （`wsUrl` / `selfId`）与实例列名不同，映射必须由后端做，前端硬写一张映射表就等于
+ * 把平台知识搬回前端，那正是 D013 要避免的事。
+ */
+import { ElMessage, ElMessageBox } from 'element-plus';
+import { computed, onMounted, reactive, ref } from 'vue';
+import { useRouter } from 'vue-router';
+
+import { api, errorText } from '@/api/client';
+import type { AdapterManifest, Instance } from '@/api/types';
+
+const router = useRouter();
+
+const loading = ref(false);
+const instances = ref<Instance[]>([]);
+const adapters = ref<AdapterManifest[]>([]);
+const busyId = ref<string | null>(null);
+
+const dialogOpen = ref(false);
+const creating = ref(false);
+const form = reactive({
+  name: '',
+  adapterType: 'onebot',
+  accountId: '',
+  adapterMode: 'server',
+  endpoint: 'ws://127.0.0.1:3002',
+  accessToken: '',
+  enabled: true,
+});
+
+/**
+ * 反向模式必须带 token：那条 token 是**我们**在握手阶段校验对端的凭证（D019）。
+ * 不填会被服务端拒绝（400），所以这里提前拦，而不是让用户提交后才看到报错。
+ */
+const tokenRequired = computed(() => form.adapterMode === 'server');
+
+const selectedAdapter = computed(
+  () => adapters.value.find((item) => item.protocol === form.adapterType) ?? null,
+);
+
+const capabilityText = computed(() => {
+  const caps = selectedAdapter.value?.capabilities;
+  if (!caps) {
+    return null;
+  }
+  const kinds = caps.sessionKinds.map((kind) => (kind === 'group' ? '群聊' : '私聊')).join(' / ');
+  const media = [
+    caps.media.image ? '图片' : null,
+    caps.media.voice ? '语音' : null,
+    caps.media.quote ? '引用' : null,
+  ].filter(Boolean);
+  return `${kinds} · 单条 ≤ ${caps.maxTextLength} 字${media.length > 0 ? ` · 支持 ${media.join('、')}` : ''}`;
+});
+
+async function load(): Promise<void> {
+  loading.value = true;
+  try {
+    const [list, manifests] = await Promise.all([api.instances.list(), api.adapters.list()]);
+    instances.value = list;
+    adapters.value = manifests;
+  } catch (err) {
+    ElMessage.error(errorText(err));
+  } finally {
+    loading.value = false;
+  }
+}
+
+onMounted(load);
+
+function openCreate(): void {
+  form.name = '';
+  form.accountId = '';
+  form.accessToken = '';
+  form.adapterMode = 'server';
+  form.endpoint = 'ws://127.0.0.1:3002';
+  form.enabled = true;
+  const first = adapters.value[0];
+  if (first) {
+    form.adapterType = first.protocol;
+  }
+  dialogOpen.value = true;
+}
+
+async function submitCreate(): Promise<void> {
+  if (!form.name.trim() || !form.accountId.trim()) {
+    ElMessage.warning('实例名与账号不能为空');
+    return;
+  }
+  if (!form.endpoint.trim()) {
+    ElMessage.warning('需要填 WebSocket 地址');
+    return;
+  }
+  if (tokenRequired.value && !form.accessToken.trim()) {
+    ElMessage.warning('反向模式必须设置 Access Token（本服务靠它校验对端）');
+    return;
+  }
+  creating.value = true;
+  try {
+    const adapter = selectedAdapter.value;
+    await api.instances.create({
+      name: form.name.trim(),
+      accountId: form.accountId.trim(),
+      adapterType: form.adapterType,
+      adapterMode: form.adapterMode,
+      ...(adapter ? { platform: adapter.platform } : {}),
+      ...(form.endpoint.trim() ? { endpoint: form.endpoint.trim() } : {}),
+      ...(form.accessToken.trim() ? { accessToken: form.accessToken.trim() } : {}),
+      enabled: form.enabled,
+    });
+    dialogOpen.value = false;
+    ElMessage.success('已创建');
+    await load();
+  } catch (err) {
+    ElMessage.error(errorText(err));
+  } finally {
+    creating.value = false;
+  }
+}
+
+async function toggleEnabled(row: Instance, value: boolean): Promise<void> {
+  busyId.value = row.id;
+  try {
+    await api.instances.update(row.id, { enabled: value });
+    row.enabled = value;
+  } catch (err) {
+    ElMessage.error(errorText(err));
+    await load();
+  } finally {
+    busyId.value = null;
+  }
+}
+
+async function connect(row: Instance): Promise<void> {
+  busyId.value = row.id;
+  try {
+    const result = await api.instances.connect(row.id);
+    if (result.ok) {
+      ElMessage.success(result.detail ?? '已发起连接');
+    } else {
+      ElMessage.warning(result.detail ?? '连接未建立，检查 NapCat 是否已启动');
+    }
+    await load();
+  } catch (err) {
+    ElMessage.error(errorText(err));
+  } finally {
+    busyId.value = null;
+  }
+}
+
+async function disconnect(row: Instance): Promise<void> {
+  busyId.value = row.id;
+  try {
+    await api.instances.disconnect(row.id);
+    ElMessage.success('已断开');
+    await load();
+  } catch (err) {
+    ElMessage.error(errorText(err));
+  } finally {
+    busyId.value = null;
+  }
+}
+
+async function remove(row: Instance): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      `删除实例「${row.name}」会同时删除它的人设、记忆与素材，且不可恢复。`,
+      '确认删除',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+    );
+  } catch {
+    return;
+  }
+  busyId.value = row.id;
+  try {
+    await api.instances.remove(row.id);
+    ElMessage.success('已删除');
+    await load();
+  } catch (err) {
+    ElMessage.error(errorText(err));
+  } finally {
+    busyId.value = null;
+  }
+}
+
+/** 适配器状态是英文枚举（AdapterStatus），界面上要翻成人话 */
+const STATUS_TEXT: Record<string, string> = {
+  offline: '离线',
+  connecting: '连接中',
+  online: '在线',
+  risk: '风控中',
+};
+
+function statusLabel(status: string): string {
+  return STATUS_TEXT[status] ?? status;
+}
+
+function statusDot(status: string): string {
+  if (status === 'online') return 'dot-ok';
+  if (status === 'risk') return 'dot-risk';
+  if (status === 'connecting') return 'dot-warn';
+  return 'dot-idle';
+}
+
+function goSettings(row: Instance): void {
+  void router.push({ name: 'instance-settings', params: { id: row.id } });
+}
+
+function goPersona(row: Instance): void {
+  void router.push({ name: 'instance-persona', params: { id: row.id } });
+}
+</script>
+
+<template>
+  <section class="page">
+    <header class="page-head">
+      <div>
+        <h1 class="page-title">实例</h1>
+        <p class="page-desc">
+          一个平台账号一条实例。人设、记忆、预算都挂在这里，换模型不会动它们。
+        </p>
+      </div>
+      <el-button type="primary" @click="openCreate">新建实例</el-button>
+    </header>
+
+    <div class="card">
+      <el-table v-loading="loading" :data="instances" style="width: 100%" :border="false">
+        <el-table-column label="实例" min-width="200">
+          <template #default="{ row }">
+            <div class="cell-title">{{ row.name }}</div>
+            <div class="cell-sub mono">{{ row.platform }} · {{ row.accountId }}</div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="模型" min-width="180">
+          <template #default="{ row }">
+            <div class="cell-title mono">{{ row.modelMain ?? '默认' }}</div>
+            <div class="cell-sub">
+              <span v-if="row.modelVision">看图 {{ row.modelVision }}</span>
+              <span v-else class="muted">未开看图</span>
+              <span class="sep">·</span>
+              <span v-if="row.ttsModel">语音 {{ row.ttsModel }}</span>
+              <span v-else class="muted">未开语音</span>
+            </div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="预算" width="150">
+          <template #default="{ row }">
+            <div class="cell-title">
+              {{ row.dailyBudgetCents > 0 ? `¥${(row.dailyBudgetCents / 100).toFixed(2)} / 天` : '不限' }}
+            </div>
+            <div class="cell-sub muted">
+              {{ row.monthlyBudgetCents > 0 ? `月 ¥${(row.monthlyBudgetCents / 100).toFixed(2)}` : '未设月度' }}
+            </div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="状态" width="130">
+          <template #default="{ row }">
+            <el-switch
+              :model-value="row.enabled"
+              :loading="busyId === row.id"
+              @update:model-value="(value: string | number | boolean) => toggleEnabled(row, Boolean(value))"
+            />
+            <div class="cell-sub">
+              <span class="dot" :class="statusDot(row.status)" />
+              {{ statusLabel(row.status) }}
+            </div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="操作" width="270" align="right">
+          <template #default="{ row }">
+            <div class="actions">
+              <el-button link type="primary" @click="goSettings(row)">设置</el-button>
+              <el-button link type="primary" @click="goPersona(row)">人设</el-button>
+              <el-button link :loading="busyId === row.id" @click="connect(row)">连接</el-button>
+              <el-button link :loading="busyId === row.id" @click="disconnect(row)">断开</el-button>
+              <el-button link type="danger" @click="remove(row)">删除</el-button>
+            </div>
+          </template>
+        </el-table-column>
+
+        <template #empty>
+          <div class="empty">
+            还没有实例。点右上角「新建实例」，填 QQ 号与 NapCat 的反向 WS 地址即可。
+          </div>
+        </template>
+      </el-table>
+    </div>
+
+    <el-dialog v-model="dialogOpen" title="新建实例" width="520px" :close-on-click-modal="false">
+      <el-form label-position="top">
+        <div class="grid-2">
+          <el-form-item label="实例名">
+            <el-input v-model="form.name" placeholder="例如：小雅" />
+          </el-form-item>
+
+          <el-form-item label="接入方式">
+            <el-select v-model="form.adapterType" style="width: 100%">
+              <el-option
+                v-for="adapter in adapters"
+                :key="adapter.protocol"
+                :label="adapter.displayName"
+                :value="adapter.protocol"
+              />
+            </el-select>
+          </el-form-item>
+
+          <el-form-item label="账号">
+            <el-input v-model="form.accountId" placeholder="QQ 号" />
+          </el-form-item>
+
+          <el-form-item label="接入方向">
+            <el-select v-model="form.adapterMode" style="width: 100%">
+              <el-option label="NapCat 连本服务（推荐）" value="server" />
+              <el-option label="本服务连 NapCat" value="client" />
+            </el-select>
+          </el-form-item>
+
+          <el-form-item label="WebSocket 地址" class="span-2">
+            <el-input v-model="form.endpoint" placeholder="ws://127.0.0.1:3002" />
+            <div class="hint">
+              反向模式下填本端监听地址，要与 NapCat 的「反向 WebSocket」一致；只允许本机或内网地址。
+            </div>
+          </el-form-item>
+
+          <el-form-item :label="tokenRequired ? 'Access Token（必填）' : 'Access Token（可留空）'" class="span-2">
+            <el-input v-model="form.accessToken" type="password" show-password placeholder="与 NapCat 里的 token 保持一致" />
+            <div v-if="tokenRequired" class="hint">
+              反向模式下由本服务校验对端，所以必须设置；正向模式留空表示不鉴权。
+            </div>
+          </el-form-item>
+        </div>
+
+        <div v-if="capabilityText" class="cap-line">{{ capabilityText }}</div>
+      </el-form>
+
+      <template #footer>
+        <el-button @click="dialogOpen = false">取消</el-button>
+        <el-button type="primary" :loading="creating" @click="submitCreate">创建</el-button>
+      </template>
+    </el-dialog>
+  </section>
+</template>
+
+<style scoped>
+.cell-title {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.cell-sub {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  margin-top: 2px;
+}
+
+.cell-sub .muted {
+  color: var(--text-faint);
+}
+
+.dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+
+.dot-ok {
+  background: var(--ok);
+}
+
+.dot-warn {
+  background: var(--warn);
+}
+
+.dot-risk {
+  background: var(--danger);
+}
+
+.dot-idle {
+  background: var(--border-strong);
+}
+
+.sep {
+  margin: 0 4px;
+  color: var(--border-strong);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
+}
+
+.cap-line {
+  background: #f7f8fa;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 8px 10px;
+}
+</style>

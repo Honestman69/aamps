@@ -5,11 +5,16 @@
   "description": "AI 智能体接入多平台管理系统（主服务）",
   "type": "commonjs",
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "web"
   ],
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "build": "pnpm -r --filter \"./packages/**\" build && tsc -p tsconfig.build.json",
+    "web:dev": "pnpm --filter @newjob/web dev",
+    "web:build": "pnpm --filter @newjob/web build",
+    "web:typecheck": "pnpm --filter @newjob/web typecheck",
+    "build:all": "pnpm build && pnpm web:build",
     "typecheck": "tsc --noEmit && pnpm -r --filter \"./packages/**\" typecheck",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -20,6 +25,7 @@
     "check:local-data": "tsx scripts/check-local-data.ts"
   },
   "dependencies": {
+    "@fastify/static": "^10.1.2",
     "@nestjs/common": "^11.0.0",
     "@nestjs/config": "^4.0.0",
     "@nestjs/core": "^11.0.0",
