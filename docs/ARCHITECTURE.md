@@ -9,7 +9,9 @@
 
 ### 1.1 走第三方协议，所以"接入层"必须是一个可替换的边界
 
-NapCat 提供的是 OneBot 11 协议（WebSocket）。**当前实现是"我们主动连 NapCat 的 WS 服务端"**（`BotInstance.endpoint` 就是那个地址）；NapCat 的"反向 WS"（由它连我们）尚未实现，真机联调时若只能用反连模式，需要给适配器加一个 server 模式。这一点决定了：
+NapCat 提供的是 OneBot 11 协议（WebSocket），**两种接法都已实现**：
+**反向**（NapCat 连本服务，默认推荐 —— token 由我们在握手阶段校验，且云端无需开入站端口，见 D019）
+与**正向**（本服务连 NapCat）。用哪种由 `BotInstance.adapterMode` 决定，`endpoint` 是地址。这一点决定了：
 
 - 业务代码**不许直接知道** OneBot 的存在，只认内部统一的 `InboundMessage` / `OutboundAction` 结构；
 - 未来若切官方 Bot 通道、或 NapCat 挂掉要换 Lagrange / LLONEOneBot，只改一个 Adapter 实现；
@@ -86,10 +88,10 @@ NapCat 提供的是 OneBot 11 协议（WebSocket）。**当前实现是"我们�
 | 后端框架 | NestJS（Fastify 适配器） | Module + DI 天然对应"可替换实现"，是扩展预留最省力的框架 |
 | ORM | Prisma | 一份 schema 同时产出类型与迁移；SQLite → PostgreSQL 改一行 datasource |
 | 数据库 | SQLite（WAL 模式） | 自用单机足够，零运维。消息日志量大后再迁 PG |
-| 队列 | 内存队列（BullMQ 兼容接口） | 单机不需要 Redis；接口对齐 BullMQ，后期换实现不改调用方 |
-| 定时任务 | @nestjs/schedule | 反思、主动消息、清理三类 cron |
+| 队列 | 进程内串行（`PipelineService.sessionQueue`，按会话分片） | 现在**没有队列系统**：消息按会话串行就够，单机不需要 Redis。真要做异步任务（反思、清理）再引入 |
+| 定时任务 | 依赖已装（`@nestjs/schedule`），**尚未使用** | 反思、主动消息、清理三类 cron 属 M5/M6；现在状态靠"读时衰减"，不需要定时器 |
 | 前端 | Vue 3 + Vite + Element Plus + Pinia | 中后台组件齐、开发快 |
-| 部署 | Docker Compose（app + napcat） | 一台小服务器即可 |
+| 部署 | 当前：单进程 `node dist/src/main.js`（同源托管前端）；计划：Docker Compose（app + napcat） | 一台小服务器即可；**容器化还没做** |
 | 日志 | pino + 结构化字段 | 单条消息可全链路追踪 |
 
 **为什么不用 Python**：OneBot 生态里 Python 的 NoneBot 很成熟，但心智引擎要做大量并发定时器（打字延迟、状态衰减、心跳），TS 的 event loop 模型更省心，且前后端同语言省一套类型定义。
@@ -158,9 +160,9 @@ newjob/
 │  │  ├─ adapter/              # 【接入边界】只放主服务侧：AdapterRegistry + 清单接口
 │  │  │                        #   具体协议实现已拆包：packages/adapter-qq（D013）
 │  │  ├─ credential/           # 模型 API Key 托管（加密写入、掩码、4 个接口）
-│  │  ├─ pipeline/
-│  │  │  ├─ inbound/           # 入站管道（各 Pipe）
-│  │  │  └─ outbound/          # 出站管道
+│  │  ├─ pipeline/             # 消息主链路（D040）
+│  │  │  ├─ pipeline.service.ts # 只做编排：入队串行 / 跑链 / 兜底 / 清理
+│  │  │  └─ pipes/             # 13 个 pipe，一步一文件；顺序见 pipes/index.ts
 │  │  ├─ mind/                 # 【表现层】可选装饰器，可整体关闭
 │  │  │  ├─ state/             # 情绪、精力、关系、日程
 │  │  │  ├─ attention/         # 发言决策
@@ -170,9 +172,9 @@ newjob/
 │  │  │  ├─ media.module.ts     # M4 起独立成模块：Pipeline 与后台都消费它（D039）
 │  │  │  ├─ media.controller.ts # 素材管理 API：列表 / 软删 / 取文件
 │  │  │  └─ assets/            # 素材库（D034）：存图/表情、按别名取用、内容去重
-│  │  ├─ memory/               # 工作记忆 / 情景记忆 / 语义记忆
+│  │  ├─ memory/               # 【预留】工作记忆 / 情景记忆 / 语义记忆（M5）
 │  │  ├─ persona/              # 人设卡片与版本（M4：CRUD + 发布/归档/启用，D037）
-│  │  ├─ rules/                # 约束词与规则引擎
+│  │  ├─ rules/                # 【预留】约束词与规则引擎
 │  │  ├─ model/                # 【模型接入】见 MODEL-ACCESS.md
 │  │  │  ├─ catalog/           # Provider 预设与模型目录（含定价）
 │  │  │  ├─ credential/        # 密钥托管、加密、掩码、轮换
@@ -180,18 +182,18 @@ newjob/
 │  │  │  ├─ providers/         # openai-compatible · anthropic · gemini · ollama
 │  │  │  └─ metering/          # token 计量、成本、预算告警
 │  │  ├─ session/              # 会话与上下文装配
-│  │  ├─ compliance/           # 标识、未成年人、日志留存
-│  │  ├─ observability/        # 看板、日志检索、告警
-│  │  └─ admin/                # 管理端 REST 控制器
-│  └─ workers/
-│     ├─ reflection.worker.ts  # 每日反思 → 写记忆
-│     ├─ proactive.worker.ts   # 主动消息
-│     ├─ decay.worker.ts       # 状态衰减
-│     └─ risk.worker.ts        # 风控巡检
+│  │  ├─ compliance/           # 【预留】标识、未成年人、日志留存
+│  │  ├─ observability/        # 【预留】看板、日志检索、告警
+│  │  └─ admin/                # 【预留】管理端 REST（现在的控制器都在各自模块里）
+│  └─ workers/                 # 【预留】目前是空目录
+│     ├─ reflection.worker.ts  # 计划：每日反思 → 写记忆（M5）
+│     ├─ proactive.worker.ts   # 计划：主动消息
+│     ├─ decay.worker.ts       # 计划：状态衰减（当前靠读时衰减，不需要 worker）
+│     └─ risk.worker.ts        # 计划：风控巡检（M6）
 └─ web/                        # Vue3 管理后台（pnpm workspace 成员，构建产物由主服务托管，D038）
    ├─ src/api/                 # 接口客户端与手抄的 DTO 类型
    ├─ src/stores/              # Pinia（登录态）
-   ├─ src/views/               # 登录 / 实例 / 实例设置 / 人设 / 密钥
+   ├─ src/views/               # 登录 / 实例 / 实例设置 / 人设 / 密钥 / 素材
    └─ dist/                    # vite build 产物（不进版本库）
 ```
 
@@ -310,7 +312,8 @@ decide = wake > threshold(busy ? 0.75 : 0.55)
 > **实现现状（M3-1，见 D032）**：`src/modules/mind/state/`（mood/energy 衰减 + 亲密度）与
 > `src/modules/mind/attention/`（阈值与权重来自 `Persona.behaviorJson.attention`）已接入 Pipeline，
 > 判定发生在**调模型之前**。与上式的差异只有两处：`busy` 只抬高群聊阈值（私聊的忙碌是延迟不是失联），
-> 以及**群里被 @ 必回**（硬规则，不参与阈值比较）。`reflection/`（内心独白）与 `expression/`（拆条延迟）尚未实现。
+> 以及**群里被 @ 必回**（硬规则，不参与阈值比较）。`reflection/`（内心独白，D036）与
+> `expression/`（拆条与打字延迟，D035）也已落地 —— 也就是说 6.2 / 6.3 / 6.4 三节现在都是"实现现状"。
 
 ### 6.3 双阶段生成
 
@@ -570,10 +573,10 @@ QQ 号与抖音号是**两份独立人格**，各自演化、互不可见（跨�
 | 阶段 | 内容 | 验收 |
 |---|---|---|
 | **M0 安全底座** | `User` 表、DEK 信封加密、`RuntimeKeyStore`、审计哈希链 | 换个浏览器用 superadmin 登录，翻遍全部接口只看到 `sk-****a1b2` |
-| M1 骨架 | 项目初始化、Prisma schema、OneBot 连接打通、能收能发 | 在 QQ 里收到"pong" |
-| M2 最小闭环 | 单实例 + 单角色卡 + 单 Provider + 简单管道 | 私聊能正常对话 |
-| M3 拟人 | 状态机、发言决策、双阶段生成、表达层 | 群里像一个不太爱说话的人 |
-| M4 后台（进行中） | 人设 API ✅、Vue 管理端（登录 / 实例 / 设置 / 人设 / 密钥）✅、素材库与审计页待做 | 不改代码能调人设 |
+| M1 骨架 ✅ | 项目初始化、Prisma schema、OneBot 连接打通（正/反向）、能收能发 | 在 QQ 里收到"pong" |
+| M2 最小闭环 ✅ | 单实例 + 单角色卡 + 单 Provider + 管道 | 私聊能正常对话 |
+| M3 拟人 ✅ | 状态机、发言决策、双阶段生成、表达层（+ 多模态与素材库） | 群里像一个不太爱说话的人 |
+| M4 后台（进行中） | 人设 API ✅、管理端六页 ✅、素材库 ✅、管道拆分 ✅；剩 `manifest.configFields` 映射、会话查看、审计页 | 不改代码能调人设 |
 | M5 记忆与自主 | 三层记忆、反思任务、主动消息（默认关） | 隔天能记得昨天聊的事 |
 | M6 风控与观测 | 行为拟人、自动降级、看板、告警 | 健康分可见，异常自动停 |
 

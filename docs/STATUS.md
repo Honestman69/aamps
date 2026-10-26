@@ -21,12 +21,18 @@
 > 不配就是"能力不存在"——图片只留「[图片]」占位，prompt 里也不提 `[voice]`。
 > **素材库不需要配置**：平台支持发图即可用，模型说 `[save]名字[/save]` 就存，说 `[use]名字[/use]` 就发。
 
-**M2 已完成的完整链路**（`PipelineService.handle`）：
-入站消息 → 会话/消息落库 → 取 owner + 人设 + 配置（会话开关）→ 状态衰减 + 关系读取
-→ `buildWindow`（D031）→ **attention 判定（M3，判掉就不花 token）** → 拼 system prompt（D020，含语气提示）
-→ `ModelGateway.chat`（D024 预算 / D025 熔断 / 记账）→ `decideQuote`（D030）→ 出站 + 落库
-→ 状态/关系回写。
-失败走 `faultToSlot` + `decideSpeak` + `resolveFallback`（D028/D026），可能静默。
+**当前一条消息的完整链路**（13 个 pipe，见 `pipeline/pipes/index.ts` 与 ARCHITECTURE 第 5 节）：
+
+```
+persist-inbound → load-context → governance → load-mind → load-window
+→ attention（判掉就不花 token）→ collect-media → assemble-prompt（D020）
+→ think（D036，可关）→ generate（D024 预算 / D025 熔断 / 记账）
+→ decide-quote（D030）→ deliver（D033/D035：媒体 + 拆条 + 延迟 + 回 @）
+→ persist-interaction（花精力 / 推动 mood / 长亲密度）
+```
+
+判掉（治理、窗口空、attention 不回）走 `DROP` 安静结束；故障走
+`faultToSlot` + `decideSpeak` + `resolveFallback`（D028/D026），可能静默。
 
 **另一条路（只在"准备上云"时才走）**：P0-2 部署拓扑选型（Tailscale 组网 vs 公网反代），
 它决定一键接入包的 URL/证书策略；不做它也不影响本地开发。
@@ -400,7 +406,7 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 - [x] 只有接入参数变化才重连：改模型/温度/预算不再把连接踢掉
 - [x] 写路径主动失效配置缓存（update / delete）
 
-**还没做的**（M2 后续）：
+**当时记的待办**（M2 之后已全部补齐；保留原文是为了留下"当初为什么这么排"）：
 
 - [x] `ModelGateway`：路由 + 超时 + 重试 + 记账（+ 错误分类与熔断） + 错误码识别（402 → `balance` 熔断）
 - [x] `openai-compatible` Provider 适配器

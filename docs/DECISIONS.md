@@ -251,6 +251,11 @@
 - 主服务（`src/`）只依赖 `@newjob/contracts` 与各 adapter 包。**适配器代码不允许放在 `src/` 下。**
 - 每个平台一个独立包 `@newjob/adapter-{platform}`，自带 `manifest`（能力声明 + 配置字段 + 指标）。
 - 前端根据 `manifest.configFields` **动态渲染配置表单**，不为新平台改前端代码。
+  > **现状（2026-10-26）**：这一条**只兑现了一半**。`GET /api/adapters` 已经返回 `configFields`，
+  > 前端也用它渲染"接入方式"下拉与能力提示；但**新建实例表单仍是固定字段**，
+  > 因为适配器字段名（`wsUrl` / `selfId`）与实例列名（`endpoint` / `accountId`）之间缺一张映射，
+  > 而映射必须由适配器提供（放 `src/` 或 `web/` 都会把平台知识搬回主服务/前端）。
+  > 这是 M4-4，见 `STATUS.md`。
 - 适配器包禁止：依赖 `@newjob/core`、访问数据库、自己实现重试/限流/记账（那些是主服务职责）。
 
 **理由**：
