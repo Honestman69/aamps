@@ -24,6 +24,8 @@ export const manifest: AdapterManifest = {
       type: 'select',
       required: true,
       default: 'server',
+      // 实例上的 adapterMode 列
+      mapsTo: 'adapterMode',
       options: [
         { label: 'NapCat 连本服务（反向，推荐）', value: 'server' },
         { label: '本服务连 NapCat（正向）', value: 'client' },
@@ -37,6 +39,7 @@ export const manifest: AdapterManifest = {
       label: 'WebSocket 地址',
       type: 'text',
       required: true,
+      mapsTo: 'endpoint',
       placeholder: 'ws://127.0.0.1:3002',
       help:
         '反向模式填本端监听地址（如 ws://127.0.0.1:3002，需与 NapCat 的「反向 WebSocket」一致）；' +
@@ -47,14 +50,20 @@ export const manifest: AdapterManifest = {
       label: 'Access Token',
       type: 'password',
       required: false,
+      // 反向模式的端口是我们自己开的，没有 token 等于对任何能连上的进程开放（D019）。
+      // 这条规则写在清单里，前端的"必填星号"与后端的校验都读它，不再各写一份。
+      requiredWhen: { field: 'mode', in: ['server'] },
       secret: true,
-      help: '与 NapCat 网络配置中的 token 保持一致；留空表示不鉴权',
+      mapsTo: 'accessToken',
+      help: '与 NapCat 网络配置中的 token 保持一致；正向模式留空表示不鉴权',
     },
     {
       key: 'selfId',
       label: '机器人 QQ 号',
       type: 'text',
       required: true,
+      mapsTo: 'accountId',
+      placeholder: '10001',
       help: '该实例对应的 QQ 账号，用于过滤自身消息',
     },
   ],

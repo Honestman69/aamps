@@ -16,7 +16,10 @@ function factory(platform: 'qq' | 'douyin', protocol: 'onebot' | 'douyin-open'):
       displayName: `${platform}/${protocol}`,
       version: 'test',
       capabilities: PLATFORM_CAPABILITIES[platform],
-      configFields: [],
+      // 清单必须能落到 accountId（D041 启动校验），没有它的适配器注册就会失败
+      configFields: [
+        { key: 'selfId', label: '机器人账号', type: 'text', required: true, mapsTo: 'accountId' },
+      ],
     },
     create: () => {
       throw new Error('测试不会真的创建适配器');
@@ -46,6 +49,36 @@ describe('AdapterRegistry', () => {
     const registry = new AdapterRegistry();
     registry.register(factory('qq', 'onebot'));
     expect(() => registry.register(factory('qq', 'onebot'))).toThrow(/重复注册/);
+  });
+
+  it('注册时就拒绝不自洽的清单（缺槽位映射）', () => {
+    const registry = new AdapterRegistry();
+    expect(() =>
+      registry.register({
+        ...factory('qq', 'onebot'),
+        manifest: {
+          ...factory('qq', 'onebot').manifest,
+          // 有字段但没写 mapsTo：用户填了也无处可存
+          configFields: [{ key: 'selfId', label: '账号', type: 'text', required: true }],
+        },
+      }),
+    ).toThrow(/mapsTo/);
+  });
+
+  it('注册时就拒绝两个字段抢同一个槽位', () => {
+    const registry = new AdapterRegistry();
+    expect(() =>
+      registry.register({
+        ...factory('qq', 'onebot'),
+        manifest: {
+          ...factory('qq', 'onebot').manifest,
+          configFields: [
+            { key: 'a', label: 'A', type: 'text', mapsTo: 'accountId' },
+            { key: 'b', label: 'B', type: 'text', mapsTo: 'accountId' },
+          ],
+        },
+      }),
+    ).toThrow(/一个槽位只能有一个来源/);
   });
 
   it('fails with a 400 instead of falling back to a default adapter', () => {

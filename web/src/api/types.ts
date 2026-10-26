@@ -76,6 +76,28 @@ export type Instance = {
   updatedAt: string;
 };
 
+/**
+ * 配置字段（对应 contracts 的 `ConfigField`，D041）。
+ *
+ * `mapsTo` 是**主服务用的**：它说明这个值最终写进实例的哪个槽位。
+ * 前端不需要（也不该）拿它拼请求体 —— 提交时原样回传 `adapterConfig: { key: 值 }` 就行，
+ * 翻译由后端按同一张清单完成。
+ */
+export type AdapterConfigField = {
+  key: string;
+  label: string;
+  type: 'text' | 'password' | 'number' | 'switch' | 'select' | 'textarea';
+  required?: boolean;
+  /** 条件必填：`requiredWhen.field` 的值落在 `in` 里时才算必填 */
+  requiredWhen?: { field: string; in: Array<string | number | boolean> };
+  placeholder?: string;
+  help?: string;
+  default?: string | number | boolean;
+  options?: Array<{ label: string; value: string }>;
+  secret?: boolean;
+  mapsTo?: 'accountId' | 'adapterMode' | 'endpoint' | 'accessToken';
+};
+
 export type AdapterManifest = {
   platform: string;
   protocol: string;
@@ -90,15 +112,7 @@ export type AdapterManifest = {
     requiresMentionInPublic: boolean;
     media: { image: boolean; voice: boolean; video: boolean; file: boolean; quote: boolean; recall: boolean };
   };
-  configFields: Array<{
-    key: string;
-    label: string;
-    type: string;
-    required?: boolean;
-    placeholder?: string;
-    help?: string;
-    secret?: boolean;
-  }>;
+  configFields: AdapterConfigField[];
 };
 
 export type PersonaStatus = 'draft' | 'published' | 'archived';
@@ -198,6 +212,8 @@ export type MediaAssetList = {
   stats: { usable: number; deleted: number; bytes: number; limit: number };
 };
 
+export type AdapterConfigValues = Record<string, string | number | boolean>;
+
 export type InstancePatch = Partial<{
   name: string;
   platform: string;
@@ -220,4 +236,6 @@ export type InstancePatch = Partial<{
   ttsModel: string | null;
   ttsVoice: string;
   imageHosts: string;
+  /** 接入配置增量（D041）：只放改过的键，没放 = 不改 */
+  adapterConfig: AdapterConfigValues;
 }>;

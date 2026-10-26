@@ -18,6 +18,7 @@
 import {
   AppError,
   BadRequestError,
+  type AdapterManifest,
   type IAdapter,
   type InboundMessage,
   type OutboundAction,
@@ -27,6 +28,7 @@ import {
 import { decryptWithDek, encryptWithDek, tokenDigest, verifyTokenDigest } from '../../common/crypto';
 import { createAdapterLogger } from '../../common/logger/adapter-logger';
 import { AdapterRegistry } from '../adapter/adapter-registry';
+import { translateAdapterConfig, type TranslatedAdapterConfig } from '../adapter/manifest-config';
 import { AuditAction, AuditService, type AuditActor } from '../auth/audit.service';
 import { RuntimeKeyStore } from '../auth/runtime-key-store';
 import {
@@ -116,28 +118,60 @@ export function maskAccount(accountId: string): string {
 export class InstanceService {
   constructor(private readonly deps: InstanceDeps) {}
 
+  /**
+   * 取适配器清单。找不到就说清楚"这个平台没装适配器"，
+   * 而不是让用户在"接入配置里有未知字段"这种二手错误里猜。
+   */
+  private manifestFor(platform: string, protocol: string): AdapterManifest {
+    const manifest = this.deps.registry.tryFind(platform, protocol);
+    if (!manifest) {
+      throw new BadRequestError(`没有注册适配器：${platform}/${protocol}`);
+    }
+    return manifest;
+  }
+
   async create(actor: InstanceActor, input: CreateInstanceInput): Promise<InstancePublicDTO> {
-    const mode = input.adapterMode ?? 'server';
+    // 平台与接入方式先定下来：它们是"用哪张清单翻译 adapterConfig"的前提
+    const platform = input.platform ?? 'qq';
+    const adapterType = input.adapterType ?? 'onebot';
+
+    // 接入配置（D041）：由适配器清单决定字段与必填条件，翻译成实例槽位。
+    // 两个入口互斥（DTO 已拦），所以这里不可能被覆盖 —— 只有一份真值。
+    const config: TranslatedAdapterConfig =
+      input.adapterConfig !== undefined
+        ? translateAdapterConfig({
+            manifest: this.manifestFor(platform, adapterType),
+            values: input.adapterConfig,
+          })
+        : {};
+
+    const accountId = config.accountId ?? input.accountId;
+    if (!accountId) {
+      // zod 只保证"给了 accountId 或 adapterConfig"，账号真正从哪来要到这里才知道
+      throw new BadRequestError('缺少账号标识：adapterConfig 里应有映射到 accountId 的字段');
+    }
+    const mode = config.adapterMode ?? input.adapterMode ?? 'server';
+    const endpoint = config.endpoint ?? input.endpoint;
+    const accessToken = config.accessToken ?? input.accessToken;
 
     // 先拦地址：指向公网 NapCat 等于把 QQ 登录态交给对方，不该只靠"记得别填"。
     // 顺序放在 token 校验之前：地址填错是更常见的错误，先报那个更有用。
-    if (input.endpoint) {
-      assertEndpointAllowed(input.endpoint, input.adapterMode);
+    if (endpoint) {
+      assertEndpointAllowed(endpoint, input.adapterMode);
     }
 
-    if (mode === 'server' && !input.accessToken) {
+    if (mode === 'server' && !accessToken) {
       // 反向端是我们自己开的端口，没有 token 就等于对任何能连上的进程开放
       throw new BadRequestError('反向模式必须配置 Access Token（由本服务在握手阶段校验）');
     }
 
     // 只有配了 token 才需要 DEK；不配 token 的部署（内网 NapCat）不该被要求先解锁
     const accessTokenEnc =
-      input.accessToken !== undefined
-        ? encryptWithDek(input.accessToken, this.deps.keyStore.get(actor.sessionId))
+      accessToken !== undefined
+        ? encryptWithDek(accessToken, this.deps.keyStore.get(actor.sessionId))
         : null;
     // 摘要与密文同时写：反向模式靠摘要就能在服务重启后自动监听，不需要 DEK
-    const accessTokenDigest =
-      input.accessToken !== undefined ? tokenDigest(input.accessToken) : null;
+    const accessTokenDigest = accessToken !== undefined ? tokenDigest(accessToken) : null;
 
     // 绑 Key 之前先确认这把 Key 是本人的：否则拿到别人的 credentialId 就能白嫖额度
     if (input.credentialId) {
@@ -153,12 +187,12 @@ export class InstanceService {
       ownerUserId: actor.userId,
       name: input.name,
       // 平台与接入方式给默认值：QQ + OneBot 是当前唯一实现，但代码里不写死平台判断
-      platform: input.platform ?? 'qq',
-      accountId: input.accountId,
-      adapterType: input.adapterType ?? 'onebot',
+      platform,
+      accountId,
+      adapterType,
       // 默认反向：token 由我们自己校验，且云端部署不需要开入站端口
       adapterMode: mode,
-      endpoint: input.endpoint ?? null,
+      endpoint: endpoint ?? null,
       accessTokenEnc,
       accessTokenDigest,
       enabled: input.enabled ?? true,
@@ -207,11 +241,40 @@ export class InstanceService {
     });
   }
 
+  /**
+   * 按**已存在实例**的平台/协议翻译一次增量配置。
+   *
+   * 为什么不用请求体里的 platform：更新时它通常不传（也没必要传），
+   * 而用错清单的后果是"字段被静默忽略"——最坏的一类 bug。
+   */
+  private async translateForExisting(
+    actor: InstanceActor,
+    id: string,
+    values: Record<string, unknown>,
+  ): Promise<TranslatedAdapterConfig> {
+    const current = await this.deps.instances.findForUser(actor.userId, id);
+    if (!current) {
+      throw instanceNotFound();
+    }
+    return translateAdapterConfig({
+      manifest: this.manifestFor(current.platform, current.adapterType),
+      values,
+      partial: true,
+    });
+  }
+
   async update(
     actor: InstanceActor,
     id: string,
     input: UpdateInstanceInput,
   ): Promise<InstancePublicDTO> {
+    // adapterConfig 是**增量**：清单里的平台由当前实例决定（不是由请求体决定），
+    // 所以这里必须先读一次，而不能拿请求里的 platform 猜。
+    const config: TranslatedAdapterConfig =
+      input.adapterConfig !== undefined
+        ? await this.translateForExisting(actor, id, input.adapterConfig)
+        : {};
+
     const patch: InstanceUpdatePatch = {};
     if (input.name !== undefined) patch.name = input.name;
     if (input.platform !== undefined) patch.platform = input.platform;
@@ -254,8 +317,23 @@ export class InstanceService {
     if (input.monthlyBudgetCents !== undefined) patch.monthlyBudgetCents = input.monthlyBudgetCents;
     if (input.budgetPolicy !== undefined) patch.budgetPolicy = input.budgetPolicy;
 
+    // 适配器配置翻译出来的四个槽位：只有**真的提供了**的才进 patch，
+    // 否则每次保存设置都会把接入参数写一遍 → 触发不必要的重连
+    if (config.accountId !== undefined) patch.accountId = config.accountId;
+    if (config.adapterMode !== undefined) patch.adapterMode = config.adapterMode;
+    if (config.endpoint !== undefined) {
+      assertEndpointAllowed(config.endpoint, config.adapterMode ?? undefined);
+      patch.endpoint = config.endpoint;
+    }
+
     // accessToken 三态：不传=不变，null=清空，字符串=替换（替换要先解锁）
-    if (input.accessToken === null) {
+    if (config.accessToken !== undefined) {
+      patch.accessTokenEnc = encryptWithDek(
+        config.accessToken,
+        this.deps.keyStore.get(actor.sessionId),
+      );
+      patch.accessTokenDigest = tokenDigest(config.accessToken);
+    } else if (input.accessToken === null) {
       patch.accessTokenEnc = null;
       // 摘要必须跟着清：否则摘要还在、明文已经没了，会出现"能监听但没人知道 token 是什么"的怪状态
       patch.accessTokenDigest = null;

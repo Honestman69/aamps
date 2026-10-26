@@ -261,6 +261,67 @@ async function main(): Promise<void> {
     }
   }
 
+  // ── 接入配置由适配器清单驱动（D041）──
+  const ADAPTER_CONFIG = {
+    mode: 'client',
+    wsUrl: 'ws://127.0.0.1:1/onebot/v11/ws',
+    selfId: '10002000',
+  };
+
+  step('实例：只给 adapterConfig 也能建（账号来自清单里的 selfId）→ 201');
+  res = await call('POST', '/api/instances', {
+    name: '清单驱动',
+    platform: 'qq',
+    adapterType: 'onebot',
+    adapterConfig: ADAPTER_CONFIG,
+  });
+  assert.equal(res.status, 201, JSON.stringify(res.body));
+  const configInstanceId = res.body.id as string;
+  assert.equal(res.body.accountId, '10002000');
+  assert.equal(res.body.adapterMode, 'client');
+  assert.equal(res.body.endpoint, ADAPTER_CONFIG.wsUrl);
+
+  step('实例：adapterConfig 与平铺字段同时给 → 400（同一件事两个来源）');
+  res = await call('POST', '/api/instances', {
+    name: '重复来源',
+    accountId: '10002001',
+    adapterConfig: ADAPTER_CONFIG,
+  });
+  assert.equal(res.status, 400, JSON.stringify(res.body));
+
+  step('实例：adapterConfig 里有清单外的字段 → 400，而不是静默丢掉');
+  res = await call('POST', '/api/instances', {
+    name: '拼错字段',
+    adapterConfig: { ...ADAPTER_CONFIG, wssUrl: 'ws://x' },
+  });
+  assert.equal(res.status, 400, JSON.stringify(res.body));
+  assert.ok(String(res.body.message).includes('wssUrl'), '错误里要点出是哪个字段');
+
+  step('实例：反向模式漏 token → 400（清单的 requiredWhen 在服务端同样生效）');
+  res = await call('POST', '/api/instances', {
+    name: '反向漏 token',
+    adapterConfig: { mode: 'server', wsUrl: 'ws://127.0.0.1:3002', selfId: '10002002' },
+  });
+  assert.equal(res.status, 400, JSON.stringify(res.body));
+
+  step('实例：用 adapterConfig 改账号 → 200，没传的接入参数原样保留');
+  res = await call('PATCH', `/api/instances/${configInstanceId}`, {
+    adapterConfig: { selfId: '10002001' },
+  });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(res.body.accountId, '10002001');
+  assert.equal(res.body.endpoint, ADAPTER_CONFIG.wsUrl);
+  assert.equal(res.body.adapterMode, 'client');
+
+  step('实例：adapterConfig 把必填项改空 → 400');
+  res = await call('PATCH', `/api/instances/${configInstanceId}`, {
+    adapterConfig: { wsUrl: '   ' },
+  });
+  assert.equal(res.status, 400, JSON.stringify(res.body));
+
+  res = await call('DELETE', `/api/instances/${configInstanceId}`);
+  assert.equal(res.status, 200);
+
   step('实例：改名字 → 200');
   res = await call('PATCH', `/api/instances/${instanceId}`, { name: '改过名的实例' });
   assert.equal(res.status, 200, JSON.stringify(res.body));

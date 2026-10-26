@@ -13,6 +13,7 @@
  */
 
 import type {
+  AdapterConfigValues,
   AdapterManifest,
   Credential,
   Instance,
@@ -106,8 +107,19 @@ export const api = {
 
   instances: {
     list: (): Promise<Instance[]> => request('GET', '/api/instances'),
-    create: (input: Record<string, unknown>): Promise<Instance> =>
-      request('POST', '/api/instances', input),
+    /**
+     * 新建实例。
+     *
+     * `adapterConfig` 由适配器清单驱动（D041）：键来自 `manifest.configFields[].key`，
+     * 主服务按同一张清单翻译成实例列 —— 前端不写任何平台字段映射。
+     */
+    create: (input: {
+      name: string;
+      platform?: string;
+      adapterType?: string;
+      adapterConfig?: AdapterConfigValues;
+      enabled?: boolean;
+    }): Promise<Instance> => request('POST', '/api/instances', input),
     update: (id: string, patch: InstancePatch): Promise<Instance> =>
       request('PATCH', `/api/instances/${encodeURIComponent(id)}`, patch),
     remove: (id: string): Promise<void> =>

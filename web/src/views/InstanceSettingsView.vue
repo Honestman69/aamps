@@ -8,13 +8,27 @@
  *
  * 保存只发**改过的字段**：PATCH 语义是"没传就别动这一列"（D037 同款约定），
  * 全量发一遍会把用户没碰的字段也按前端的理解覆盖掉。
+ * 接入参数（D041）也一样：只发 `adapterConfig` 里真的变了的键 ——
+ * 接入参数变化会触发重连，全量提交等于"改个温度也掉一次线"。
  */
 import { ElMessage } from 'element-plus';
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
+import {
+  changedValues,
+  knownSecrets,
+  valuesFromInstance,
+} from '@/api/adapter-config';
 import { api, errorText } from '@/api/client';
-import type { Credential, Instance, InstancePatch } from '@/api/types';
+import type {
+  AdapterConfigValues,
+  AdapterManifest,
+  Credential,
+  Instance,
+  InstancePatch,
+} from '@/api/types';
+import AdapterConfigForm from '@/components/AdapterConfigForm.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -43,9 +57,11 @@ type FormState = {
   ttsModel: string;
   ttsVoice: string;
   imageHosts: string;
-  adapterMode: string;
-  endpoint: string;
-  accessToken: string;
+  /**
+   * 接入配置（D041）：键来自适配器清单。
+   * 敏感项（token）不回显，留空 = 不修改。
+   */
+  adapterConfig: AdapterConfigValues;
 };
 
 const form = reactive<FormState>({
@@ -64,16 +80,28 @@ const form = reactive<FormState>({
   ttsModel: '',
   ttsVoice: 'alloy',
   imageHosts: '',
-  adapterMode: 'server',
-  endpoint: '',
-  accessToken: '',
+  adapterConfig: {},
 });
 
-/** 载入时的快照：保存时按它算增量 */
-let origin: Instance | null = null;
+/** 当前实例对应的适配器清单：表单字段全由它决定 */
+const manifest = ref<AdapterManifest | null>(null);
+/** 哪些敏感项已配置（只用于 placeholder） */
+const secrets = ref<Record<string, boolean>>({});
+/**
+ * 载入时的接入配置快照：保存时按它算增量。
+ *
+ * 必须是 `ref` 而不是普通变量：`dirty` 是 computed，而它第一次求值时
+ * 页面还在 loading、`origin` 还是 null，`buildPatch` 会**提前 return**。
+ * 若 `origin` 不是响应式的，那次提前返回就没有收集到任何依赖，
+ * 于是 `dirty` 会永远停在 false —— 表现为"改了东西但保存按钮一直灰着"。
+ */
+const originConfig = ref<AdapterConfigValues>({});
+
+/** 载入时的快照：保存时按它算增量。理由同上，必须是 ref */
+const origin = ref<Instance | null>(null);
 
 function fill(row: Instance): void {
-  origin = row;
+  origin.value = row;
   instance.value = row;
   form.name = row.name;
   form.enabled = row.enabled;
@@ -90,16 +118,20 @@ function fill(row: Instance): void {
   form.ttsModel = row.ttsModel ?? '';
   form.ttsVoice = row.ttsVoice || 'alloy';
   form.imageHosts = row.imageHosts;
-  form.adapterMode = row.adapterMode;
-  form.endpoint = row.endpoint ?? '';
-  // token 永远不回显：只在用户主动填的时候提交
-  form.accessToken = '';
+  // 接入参数按清单反查（靠 mapsTo，不靠字段名）；token 永远不回显
+  form.adapterConfig = valuesFromInstance(manifest.value, row);
+  originConfig.value = { ...form.adapterConfig };
+  secrets.value = knownSecrets(manifest.value, row);
 }
 
 async function load(): Promise<void> {
   loading.value = true;
   try {
-    const [list, creds] = await Promise.all([api.instances.list(), api.credentials.list()]);
+    const [list, creds, adapters] = await Promise.all([
+      api.instances.list(),
+      api.credentials.list(),
+      api.adapters.list(),
+    ]);
     credentials.value = creds;
     const row = list.find((item) => item.id === instanceId.value) ?? null;
     if (!row) {
@@ -107,6 +139,10 @@ async function load(): Promise<void> {
       await router.replace({ name: 'instances' });
       return;
     }
+    // 清单要在 fill 之前就位：接入参数的当前值是按 `mapsTo` 反查出来的
+    manifest.value =
+      adapters.find((item) => item.platform === row.platform && item.protocol === row.adapterType) ??
+      null;
     fill(row);
   } catch (err) {
     ElMessage.error(errorText(err));
@@ -125,7 +161,7 @@ function nullable(value: string): string | null {
 
 function buildPatch(): InstancePatch {
   const patch: InstancePatch = {};
-  const base = origin;
+  const base = origin.value;
   if (!base) {
     return patch;
   }
@@ -157,10 +193,11 @@ function buildPatch(): InstancePatch {
   }
   if (form.imageHosts.trim() !== base.imageHosts) patch.imageHosts = form.imageHosts.trim();
 
-  if (form.adapterMode !== base.adapterMode) patch.adapterMode = form.adapterMode;
-  if (nullable(form.endpoint) !== base.endpoint) patch.endpoint = nullable(form.endpoint);
-  // 留空 = 不改 token（不提供"清空 token"的入口：那需要一个显式按钮，否则容易误清）
-  if (form.accessToken.trim()) patch.accessToken = form.accessToken.trim();
+  // 接入参数：只发真的变了的键。没变就不发 —— 发了会触发一次不必要的重连
+  const configPatch = changedValues(manifest.value, originConfig.value, form.adapterConfig);
+  if (Object.keys(configPatch).length > 0) {
+    patch.adapterConfig = configPatch;
+  }
 
   return patch;
 }
@@ -389,31 +426,15 @@ const voiceReady = computed(
         协议端的登录态永远留在协议端。这里只存"连哪儿、用什么 token"，不存任何登录凭据。
       </p>
 
-      <div class="grid-2">
-        <el-form-item label="接入方向">
-          <el-select v-model="form.adapterMode" style="width: 100%">
-            <el-option label="NapCat 连本服务（推荐）" value="server" />
-            <el-option label="本服务连 NapCat" value="client" />
-          </el-select>
-        </el-form-item>
-
-        <el-form-item label="WebSocket 地址">
-          <el-input v-model="form.endpoint" placeholder="ws://127.0.0.1:3002" />
-        </el-form-item>
-
-        <el-form-item label="Access Token">
-          <el-input
-            v-model="form.accessToken"
-            type="password"
-            show-password
-            :placeholder="instance?.hasAccessToken ? '已设置，留空则不修改' : '未设置'"
-          />
-          <div class="hint">Token 永不回显，只能覆盖写入。</div>
-        </el-form-item>
-
-        <el-form-item label="账号">
-          <div class="readonly mono">{{ instance?.accountId }}</div>
-        </el-form-item>
+      <!-- 接入参数：字段来自适配器清单（D041），这一页不认识任何平台字段 -->
+      <AdapterConfigForm
+        v-model="form.adapterConfig"
+        :manifest="manifest"
+        :known-secrets="secrets"
+      />
+      <div v-if="!manifest" class="hint">
+        没有找到这个实例的适配器清单（平台 {{ instance?.platform }} / 协议
+        {{ instance?.adapterType }}），接入参数暂时无法编辑。
       </div>
 
       <div class="connect-row">

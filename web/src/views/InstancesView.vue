@@ -5,17 +5,18 @@
  * 一个 QQ 号 = 一条实例（D007）：想换号就新建一条、把旧的停掉，
  * 代码里没有任何写死的账号或地址，所以这个页面是"接入新平台账号"的唯一入口。
  *
- * 关于"新建"表单：这里用的是实例的**契约字段**（accountId / endpoint / adapterMode / accessToken），
- * 不是 `manifest.configFields`。原因见 STATUS M4 的已知缺口 —— 适配器声明的字段名
- * （`wsUrl` / `selfId`）与实例列名不同，映射必须由后端做，前端硬写一张映射表就等于
- * 把平台知识搬回前端，那正是 D013 要避免的事。
+ * 关于"新建"表单：字段**全部来自 `manifest.configFields`**（D041）。
+ * 这个页面不认识任何平台字段 —— 换成抖音适配器时这里一行都不用改，
+ * 只要它的清单声明了字段与 `mapsTo`，表单就自动长出来。
  */
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 
+import { defaultValues, missingRequiredFields } from '@/api/adapter-config';
 import { api, errorText } from '@/api/client';
-import type { AdapterManifest, Instance } from '@/api/types';
+import type { AdapterConfigValues, AdapterManifest, Instance } from '@/api/types';
+import AdapterConfigForm from '@/components/AdapterConfigForm.vue';
 
 const router = useRouter();
 
@@ -29,22 +30,25 @@ const creating = ref(false);
 const form = reactive({
   name: '',
   adapterType: 'onebot',
-  accountId: '',
-  adapterMode: 'server',
-  endpoint: 'ws://127.0.0.1:3002',
-  accessToken: '',
+  adapterConfig: {} as AdapterConfigValues,
   enabled: true,
 });
-
-/**
- * 反向模式必须带 token：那条 token 是**我们**在握手阶段校验对端的凭证（D019）。
- * 不填会被服务端拒绝（400），所以这里提前拦，而不是让用户提交后才看到报错。
- */
-const tokenRequired = computed(() => form.adapterMode === 'server');
 
 const selectedAdapter = computed(
   () => adapters.value.find((item) => item.protocol === form.adapterType) ?? null,
 );
+
+/**
+ * 换接入方式时把表单重置成新清单的默认值。
+ *
+ * 必须重置而不是"尽量保留"：两个平台的字段名毫不相干（`wsUrl` 与 `roomId`），
+ * 保留只会把 A 平台的值带进 B 平台的字段里，用户还看不出来。
+ */
+function onAdapterChange(protocol: string): void {
+  form.adapterType = protocol;
+  const adapter = adapters.value.find((item) => item.protocol === protocol) ?? null;
+  form.adapterConfig = defaultValues(adapter);
+}
 
 const capabilityText = computed(() => {
   const caps = selectedAdapter.value?.capabilities;
@@ -77,42 +81,36 @@ onMounted(load);
 
 function openCreate(): void {
   form.name = '';
-  form.accountId = '';
-  form.accessToken = '';
-  form.adapterMode = 'server';
-  form.endpoint = 'ws://127.0.0.1:3002';
   form.enabled = true;
   const first = adapters.value[0];
-  if (first) {
-    form.adapterType = first.protocol;
-  }
+  form.adapterType = first?.protocol ?? 'onebot';
+  form.adapterConfig = defaultValues(first ?? null);
   dialogOpen.value = true;
 }
 
 async function submitCreate(): Promise<void> {
-  if (!form.name.trim() || !form.accountId.trim()) {
-    ElMessage.warning('实例名与账号不能为空');
+  if (!form.name.trim()) {
+    ElMessage.warning('实例名不能为空');
     return;
   }
-  if (!form.endpoint.trim()) {
-    ElMessage.warning('需要填 WebSocket 地址');
+  const adapter = selectedAdapter.value;
+  if (!adapter) {
+    ElMessage.warning('请选择接入方式');
     return;
   }
-  if (tokenRequired.value && !form.accessToken.trim()) {
-    ElMessage.warning('反向模式必须设置 Access Token（本服务靠它校验对端）');
+  // 前端先拦一次，只是为了把"哪一项没填"说清楚；真正的校验在后端（同一份清单）
+  const missing = missingRequiredFields(adapter, form.adapterConfig);
+  if (missing.length > 0) {
+    ElMessage.warning(`还差：${missing.map((field) => field.label).join('、')}`);
     return;
   }
   creating.value = true;
   try {
-    const adapter = selectedAdapter.value;
     await api.instances.create({
       name: form.name.trim(),
-      accountId: form.accountId.trim(),
+      platform: adapter.platform,
       adapterType: form.adapterType,
-      adapterMode: form.adapterMode,
-      ...(adapter ? { platform: adapter.platform } : {}),
-      ...(form.endpoint.trim() ? { endpoint: form.endpoint.trim() } : {}),
-      ...(form.accessToken.trim() ? { accessToken: form.accessToken.trim() } : {}),
+      adapterConfig: form.adapterConfig,
       enabled: form.enabled,
     });
     dialogOpen.value = false;
@@ -310,7 +308,11 @@ function goAssets(row: Instance): void {
           </el-form-item>
 
           <el-form-item label="接入方式">
-            <el-select v-model="form.adapterType" style="width: 100%">
+            <el-select
+              :model-value="form.adapterType"
+              style="width: 100%"
+              @update:model-value="(value: string) => onAdapterChange(value)"
+            >
               <el-option
                 v-for="adapter in adapters"
                 :key="adapter.protocol"
@@ -319,31 +321,11 @@ function goAssets(row: Instance): void {
               />
             </el-select>
           </el-form-item>
+        </div>
 
-          <el-form-item label="账号">
-            <el-input v-model="form.accountId" placeholder="QQ 号" />
-          </el-form-item>
-
-          <el-form-item label="接入方向">
-            <el-select v-model="form.adapterMode" style="width: 100%">
-              <el-option label="NapCat 连本服务（推荐）" value="server" />
-              <el-option label="本服务连 NapCat" value="client" />
-            </el-select>
-          </el-form-item>
-
-          <el-form-item label="WebSocket 地址" class="span-2">
-            <el-input v-model="form.endpoint" placeholder="ws://127.0.0.1:3002" />
-            <div class="hint">
-              反向模式下填本端监听地址，要与 NapCat 的「反向 WebSocket」一致；只允许本机或内网地址。
-            </div>
-          </el-form-item>
-
-          <el-form-item :label="tokenRequired ? 'Access Token（必填）' : 'Access Token（可留空）'" class="span-2">
-            <el-input v-model="form.accessToken" type="password" show-password placeholder="与 NapCat 里的 token 保持一致" />
-            <div v-if="tokenRequired" class="hint">
-              反向模式下由本服务校验对端，所以必须设置；正向模式留空表示不鉴权。
-            </div>
-          </el-form-item>
+        <!-- 接入参数：完全由适配器清单渲染（D041），这里没有平台字段 -->
+        <div class="adapter-fields">
+          <AdapterConfigForm v-model="form.adapterConfig" :manifest="selectedAdapter" />
         </div>
 
         <div v-if="capabilityText" class="cap-line">{{ capabilityText }}</div>
@@ -407,6 +389,10 @@ function goAssets(row: Instance): void {
   display: flex;
   justify-content: flex-end;
   gap: 2px;
+}
+
+.adapter-fields {
+  margin-top: 2px;
 }
 
 .cap-line {
