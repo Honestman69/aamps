@@ -529,7 +529,25 @@ QQ 号与抖音号是**两份独立人格**，各自演化、互不可见（跨�
 | 4 | 注册依赖 | 根 `package.json` 的 dependencies 加 `"@newjob/adapter-douyin": "workspace:*"` |
 | 5 | 注册工厂 | 主服务 `modules/adapter/registry.ts` 加一行 |
 
-**之后不需要改任何东西**：前端会根据 `manifest.configFields` 自动渲染配置表单，看板根据 `manifest.metrics` 自动出现指标，主服务根据 `protocol` 自动路由。
+**之后不需要改任何东西**：前端根据 `manifest.configFields` 自动渲染配置表单，看板根据 `manifest.metrics` 自动出现指标，主服务根据 `protocol` 自动路由。
+
+### 清单驱动到哪一步（D041）
+
+"自动渲染表单"曾经只做了一半：字段渲染了，但**值怎么落到实例上**没人说。现在由清单自己说：
+
+| 声明 | 作用 |
+|---|---|
+| `ConfigField.mapsTo` | 这个字段的值写进实例的 `accountId` / `adapterMode` / `endpoint` / `accessToken` |
+| `ConfigField.requiredWhen` | 条件必填（如"反向模式必须有 token"），前端星号与后端校验同源 |
+
+```
+前端：manifest.configFields → 渲染表单 → POST adapterConfig:{字段key: 值}（不翻译）
+主服务：assertAdapterManifest（注册时）→ translateAdapterConfig（按 mapsTo 翻成实例列）
+```
+
+三条纪律（写在 `src/modules/adapter/manifest-config.ts` 的注释里）：
+**字段必须能落到槽位**（否则用户填了也没用）、**清单在注册时校验**（开发者错误让服务起不来）、
+**`adapterConfig` 与平铺字段互斥**（同一件事不许有两个来源）。
 
 **主服务里禁止出现的**：`import ... from '@newjob/adapter-douyin'` 之外的任何平台细节；`if (platform === 'douyin')`。
 
@@ -552,7 +570,7 @@ QQ 号与抖音号是**两份独立人格**，各自演化、互不可见（跨�
 | 主服务 pipeline | 否 | 读 `capabilities` 决定行为 |
 | mind / memory / persona / rules / model | 否 | 完全不感知平台 |
 | compliance | 否 | 审核强度由 `capabilities.publicReply` 驱动 |
-| 前端 | 否 | 表单由 `manifest.configFields` 生成 |
+| 前端 | 否 | 表单由 `manifest.configFields` + `mapsTo` 生成（D041） |
 
 真正需要注意的不是代码，而是**语义**：
 
@@ -576,7 +594,7 @@ QQ 号与抖音号是**两份独立人格**，各自演化、互不可见（跨�
 | M1 骨架 ✅ | 项目初始化、Prisma schema、OneBot 连接打通（正/反向）、能收能发 | 在 QQ 里收到"pong" |
 | M2 最小闭环 ✅ | 单实例 + 单角色卡 + 单 Provider + 管道 | 私聊能正常对话 |
 | M3 拟人 ✅ | 状态机、发言决策、双阶段生成、表达层（+ 多模态与素材库） | 群里像一个不太爱说话的人 |
-| M4 后台（进行中） | 人设 API ✅、管理端六页 ✅、素材库 ✅、管道拆分 ✅；剩 `manifest.configFields` 映射、会话查看、审计页 | 不改代码能调人设 |
+| M4 后台（收尾） | 人设 API ✅、管理端六页 ✅、素材库 ✅、管道拆分 ✅、清单驱动接入配置 ✅；剩会话查看、审计页 | 不改代码能调人设 |
 | M5 记忆与自主 | 三层记忆、反思任务、主动消息（默认关） | 隔天能记得昨天聊的事 |
 | M6 风控与观测 | 行为拟人、自动降级、看板、告警 | 健康分可见，异常自动停 |
 

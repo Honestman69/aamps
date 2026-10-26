@@ -79,9 +79,8 @@ src/                   主服务：编排、人设、模型、记忆、合规
 想让 AI 也住进抖音或 B站？新建一个 `packages/adapter-douyin`（实现 `IAdapter` + `manifest`）就能被
 `AdapterRegistry` 认出来，主服务不用改。详见 `docs/DECISIONS.md` 的 D013。
 
-> **但"前端零改动"这半句现在还没兑现**：适配器声明的字段名（`wsUrl` / `selfId`）与实例列名
-> （`endpoint` / `accountId`）之间缺一张由适配器自己提供的映射，所以新建实例的表单目前是固定字段。
-> 这是 M4-4，写在 `STATUS.md` 的下一步里。
+> 表单是**清单驱动**的（D041）：适配器在 `ConfigField.mapsTo` 里说明"这个值写进实例的哪个槽位"，
+> 前端只负责按清单问问题，主服务按同一张清单翻译。所以"加一个平台"确实只动适配器包。
 
 ---
 

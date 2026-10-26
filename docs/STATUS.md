@@ -6,16 +6,19 @@
 > 仓库里没有 `.env`、没有数据库，直接 `pnpm dev` 会失败。
 
 **最后更新**：2026-10-26
-**当前阶段**：**M4 进行中** —— 人设 API（第 24 步）、前端工程与静态托管（第 25 步）、
-素材库管理（第 26 步）已完成；**第 27 步把消息管道拆成 13 个 pipe（D040）**，
-为 M5 的记忆注入腾出插槽。后台已有五页 + 素材库。M3 已完成并打标签 `m3-persona`。
+**当前阶段**：**M4 收尾** —— 人设 API（第 24 步）、前端工程与静态托管（第 25 步）、
+素材库管理（第 26 步）、管道拆 13 个 pipe（第 27 步）、**接入配置清单驱动（第 28 步，D041）** 已完成。
+D013 承诺的"新增平台不改前端"到这一步**才真正兑现**：新建实例与设置页的接入参数都只认
+`manifest.configFields`，`src/` 与 `web/` 里没有任何平台字段名。
+M3 已完成并打标签 `m3-persona`。
 
-**下一步（默认走这条）**：**M4-4 让 `manifest.configFields` 真正驱动"新建实例"表单**。
-这是 D013 承诺的"新增平台不改前端"目前唯一没兑现的一环：适配器声明的是
-`mode` / `wsUrl` / `accessToken` / `selfId`，实例列是 `adapterMode` / `endpoint` / `accessToken` / `accountId`，
-两者之间缺一张**由适配器自己提供**的映射（放在 `packages/adapter-qq`，`src/` 与 `web/` 都不许写平台知识）。
+**下一步（默认走这条）**：**M4-5 会话查看** —— 只读接口
+`GET /api/instances/:id/sessions`（列表：对端、最后消息、消息数、AI 是否接管）与
+`GET /api/sessions/:id/messages?before=&limit=`（分页历史）。它补的是"机器人到底跟谁说了什么"
+这个最基本的可观测需求；表已齐（`Session` / `Message`），只差查询与页面。
 
-之后依次：会话查看（需要新增只读接口）、管理员页（`/api/admin/users` 与 `/api/admin/audit` 已有，纯前端）。
+之后依次：管理员页（`/api/admin/users` 与 `/api/admin/audit` 已有，纯前端）、
+M4 合并打标签 → M5 记忆与反思（管道插槽已就位）。
 
 > **多模态要配三样才生效**（都在实例上）：`modelVision`（看图）、`ttsCredentialId` + `ttsModel`（发语音）。
 > 不配就是"能力不存在"——图片只留「[图片]」占位，prompt 里也不提 `[voice]`。
@@ -541,6 +544,59 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 
 ---
 
+### ~~第 28 步：M4-4 接入配置由适配器清单驱动~~ ✅ 已完成（D041）
+
+**为什么这一步重要**：D013 承诺"加平台不改前端"，而此前只有**一半**兑现 ——
+`GET /api/adapters` 早就在返回 `configFields`，但新建实例表单写死的是实例契约字段，
+与适配器声明的（`selfId` / `wsUrl` / `mode`）对不上。缺的就是那张映射。
+
+**做了什么**
+
+- [x] `contracts`：`ConfigField` 增 `mapsTo`（指向 `accountId` / `adapterMode` / `endpoint` / `accessToken`）
+      与 `requiredWhen: { field, in }`（条件必填）
+- [x] `packages/adapter-qq/manifest.ts`：四个字段各自声明 `mapsTo`；
+      token 的 `requiredWhen` 写 `{ field: 'mode', in: ['server'] }` ——
+      "反向必须有 token"（D019）从此只有一份定义，前端星号与后端校验都读它
+- [x] `src/modules/adapter/manifest-config.ts`：
+      `assertAdapterManifest`（注册时校验：缺 `mapsTo` / 抢槽位 / select 选项非法 / `requiredWhen` 指向不存在的字段 /
+      没有 `accountId` 映射）、`translateAdapterConfig`（未知字段 400、必填 400、类型规整）、
+      `isFieldRequired` / `requiredFieldKeys`
+- [x] `AdapterRegistry.register` 里调用 `assertAdapterManifest`：不合规的适配器**启动即失败**
+- [x] `POST /api/instances` 与 `PATCH /api/instances/:id` 接受 `adapterConfig`；
+      与四条平铺槽位字段**互斥**（同时给 → 400）；更新是**增量**且按当前实例的清单翻译
+- [x] `web/src/components/AdapterConfigForm.vue`：按清单渲染 text / password / number / switch / select / textarea，
+      新建与设置**共用**；`web/src/api/adapter-config.ts` 放共享判定（必填、默认值、从实例反查、算增量）
+- [x] 设置页的接入区块改为清单驱动：`valuesFromInstance` 按 `mapsTo` 反查当前值，
+      保存只发 `changedValues(...)` 的差分（否则每次保存都触发重连）
+- [x] **顺手修掉一个从第 25 步就存在的真 bug**：设置页 `dirty` 是 computed，
+      首次求值时 `origin` 还是 `null` 且非响应式 → 早退分支没收集依赖 → `dirty` 永远 `false`，
+      现象是"改了东西但保存按钮一直灰着"。现在 `origin` / `originConfig` 都是 `ref`
+
+**验收**
+
+- `pnpm test` **544 个用例全绿**（新增 42：manifest-config 23 + instance adapterConfig 8 + dto 9 + registry 2）
+- `pnpm typecheck` / `pnpm web:typecheck` / `pnpm build` / `pnpm web:build` 全部通过
+- `http-smoke` **58 项**（新增 6：只给 adapterConfig 能建 / 两者同给 400 / 未知字段 400 /
+  反向漏 token 400 / 增量改账号 / 改空必填 400）
+- `pipeline-smoke` 10 项；`check:local-data` PASSED（288 文件）
+- **真浏览器**（Chrome headless + CDP）：新建对话框渲染出清单里的四个字段（反向模式下四个都带必填星号）、
+  不填实例名被拦、创建后 `accountId` 来自 `selfId`；设置页同样的字段且值已按 `mapsTo` 反查、
+  token 显示"已配置，留空表示不修改"；改账号 → 按钮变可用 → 保存后 `accountId` 变、`endpoint` 不变；
+  全程无运行期异常
+
+**实现补充（后续不要改）**
+
+- **`mapsTo` 写在字段上，不单独维护一张映射表**：独立表会漂移（字段有、映射漏），字段上的不可能漏。
+- **只认四个槽位**：塞不进这四个槽的字段意味着 `BotInstance` 缺列 —— 那是表结构变更，
+  不许出现"填了但没地方存"的字段。
+- **清单在注册时校验**，不是创建时：那些是适配器开发者的错，应该让服务起不来。
+- **`adapterConfig` 与平铺字段互斥**：同一件事两个来源，就是"改了没生效"的起点。
+- **更新必须按当前实例的清单翻译**（先 `findForUser` 拿 platform/adapterType），
+  用请求体的 platform 猜会静默丢字段。
+- **前端不翻译**：`web/` 只回传 `{ 字段key: 值 }`，翻译只有一份（在后端）。
+
+---
+
 ### ~~第 27 步：管道重构——706 行拆成 13 个 pipe~~ ✅ 已完成（D040）
 
 **为什么先做这个：M5 要往链路上插"取记忆 → 注入 prompt → 写回记忆"**，
@@ -971,7 +1027,7 @@ POST   /api/personas/:id/activate
 - [x] 人设编辑器（第 25 步）
 - [x] 密钥管理页（新增 / 轮换 / 启停 / 删除；"强制测试连接"仍未做）
 - [x] 素材库管理页（第 26 步，D039）
-- [ ] 会话查看
+- [ ] 会话查看（**下一步 M4-5**：需新增两个只读接口）
 - [ ] 规则/约束词配置（红线独立存放，需先定 API 形状）
 
 ### M5 记忆与自主
@@ -1078,6 +1134,7 @@ POST   /api/personas/:id/activate
 | 2026-10-25 | 素材库落地（D034）：`MediaAsset` 迁移 + `assets/` 服务与仓储 + `[save]`/`[use]` 指令 + prompt 清单 + 适配器 `mface` 映射；407 单测、pipeline-smoke 9 项全过 |
 | 2026-10-25 | 表达层落地（D035）：拆条（不丢内容）/ 打字延迟（只乘不减、12s 上限）/ 回 @ / 同会话串行 / 消息级种子；文本、图片、语音分开发；433 单测 |
 | 2026-10-26 | 人设 API 落地（D037）：生命周期（草稿/发布/归档/启用）+ 严格校验 + 审计；479 单测、http-smoke 42 项 |
+| 2026-10-26 | 接入配置清单驱动（D041）：`mapsTo` + `requiredWhen` + 注册时校验清单自洽 + `adapterConfig` 翻译层 + 前端共用表单组件；顺带修掉"设置页改了东西保存按钮仍灰着"的响应式 bug；544 单测、http-smoke 58 项、真浏览器验证通过 |
 | 2026-10-26 | 管道重构（D040）：706 行 `process()` 拆成 13 个 pipe + 类型化上下文 + `requires/provides` 启动校验；502 单测（+13，无既有用例改动）、两条冒烟数值与重构前逐位一致 |
 | 2026-10-26 | 素材库管理落地（D039）：`MediaModule` 提升 + 带 owner 的仓储方法 + 列表/删除/取文件三个接口 + 素材页；489 单测、http-smoke 52 项、真浏览器验证缩略图与删除交互 |
 | 2026-10-26 | 前端工程落地（D038）：`web/`（Vue3 + Vite + Element Plus）五页 + 主服务同源托管 SPA + 冒烟补 6 项托管断言；479 单测、http-smoke 48 项、真浏览器验证通过 |
