@@ -5,17 +5,22 @@
 > **换机器 / 全新克隆先读 [`AGENTS.md`](../AGENTS.md) 的「换机器 / 全新克隆」**——
 > 仓库里没有 `.env`、没有数据库，直接 `pnpm dev` 会失败。
 
-**最后更新**：2026-10-25
-**当前阶段**：**M4 进行中** —— 人设的增删改查/发布/归档/启用 API 已完成（第 24 步）；
-前端工程（Vue3）尚未开始。M3 已完成并打标签 `m3-persona`。
-M2 及之前全部完成（私聊能对话）。
+**最后更新**：2026-10-26
+**当前阶段**：**M4 进行中** —— 人设 API（第 24 步）+ **前端工程与静态托管（第 25 步）** 已完成：
+`web/` 下 Vue3 + Vite + TS，登录 / 实例列表 / 实例设置 / 人设编辑器 / 密钥四页可用，
+构建产物由主服务同源托管。M3 已完成并打标签 `m3-persona`。
 
-**下一步（默认走这条）**：**M4-2 前端工程** —— `web/` 下 Vue3 + Vite + TS 脚手架，
-先做三页：登录 → 实例设置（含 `modelVision` / `ttsCredentialId` / `ttsModel` / `imageHosts`）
-→ 人设编辑器（消费第 24 步的 persona API）。
-登录直接复用现有 cookie 会话（`POST /api/auth/login`），不引入新鉴权。
+**下一步（默认走这条）**：**M4-3 素材库管理页** —— 它需要先补后端：
+`GET /api/instances/:id/assets`（列表，含 `useCount` / `lastUsedAt` / 体积）与
+`DELETE /api/assets/:id`（软删）。D034 里写了"存失败时后台素材列表能立刻看出没存上"，
+而那个列表现在**还不存在** —— 这是 M4 剩下的第一个真实缺口。
 
-做完 M4-2 再补：密钥管理页、素材库管理页（`MediaAsset` 目前只能靠对话产生，没有后台入口）。
+之后依次：会话查看（需要新增只读接口）、管理员页（`/api/admin/users` 与 `/api/admin/audit` 已有，纯前端）。
+
+**已知缺口（不是 bug，是没做）**：
+- `manifest.configFields` 目前**没有**驱动"新建实例"表单。适配器声明的字段名（`wsUrl` / `selfId`）
+  与实例列名（`endpoint` / `accountId`）不同，映射必须放在后端，前端硬写映射表等于把平台知识搬回前端（违背 D013）。
+  在第 25 步里用的是实例的契约字段，等后端补一张映射表之后再切到 manifest 驱动。
 
 > **多模态要配三样才生效**（都在实例上）：`modelVision`（看图）、`ttsCredentialId` + `ttsModel`（发语音）。
 > 不配就是"能力不存在"——图片只留「[图片]」占位，prompt 里也不提 `[voice]`。
@@ -535,6 +540,48 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 
 ---
 
+### ~~第 25 步：M4-2 前端工程与静态托管~~ ✅ 已完成（D038）
+
+**做了什么**
+
+- [x] `web/` 成为 pnpm workspace 成员（Vue 3 + Vite + TS + Pinia + vue-router + Element Plus）
+- [x] **五页**：登录 / 实例列表（含新建、连接、断开、启用开关、删除）/ 实例设置（基础·预算·模型·多模态·接入）
+      / 人设编辑器（基本信息·补充设定·示例·开场白·软禁区·行为参数·故障话术）/ 密钥（新增·轮换·启停·删除）
+- [x] `web/src/api/client.ts`：只用相对 `/api`，错误统一成 `ApiError`（带 `code`/`status`），
+      **网络错误不当 401**（后端重启不该把人踢回登录页）
+- [x] 路由守卫：未登录送 `/login?next=`；已登录访问登录页回列表
+- [x] 布局里显式提示"密钥库已锁定"并就地解锁 —— 服务重启后会话还在、DEK 没了，
+      不提示的话用户只会看到"机器人不回消息"
+- [x] `src/common/http/serve-admin.ts`：主服务托管 `web/dist`（SPA 回落 + `/api` 不回落 +
+      目录穿越 403 + hash 资源长缓存），产物缺失时只打印一行提示、不阻塞纯后端开发
+- [x] `scripts/http-smoke.ts` 增加 6 项托管断言（首页 / 深链回落 / 未知接口 404 JSON /
+      `/api` 鉴权不受影响 / immutable 缓存 / 目录穿越 403）
+
+**验收**
+
+- `pnpm typecheck`（主服务）+ **`pnpm web:typecheck`**（vue-tsc）均无错误
+- `pnpm test` **479 个用例全绿**（本轮未新增单测：前端没有测试基建，
+  验证走"构建 + 真浏览器"两道路径，见下）
+- `pnpm build` + `pnpm web:build` 通过（前端产物 349 KB gzip，Element Plus 全量引入）
+- `pipeline-smoke` 10 项、`http-smoke` **48 项**全过；`check:local-data` PASSED（244 文件）
+- **真浏览器验证**（本机 Chrome headless + CDP，不装 Playwright）：
+  未登录访问 `/instances` → 跳 `/login`；登录后实例/设置/人设/密钥四页
+  文本与控件均正确渲染；设置页在无改动时"保存/放弃改动"均为 disabled；全程无 JS 运行期异常
+
+**实现补充（后续不要改）**
+
+- **不开 CORS**：开发期走 Vite 代理，生产期同源托管。跨端口要同时放宽 `SameSite` 与 CORS 白名单，
+  等于为了开发方便削弱线上策略（D005）。
+- **`sendFile` 必须用 POSIX 分隔符**：Windows 上 `path.relative` 给的是 `assets\x.js`，
+  `@fastify/static` 会把反斜杠路径判成非规范路径直接 403。这个坑只在 Windows 出现，
+  而且表现为"CSS 能加载、JS 500"，很容易误判成构建问题。
+- **`/api` 永不回落 `index.html`**：否则前端 `fetch` 会拿到 HTML，报 `Unexpected token '<'`。
+- **静态资源本身不鉴权**：`index.html` 只是空壳，数据全靠会话 cookie；这和安全不冲突。
+- **前端类型是手抄的**（`web/src/api/types.ts`），不共享主服务类型：两边编译目标不同
+  （Bundler/DOM vs commonjs），共享会把 zod 打进前端包。
+
+---
+
 ### ~~第 24 步：M4-1 人设 API——增删改查 / 发布 / 归档 / 启用~~ ✅ 已完成（D037）
 
 **做了什么**
@@ -836,11 +883,13 @@ POST   /api/personas/:id/activate
 > 目标：M1~M3 阶段**没有页面**，操作一律走 HTTP 接口（`scripts/connect-instance.ts` 是临时的连接入口）。
 
 - [x] 人设 API（第 24 步，D037）
-- [ ] Vue3 工程 + 登录页
-- [ ] 人设编辑器（后端已就绪，只差界面）
-- [ ] 规则/约束词配置
-- [ ] 密钥管理页 + 新增向导（强制测试连接）
+- [x] Vue3 工程 + 登录页（第 25 步，D038）
+- [x] 实例设置（把多模态那几个只能改库的字段暴露出来）
+- [x] 人设编辑器（第 25 步）
+- [x] 密钥管理页（新增 / 轮换 / 启停 / 删除；"强制测试连接"仍未做）
+- [ ] 素材库管理页（**先补后端 API**，第 26 步）
 - [ ] 会话查看
+- [ ] 规则/约束词配置（红线独立存放，需先定 API 形状）
 
 ### M5 记忆与自主
 
@@ -946,4 +995,5 @@ POST   /api/personas/:id/activate
 | 2026-10-25 | 素材库落地（D034）：`MediaAsset` 迁移 + `assets/` 服务与仓储 + `[save]`/`[use]` 指令 + prompt 清单 + 适配器 `mface` 映射；407 单测、pipeline-smoke 9 项全过 |
 | 2026-10-25 | 表达层落地（D035）：拆条（不丢内容）/ 打字延迟（只乘不减、12s 上限）/ 回 @ / 同会话串行 / 消息级种子；文本、图片、语音分开发；433 单测 |
 | 2026-10-26 | 人设 API 落地（D037）：生命周期（草稿/发布/归档/启用）+ 严格校验 + 审计；479 单测、http-smoke 42 项 |
+| 2026-10-26 | 前端工程落地（D038）：`web/`（Vue3 + Vite + Element Plus）五页 + 主服务同源托管 SPA + 冒烟补 6 项托管断言；479 单测、http-smoke 48 项、真浏览器验证通过 |
 | 2026-10-25 | 双阶段生成落地（D036）+ M3 收尾：think→导演指令→外显、独白落库不回灌、emotion_shift 推动 mood；452 单测 / smoke 10 项 / http-smoke 32 项全过；合并 main 打标签 `m3-persona` |

@@ -42,6 +42,7 @@ cp .env.example .env                           # 模板里的 DATABASE_URL 已�
 pnpm prisma:generate                           # 生成 Prisma Client（缺它 tsc 会报找不到类型）
 DATABASE_URL="file:../data/dev.db" npx prisma migrate deploy
 pnpm build                                     # 先构建 packages/*，否则运行期 ERR_MODULE_NOT_FOUND
+pnpm web:build                                 # 管理后台产物（可选：不构建则只有接口，没有页面）
 pnpm test                                      # 全绿（用例数会随迭代增长，不写死数字）
 pnpm dev                                       # 或 node dist/src/main.js
 ```
@@ -81,6 +82,10 @@ pnpm typecheck        # tsc --noEmit，含 packages/*
 pnpm test             # 全绿
 pnpm build            # 两个包 + 主服务都出产物
 pnpm check:local-data # NapCat 登录态没混进版本库
+
+# 动了 web/ 的话，再加这两条
+pnpm web:typecheck    # vue-tsc --noEmit
+pnpm web:build        # 产物能出来（挂载失败只有真浏览器能看出来）
 ```
 
 端到端冒烟（要真服务 + 独立库，别指向 `dev.db`）见本节下方「分支与合并纪律」第 3 条。
@@ -115,7 +120,7 @@ pnpm check:local-data # NapCat 登录态没混进版本库
 
 ---
 
-## 新会话最容易犯的 8 个错
+## 新会话最容易犯的 12 个错
 
 前人都踩过，别重复：
 
@@ -131,6 +136,8 @@ pnpm check:local-data # NapCat 登录态没混进版本库
 | 8 | 把 `napcat/`、`.config/QQ/`、`onebot_*.json` 复制到新机器或提交上去 | 那是 QQ 登录态 = 账号控制权，搬一次就多一份泄露面 | 新机器重新扫码生成；提交前 `pnpm check:local-data` |
 | 9 | 所有失败都回同一句话术，或者反过来"欠费时每条消息都回一句" | 前者让 owner 分不清是欠费、Key 坏了还是我们的 bug；后者在群里是刷屏、在私聊是持续敷衍，比不说话更伤关系 | 按原因分槽位并**限频**：`faultToSlot` + `decideSpeak`（D028）。欠费也走话术，不做主动通知；用户配了 `null` 就必须静默 |
 | 10 | 给实例设了预算，但凭据里没填目录价 | 每次调用都记 0 分，**预算永远不触发**；用户以为设了限额，实际一次都没拦住 | 建 Key 时填 `catalogJson` 价格；Gateway 有 warn，看到就补（D029） |
+| 11 | 把 `web/dist` 或 `web/node_modules` 提交上去 | 产物是构建结果，冲突起来只能全量重编 | `.gitignore` 已覆盖；只提交源码 |
+| 12 | 为了让前端跨端口调用而打开 CORS + `SameSite=None` | 等于为开发方便削弱线上 cookie 策略（D005） | 开发期用 Vite 代理，生产期同源托管（D038） |
 ---
 
 ## 目录地图
@@ -151,6 +158,7 @@ newjob/                         pnpm workspace
 ├─ packages/
 │  ├─ contracts/            @newjob/contracts —— 主服务与适配器唯一的共享依赖
 │  └─ adapter-qq/           @newjob/adapter-qq —— QQ 适配器（独立包，见 D013）
+├─ web/                     Vue3 管理后台（独立 workspace 成员，产物由主服务托管，D038）
 └─ src/                     主服务：编排、人设、模型、记忆、合规
    ├─ common/               配置、密码学（crypto）、日志
    ├─ modules/              业务模块（auth / model / persona / ...）
