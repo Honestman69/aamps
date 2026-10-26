@@ -333,6 +333,27 @@ async function main(): Promise<void> {
   res = await call('GET', `/api/instances/${instanceId}/personas?includeArchived=1`);
   assert.equal((res.body as unknown[]).length, 1);
 
+  // ── 素材库（M4-3） ──
+  step('素材：列表为空，但带统计与每实例上限');
+  res = await call('GET', `/api/instances/${instanceId}/assets`);
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.deepEqual(res.body.items, []);
+  assert.equal(res.body.stats.usable, 0);
+  assert.equal(res.body.stats.limit, 200);
+
+  step('素材：includeDeleted 传非法值 → 400（query 也 strict 校验）');
+  res = await call('GET', `/api/instances/${instanceId}/assets?includeDeleted=yes`);
+  assert.equal(res.status, 400);
+
+  step('素材：删除不存在的素材 → 404');
+  res = await call('DELETE', `/api/instances/${instanceId}/assets/no-such-asset`);
+  assert.equal(res.status, 404);
+
+  step('素材：取不存在的文件 → 404 JSON（不能回 HTML）');
+  res = await call('GET', `/api/instances/${instanceId}/assets/no-such-asset/file`);
+  assert.equal(res.status, 404);
+  assert.equal(res.body.code, 'ASSET_NOT_FOUND');
+
   step('实例：不存在的 id → 404');
   res = await call('POST', '/api/instances/no-such-instance/connect');
   assert.equal(res.status, 404);

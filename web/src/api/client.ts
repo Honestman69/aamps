@@ -19,6 +19,7 @@ import type {
   InstancePatch,
   LoginResponse,
   MeResponse,
+  MediaAssetList,
   Persona,
   PersonaPatch,
 } from './types';
@@ -115,6 +116,28 @@ export const api = {
       request('POST', `/api/instances/${encodeURIComponent(id)}/connect`),
     disconnect: (id: string): Promise<{ ok: boolean; detail?: string }> =>
       request('POST', `/api/instances/${encodeURIComponent(id)}/disconnect`),
+  },
+
+  assets: {
+    list: (instanceId: string, options?: { includeDeleted?: boolean; limit?: number }): Promise<MediaAssetList> => {
+      const params = new URLSearchParams();
+      if (options?.includeDeleted) {
+        params.set('includeDeleted', '1');
+      }
+      if (options?.limit) {
+        params.set('limit', String(options.limit));
+      }
+      const query = params.toString();
+      return request(
+        'GET',
+        `/api/instances/${encodeURIComponent(instanceId)}/assets${query ? `?${query}` : ''}`,
+      );
+    },
+    remove: (instanceId: string, assetId: string): Promise<{ ok: true; alias: string; alreadyDeleted: boolean }> =>
+      request(
+        'DELETE',
+        `/api/instances/${encodeURIComponent(instanceId)}/assets/${encodeURIComponent(assetId)}`,
+      ),
   },
 
   personas: {

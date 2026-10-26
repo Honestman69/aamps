@@ -174,6 +174,30 @@ export type PersonaPatch = Partial<
   >
 >;
 
+/** 素材库（D034 / M4-3）：给人看的视图，模型看不到这些字段 */
+export type MediaAsset = {
+  id: string;
+  alias: string;
+  kind: string;
+  mime: string;
+  bytes: number;
+  tags: string;
+  useCount: number;
+  lastUsedAt: string | null;
+  createdAt: string;
+  source: string;
+  /** 已软删：名字仍占位，所以界面上要能看到它并解释"为什么这个名字不能用" */
+  deleted: boolean;
+  /** 同源缩略图地址（需要会话 cookie） */
+  fileUrl: string;
+};
+
+export type MediaAssetList = {
+  items: MediaAsset[];
+  total: number;
+  stats: { usable: number; deleted: number; bytes: number; limit: number };
+};
+
 export type InstancePatch = Partial<{
   name: string;
   platform: string;

@@ -8,6 +8,7 @@ import { ConfigModule as AgentConfigModule } from './modules/config/config.modul
 import { ModelModule } from './modules/model/model.module';
 import { CredentialModule } from './modules/credential/credential.module';
 import { InstanceModule } from './modules/instance/instance.module';
+import { MediaModule } from './modules/media/media.module';
 import { PersonaModule } from './modules/persona/persona.module';
 
 /**
@@ -32,6 +33,7 @@ class PrismaModule {}
     AgentConfigModule,
     ModelModule,
     InstanceModule,
+    MediaModule,
     PersonaModule,
   ],
 })

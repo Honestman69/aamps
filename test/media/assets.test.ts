@@ -7,7 +7,10 @@ import type {
   CreateAssetInput,
   CreateAssetResult,
   IMediaAssetRepository,
+  MediaAssetAdminRecord,
+  MediaAssetListOptions,
   MediaAssetRecord,
+  MediaAssetStats,
 } from '@/modules/media/assets/ports';
 import type { FetchedImage, IImageFetcher } from '@/modules/media/fetcher';
 import type { IMediaFileStore } from '@/modules/media/file-store';
@@ -56,6 +59,24 @@ class FakeRepo implements IMediaAssetRepository {
   async markUsed(_instanceId: string, assetId: string): Promise<void> {
     this.used.push(assetId);
   }
+  // 管理端方法在另一个测试文件里用专门的假实现；这里只需要满足接口
+  async listForUser(): Promise<MediaAssetAdminRecord[]> {
+    return [];
+  }
+  async countForUser(): Promise<number> {
+    return 0;
+  }
+  async statsForUser(): Promise<MediaAssetStats> {
+    return { usable: 0, deleted: 0, bytes: 0 };
+  }
+  async findForUser(): Promise<MediaAssetAdminRecord | null> {
+    return null;
+  }
+  async softDeleteForUser(_userId: string, _instanceId: string, _assetId: string, now: Date): Promise<boolean> {
+    void now;
+    return false;
+  }
+
   async softDelete(instanceId: string, alias: string): Promise<boolean> {
     const row = this.rows.find((r) => r.instanceId === instanceId && r.alias === alias);
     if (!row) return false;

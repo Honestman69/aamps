@@ -16,13 +16,10 @@ import { ConfigModule } from '../config/config.module';
 import { CONFIG_SERVICE } from '../config/tokens';
 import type { ResolvedConfig } from '../config/types';
 import { MediaAssetService } from '../media/assets/asset.service';
-import { PrismaMediaAssetRepository } from '../media/assets/repositories/prisma-media-asset.repository';
-import { LocalMediaFileStore } from '../media/file-store';
-import { HttpImageFetcher } from '../media/fetcher';
 import type { IImageFetcher } from '../media/fetcher';
-import { PrismaTtsCredentialRepository } from '../media/repositories/prisma-tts-credential.repository';
-import { TtsService } from '../media/tts';
-import { RuntimeKeyStore } from '../auth/runtime-key-store';
+import { MediaModule } from '../media/media.module';
+import { IMAGE_FETCHER, MEDIA_ASSET_SERVICE, TTS_SERVICE } from '../media/tokens';
+import type { TtsService } from '../media/tts';
 import { PrismaMindStateRepository } from '../mind/state/repositories/prisma-mind-state.repository';
 import type { IMindStateRepository } from '../mind/state/ports';
 import { ModelModule } from '../model/model.module';
@@ -36,10 +33,7 @@ import { PipelineService } from './pipeline.service';
 import type { IPipelineRepository } from './ports';
 import { PrismaPipelineRepository } from './repositories/prisma-pipeline.repository';
 import {
-  IMAGE_FETCHER,
-  MEDIA_ASSET_SERVICE,
   MIND_STATE_REPOSITORY,
-  TTS_SERVICE,
   PIPELINE_REPOSITORY,
   PIPELINE_SERVICE,
   SESSION_REPOSITORY,
@@ -47,7 +41,7 @@ import {
 } from './tokens';
 
 @Module({
-  imports: [AuthModule, ConfigModule, ModelModule],
+  imports: [AuthModule, ConfigModule, MediaModule, ModelModule],
   providers: [
     {
       provide: PIPELINE_REPOSITORY,
@@ -64,30 +58,6 @@ import {
       useFactory: (prisma: PrismaService): ISessionWindowRepository =>
         new PrismaSessionWindowRepository(prisma),
       inject: [PrismaService],
-    },
-    {
-      provide: IMAGE_FETCHER,
-      useFactory: (): IImageFetcher => new HttpImageFetcher(),
-    },
-    {
-      provide: MEDIA_ASSET_SERVICE,
-      useFactory: (prisma: PrismaService): MediaAssetService =>
-        new MediaAssetService({
-          repo: new PrismaMediaAssetRepository(prisma),
-          store: new LocalMediaFileStore(),
-          images: new HttpImageFetcher(),
-        }),
-      inject: [PrismaService],
-    },
-    {
-      provide: TTS_SERVICE,
-      useFactory: (prisma: PrismaService, keyStore: RuntimeKeyStore): TtsService =>
-        new TtsService({
-          credentials: new PrismaTtsCredentialRepository(prisma),
-          keyStore,
-          store: new LocalMediaFileStore(),
-        }),
-      inject: [PrismaService, RuntimeKeyStore],
     },
     {
       provide: MIND_STATE_REPOSITORY,

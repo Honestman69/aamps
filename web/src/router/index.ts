@@ -45,6 +45,12 @@ export const router = createRouter({
           meta: { title: '人设' },
         },
         {
+          path: 'instances/:id/assets',
+          name: 'instance-assets',
+          component: () => import('@/views/AssetsView.vue'),
+          meta: { title: '素材库' },
+        },
+        {
           path: 'credentials',
           name: 'credentials',
           component: () => import('@/views/CredentialsView.vue'),

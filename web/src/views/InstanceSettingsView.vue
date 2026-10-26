@@ -371,6 +371,17 @@ const voiceReady = computed(
       </div>
     </div>
 
+    <!-- 素材库入口：多模态把它接进来，管理是另一页的事 -->
+    <div class="card card-pad">
+      <h2 class="section-title">素材库</h2>
+      <p class="section-desc">
+        模型可以把你发的图片/表情存下来，之后按名字再发出去。存了什么、占多少、要不要删，都在这里。
+      </p>
+      <el-button @click="router.push({ name: 'instance-assets', params: { id: instanceId } })">
+        打开素材库
+      </el-button>
+    </div>
+
     <!-- 接入 -->
     <div class="card card-pad">
       <h2 class="section-title">接入</h2>

@@ -38,6 +38,8 @@ export const AuditAction = {
   PersonaPublish: 'persona.publish',
   PersonaArchive: 'persona.archive',
   PersonaActivate: 'persona.activate',
+  /** 素材：只记"删了哪张、多大"，图片内容本来就不在库里 */
+  AssetDelete: 'asset.delete',
   UserLogin: 'user.login',
   UserLoginFailed: 'user.login_failed',
   UserCreate: 'user.create',
