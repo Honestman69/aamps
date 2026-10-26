@@ -7,8 +7,8 @@
 
 **最后更新**：2026-10-26
 **当前阶段**：**M4 进行中** —— 人设 API（第 24 步）、前端工程与静态托管（第 25 步）、
-**素材库管理（第 26 步）** 已完成。后台已有五页 + 素材库：登录 / 实例列表 / 实例设置 /
-人设编辑器 / 密钥 / 素材。M3 已完成并打标签 `m3-persona`。
+素材库管理（第 26 步）已完成；**第 27 步把消息管道拆成 13 个 pipe（D040）**，
+为 M5 的记忆注入腾出插槽。后台已有五页 + 素材库。M3 已完成并打标签 `m3-persona`。
 
 **下一步（默认走这条）**：**M4-4 让 `manifest.configFields` 真正驱动"新建实例"表单**。
 这是 D013 承诺的"新增平台不改前端"目前唯一没兑现的一环：适配器声明的是
@@ -535,6 +535,47 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 
 ---
 
+### ~~第 27 步：管道重构——706 行拆成 13 个 pipe~~ ✅ 已完成（D040）
+
+**为什么先做这个：M5 要往链路上插"取记忆 → 注入 prompt → 写回记忆"**，
+而当时的形态是一个 706 行的 `process()`（M2 时约 200 行，M3 四件事全往里加）。
+加一种人格行为 = 在大函数中间插一段，且没有任何检查告诉你依赖是否就绪。
+
+**做了什么**
+
+- [x] `pipeline.Service` 只留编排：入队串行、跑链、兜底、清理（**706 → 190 行**）
+- [x] `pipeline/pipes/` 一步一文件，共 13 个：
+      `persist-inbound` → `load-context` → `governance` → `load-mind` → `load-window` →
+      `attention` → `collect-media` → `assemble-prompt` → `think` → `generate` →
+      `decide-quote` → `deliver` → `persist-interaction`
+- [x] `PipelineContext`（强类型，不用 `Map<string, unknown>`）；
+      `createContext` 是**全文唯一一处 `as`**，并把"为什么"写在旁边
+- [x] 每个 pipe 声明 `requires` / `provides`，`assertPipeGraph` 在**构造函数里**校验
+      （字段没人提供 / 两个 pipe 抢写 / 名字重复 → 启动即失败）
+- [x] `DROP`（判定不该回）与 `throw`（故障 → 兜底话术）在代码路径上分开，
+      `runPipeChain` 里**故意没有 try**
+- [x] `pipeline/deps.ts`：依赖类型独立成文件，断掉 `service ↔ pipes` 的循环 import
+
+**验收（这次的关键是"数值不变"）**
+
+- `pnpm test` **502 个用例全绿**（+13，全在 `test/pipeline/pipes.test.ts`）；
+      **没有修改任何既有用例** —— 这是纯重构的证据
+- `pipeline-smoke` 10 项：`energy=0.740`、`affinity=3`、`mood=1.00` 与重构前**逐位相同**
+- `http-smoke` 52 项、`typecheck`、`build`、`web:build` 全过
+- 新增顺序不变量测试 4 条：落库在最前/回写在最后、`attention` 早于 `generate`、
+      `governance` 早于 `load-mind`、`decide-quote` 早于 `deliver`
+
+**实现补充（后续不要改）**
+
+- **业务逻辑不许写回 `pipeline.service.ts`**（AGENTS 硬性规则 11）。那里只剩编排。
+- **`requires` / `provides` 必须如实填**：它俩是启动校验的输入，写假了等于把校验关掉。
+- **pipe 里不要 `try/catch` 兜底**：兜底是编排层职责，pipe 自己 catch 会让 D028 的限频失效。
+- **`deliver` 仍是"express + send + persist"一体**：拆条/延迟/发送/落库是同一件事的三段，
+  拆开要在两个 pipe 之间传半成品。M6 加节流与合规审核时再拆。
+- **`contracts/pipe.ts` 的 `IPipe` 仍未启用**（已加注释说明）：两套抽象并存比只有一套更糟。
+
+---
+
 ### ~~第 26 步：M4-3 素材库管理——可观测、可删~~ ✅ 已完成（D039）
 
 **为什么先做这个**：D034 写了"存失败时后台素材列表能立刻看出没存上"，
@@ -1031,6 +1072,7 @@ POST   /api/personas/:id/activate
 | 2026-10-25 | 素材库落地（D034）：`MediaAsset` 迁移 + `assets/` 服务与仓储 + `[save]`/`[use]` 指令 + prompt 清单 + 适配器 `mface` 映射；407 单测、pipeline-smoke 9 项全过 |
 | 2026-10-25 | 表达层落地（D035）：拆条（不丢内容）/ 打字延迟（只乘不减、12s 上限）/ 回 @ / 同会话串行 / 消息级种子；文本、图片、语音分开发；433 单测 |
 | 2026-10-26 | 人设 API 落地（D037）：生命周期（草稿/发布/归档/启用）+ 严格校验 + 审计；479 单测、http-smoke 42 项 |
+| 2026-10-26 | 管道重构（D040）：706 行 `process()` 拆成 13 个 pipe + 类型化上下文 + `requires/provides` 启动校验；502 单测（+13，无既有用例改动）、两条冒烟数值与重构前逐位一致 |
 | 2026-10-26 | 素材库管理落地（D039）：`MediaModule` 提升 + 带 owner 的仓储方法 + 列表/删除/取文件三个接口 + 素材页；489 单测、http-smoke 52 项、真浏览器验证缩略图与删除交互 |
 | 2026-10-26 | 前端工程落地（D038）：`web/`（Vue3 + Vite + Element Plus）五页 + 主服务同源托管 SPA + 冒烟补 6 项托管断言；479 单测、http-smoke 48 项、真浏览器验证通过 |
 | 2026-10-25 | 双阶段生成落地（D036）+ M3 收尾：think→导演指令→外显、独白落库不回灌、emotion_shift 推动 mood；452 单测 / smoke 10 项 / http-smoke 32 项全过；合并 main 打标签 `m3-persona` |

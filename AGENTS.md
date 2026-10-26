@@ -113,14 +113,20 @@ pnpm web:build        # 产物能出来（挂载失败只有真浏览器能看�
     换模型 Provider = **只改 `credentialId` / `modelMain`，人格与记忆零迁移**。
     `Persona` / `SelfState` / `MemoryItem` 里出现 provider / credential / model 字段，一律算错。
 
-11. **出站形态由代码决定，模型只产出"说什么"。** 引用哪条、要不要引用、拆不拆条、延迟多久、
+11. **业务逻辑写进 pipe，不要写回 `PipelineService`。** 管道是 13 个 pipe
+    （`src/modules/pipeline/pipes/`），编排层只做"入队串行 / 跑链 / 兜底 / 清理"。
+    加一种人格行为 = 新建一个 pipe 文件 + 在 `pipes/index.ts` 的清单里插一行，
+    并如实填 `requires` / `provides`（`assertPipeGraph` 会在启动时校验）。
+    在 pipe 里 `try/catch` 兜底也算错：兜底是编排层的职责（D040）。
+
+12. **出站形态由代码决定，模型只产出"说什么"。** 引用哪条、要不要引用、拆不拆条、延迟多久、
     以及在故障时说不说兜底话术——全部在 `src/` 里判（D026/D028/D030）。
     **不要让模型输出 `quoteHint` / `split` / `delay` 这类结构化动作字段**：它拿不到 message id、
     看不到时序与人数，而且会被训练出来的"客服倾向"带偏，把人格抹平成客服。
 
 ---
 
-## 新会话最容易犯的 12 个错
+## 新会话最容易犯的 13 个错
 
 前人都踩过，别重复：
 
@@ -137,6 +143,7 @@ pnpm web:build        # 产物能出来（挂载失败只有真浏览器能看�
 | 9 | 所有失败都回同一句话术，或者反过来"欠费时每条消息都回一句" | 前者让 owner 分不清是欠费、Key 坏了还是我们的 bug；后者在群里是刷屏、在私聊是持续敷衍，比不说话更伤关系 | 按原因分槽位并**限频**：`faultToSlot` + `decideSpeak`（D028）。欠费也走话术，不做主动通知；用户配了 `null` 就必须静默 |
 | 10 | 给实例设了预算，但凭据里没填目录价 | 每次调用都记 0 分，**预算永远不触发**；用户以为设了限额，实际一次都没拦住 | 建 Key 时填 `catalogJson` 价格；Gateway 有 warn，看到就补（D029） |
 | 11 | 把 `web/dist` 或 `web/node_modules` 提交上去 | 产物是构建结果，冲突起来只能全量重编 | `.gitignore` 已覆盖；只提交源码 |
+| 13 | 把新逻辑直接塞进 `pipeline.service.ts`（那里只剩编排） | 706 行的巨石就是这么做出来的；顺序与依赖一旦藏在注释里就没人维护 | 新建 pipe，填 `requires`/`provides`，在 `pipes/index.ts` 插一行（D040） |
 | 12 | 为了让前端跨端口调用而打开 CORS + `SameSite=None` | 等于为开发方便削弱线上 cookie 策略（D005） | 开发期用 Vite 代理，生产期同源托管（D038） |
 ---
 

@@ -199,35 +199,58 @@ newjob/
 
 ## 5. 消息处理管道
 
-入站与出站都是一串 `IPipe`，按顺序执行，任何一环可以 `drop()` 终止。这是最重要的扩展点：加功能 = 加一个 Pipe，不改主流程。
+**已落地**（D040）：13 个 pipe 在 `src/modules/pipeline/pipes/`，顺序写在 `pipes/index.ts`
+一张平铺的清单里。加功能 = 新建一个 pipe 文件 + 在清单里插一行，不改编排。
 
 ```ts
-interface IPipe<I, O> {
-  name: string;
-  run(ctx: MsgContext, input: I): Promise<O | typeof DROP>;
+interface Pipe {
+  readonly name: string;
+  readonly requires: readonly (keyof PipelineContext)[];  // 要读的字段
+  readonly provides: readonly (keyof PipelineContext)[];  // 写完的字段
+  run(ctx: PipelineContext): Promise<void | Drop>;        // Drop = 到此为止
 }
 ```
 
-### 入站链
+`requires` / `provides` 不是装饰：`assertPipeGraph` 在**服务启动时**校验
+"用到的字段必须被前序 pipe 提供、同一字段不许两个 pipe 都写、名字不许重复"。
+把 `attention` 挪到 `generate` 后面，启动就报错，而不是等线上某条消息返回 `undefined`。
 
-| 顺序 | Pipe | 职责 | 失败策略 |
+### 入站链（实际顺序 = `pipes/index.ts`）
+
+| # | Pipe | 职责 | 结束时 |
 |---|---|---|---|
-| 1 | `normalize` | Adapter 原始事件 → `InboundMessage`（文本/图片/语音/引用统一） | 丢弃并记日志 |
-| 2 | `dedupe` | 事件去重、过滤自己发的消息、过滤系统消息 | 丢弃 |
-| 3 | `governance` | 实例开关、群黑白名单、静默时段、限流 | 丢弃 |
-| 4 | `context` | 载入会话、最近消息、记忆、当前状态 | 降级为空上下文 |
-| 5 | `attention` | **判断要不要回**（详见 6.2） | 只入库不说话 |
-| 6 | `think` | 生成内心独白（不进对话历史） | 跳过，直接生成 |
-| 7 | `generate` | 拼 prompt、调 LLM、流式收集 | 走兜底模型 → 兜底话术 |
-| 8 | `moderate` | 输出审核、命中处置、AI 标识 | 拦截并替换 |
-| 9 | `express` | 拆条、计算打字延迟、决定表情/引用 | 原样输出单条 |
+| ① | `persist-inbound` | 取处理时刻、upsert 会话、入站消息落库 | 抛错 → 兜底 |
+| ② | `load-context` | owner + 人设 + 配置（含会话开关） | 实例没了 → DROP |
+| ③ | `governance` | 人工接管 / 会话静默 → 只入库 | DROP（不写状态） |
+| ④ | `load-mind` | 状态衰减到 now、读关系 | 读失败 → 用默认值 |
+| ⑤ | `load-window` | 取窗口切片并 `buildWindow`（D031） | 空窗口 → DROP |
+| ⑥ | `attention` | **判断要不要回**（详见 6.2） | 不回 → 写状态/关系后 DROP |
+| ⑦ | `collect-media` | 入站图片 → 多模态段、素材清单（D033/D034） | 失败只丢这一张 |
+| ⑧ | `assemble-prompt` | 拼 system（D020）+ 消息数组，图片只挂当前这条 | — |
+| ⑨ | `think` | A 阶段内心独白（D036），产出导演指令 | 失败/关闭 → 退化为无独白 |
+| ⑩ | `generate` | B 阶段生成；带图时指定视觉模型且不参与预算降级 | 抛错 → 兜底话术 |
+| ⑪ | `decide-quote` | 引用决策（D030） | — |
+| ⑫ | `deliver` | 媒体意图 → TTS → 拆条/延迟/回 @ → 发送 + 落库（D033/D035） | 语音失败 → 降级为文字 |
+| ⑬ | `persist-interaction` | 花精力、`emotion_shift` 推动 mood、长亲密度 | 吞异常 |
 
-### 出站链
-
-`sanitize`（长度截断、去掉 Markdown 残留、链接白名单） → `rateLimit`（全局发送节流） → `send`（Adapter） → `persist`（落库 + 写记忆）
+**两种"不回"必须区分**：`DROP` 是"判定不该回"（安静结束），`throw` 是故障
+（交给 `PipelineService.handleFailure` 按 D028 分槽位说兜底话术，可能静默）。
+混成一种，要么欠费时每句都回"我有点累"，要么模型挂了却一声不吭。
 
 **为什么 attention 在 generate 之前**：这是省钱又拟人的关键。自用场景下 60%~80% 的群消息不该回，提前判掉既省 token 又避免"有问必答"。
 
+### 设计里还有、实现里还没有的三个 pipe
+
+`normalize`（协议事件 → `InboundMessage`，现由适配器包承担）、
+`dedupe`（事件去重，现依赖平台的 message id 唯一性）、
+`moderate`（输出审核，M6 的合规一起做）。
+写在这里是为了**别把"架构图画过"当成"已经做了"**。
+
+### 出站链
+
+出站目前是 `deliver` 一步完成（`express` + `send` + `persist` 合体）：
+拆条/延迟/回 @ 与发送、落库是同一件事的三段，分开反而要在两个 pipe 之间传半成品。
+等 M6 加入发送节流与合规审核时，再按"节流 → 审核 → 发送"拆成三步。
 ### 多模态的接缝（D033）
 
 多模态**不是新管道**，只是现有三段各加一次转译：
