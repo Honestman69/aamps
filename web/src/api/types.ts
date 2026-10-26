@@ -239,3 +239,41 @@ export type InstancePatch = Partial<{
   /** 接入配置增量（D041）：只放改过的键，没放 = 不改 */
   adapterConfig: AdapterConfigValues;
 }>;
+
+/** 管理端用户视图（D042）：只有身份与状态，没有任何密钥材料 */
+export type AdminUser = {
+  id: string;
+  username: string;
+  displayName: string | null;
+  role: 'superadmin' | 'user' | string;
+  status: 'active' | 'disabled' | string;
+  /** DEK 是否已初始化：false = 从没登录过（或密码被重置过） */
+  dekInitialized: boolean;
+  dekVersion: number;
+  lastLoginAt: string | null;
+  createdAt: string;
+  /** 是不是当前登录者自己（后端给的，避免前端拿 id 比来比去） */
+  isSelf?: boolean;
+};
+
+export type UserMutationResult = {
+  id: string;
+  username: string;
+  role: string;
+  status: string;
+  /** 改角色/停用时被踢下线的会话数 */
+  revokedSessions: number;
+};
+
+export type CreateUserInput = {
+  username: string;
+  displayName?: string | null;
+  password: string;
+  role?: 'user' | 'superadmin';
+};
+
+export type UpdateUserInput = Partial<{
+  displayName: string | null;
+  role: 'user' | 'superadmin';
+  status: 'active' | 'disabled';
+}>;

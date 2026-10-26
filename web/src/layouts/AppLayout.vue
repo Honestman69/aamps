@@ -73,6 +73,9 @@ async function lock(): Promise<void> {
       <nav class="nav">
         <router-link class="nav-item" :to="{ name: 'instances' }">实例</router-link>
         <router-link class="nav-item" :to="{ name: 'credentials' }">密钥</router-link>
+        <router-link v-if="auth.isSuperadmin" class="nav-item" :to="{ name: 'users' }">
+          用户
+        </router-link>
       </nav>
 
       <div class="side-foot">

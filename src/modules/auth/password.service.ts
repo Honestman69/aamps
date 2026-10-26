@@ -33,6 +33,18 @@ import { DEFAULT_UNLOCK_TTL_MS, RuntimeKeyStore } from './runtime-key-store';
 /** 密码最短长度。自用系统，但 12 位起步，省得后面改 */
 export const MIN_PASSWORD_LENGTH = 12;
 
+/**
+ * 密码强度：所有"设置密码"的入口（本人改密、管理员重置、建号）都走这一个函数。
+ *
+ * 为什么不在 zod 里做：规则会变（将来可能要求字符类别），而 zod schema 是"形态"，
+ * 强度是"业务"。写两处必然漂移 —— 到时会出现"建号能过、改密被拒"。
+ */
+export function assertPasswordPolicy(password: string): void {
+  if (typeof password !== 'string' || password.length < MIN_PASSWORD_LENGTH) {
+    throw new BadRequestError(`密码至少 ${MIN_PASSWORD_LENGTH} 位`);
+  }
+}
+
 export type PasswordDeps = {
   users: IUserAuthRepository;
   credentials: ICredentialAdminRepository;
@@ -80,7 +92,7 @@ export class PasswordService {
    */
   async changePassword(input: ChangePasswordInput): Promise<{ dekVersion: number }> {
     const { users, keyStore, audit } = this.deps;
-    this.assertPasswordPolicy(input.newPassword);
+    assertPasswordPolicy(input.newPassword);
 
     const record = await users.findAuthById(input.userId);
     if (!record || record.status !== 'active') {
@@ -152,7 +164,7 @@ export class PasswordService {
    */
   async resetPassword(input: ResetPasswordInput): Promise<ResetPasswordResult> {
     const { users, credentials, keyStore, audit } = this.deps;
-    this.assertPasswordPolicy(input.newPassword);
+    assertPasswordPolicy(input.newPassword);
 
     if (input.actorUserId === input.targetUserId) {
       // 本人改密必须走 changePassword。这里必须拒绝，否则又是一条"管理员读 Key"的合法通道
@@ -213,7 +225,7 @@ export class PasswordService {
     ip?: string | null;
   }): Promise<ResetPasswordResult & { matched: boolean }> {
     const { users, credentials, keyStore, audit } = this.deps;
-    this.assertPasswordPolicy(input.newPassword);
+    assertPasswordPolicy(input.newPassword);
 
     const target = await users.findForLogin(input.username);
     if (!target) {
@@ -256,9 +268,4 @@ export class PasswordService {
     return { matched: true, dekVersion: target.dekVersion + 1, disabledCredentials, clearedSessions };
   }
 
-  private assertPasswordPolicy(password: string): void {
-    if (typeof password !== 'string' || password.length < MIN_PASSWORD_LENGTH) {
-      throw new BadRequestError(`密码至少 ${MIN_PASSWORD_LENGTH} 位`);
-    }
-  }
 }

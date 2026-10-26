@@ -26,6 +26,13 @@ export const useAuthStore = defineStore('auth', () => {
   const offline = ref<string | null>(null);
 
   const isLoggedIn = computed(() => user.value !== null);
+  /**
+   * 是不是管理员。
+   *
+   * 注意它只影响**菜单与页面是否显示** —— 真正的权限在后端（每个管理接口都会校验），
+   * 前端这层只是少一次 403。把权限判断只写在前端，等于没有权限。
+   */
+  const isSuperadmin = computed(() => user.value?.role === 'superadmin');
 
   async function refresh(): Promise<void> {
     try {
@@ -78,6 +85,7 @@ export const useAuthStore = defineStore('auth', () => {
     checked,
     offline,
     isLoggedIn,
+    isSuperadmin,
     refresh,
     login,
     unlock,

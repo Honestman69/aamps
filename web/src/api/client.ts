@@ -15,6 +15,8 @@
 import type {
   AdapterConfigValues,
   AdapterManifest,
+  AdminUser,
+  CreateUserInput,
   Credential,
   Instance,
   InstancePatch,
@@ -23,6 +25,8 @@ import type {
   MediaAssetList,
   Persona,
   PersonaPatch,
+  UpdateUserInput,
+  UserMutationResult,
 } from './types';
 
 export class ApiError extends Error {
@@ -150,6 +154,25 @@ export const api = {
         'DELETE',
         `/api/instances/${encodeURIComponent(instanceId)}/assets/${encodeURIComponent(assetId)}`,
       ),
+  },
+
+  /**
+   * 管理端（仅 superadmin；普通账号调这些会拿到 403）。
+   *
+   * 用户管理只做"建号 / 改角色 / 启停 / 重置密码"，没有删除：
+   * 实例、人设、Key、素材都挂在这个人身上，删人会级联带走它们。
+   */
+  admin: {
+    users: (): Promise<AdminUser[]> => request('GET', '/api/admin/users'),
+    createUser: (input: CreateUserInput): Promise<UserMutationResult> =>
+      request('POST', '/api/admin/users', input),
+    updateUser: (id: string, patch: UpdateUserInput): Promise<UserMutationResult> =>
+      request('PATCH', `/api/admin/users/${encodeURIComponent(id)}`, patch),
+    resetPassword: (
+      id: string,
+      input: { newPassword: string; confirmUsername: string },
+    ): Promise<{ dekVersion: number; disabledCredentials: number; clearedSessions: number }> =>
+      request('POST', `/api/admin/users/${encodeURIComponent(id)}/reset-password`, input),
   },
 
   personas: {

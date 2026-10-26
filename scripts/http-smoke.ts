@@ -33,17 +33,24 @@ let cookie = '';
 
 type Res = { status: number; body: any; setCookie: string | null; raw: string };
 
-async function call(
+/**
+ * 发一次请求。**不碰全局 cookie**：`cookieValue` 由调用方给。
+ *
+ * 拆出这一层是为了验证"第二个账号"的场景：用另一个 cookie 登录普通用户、
+ * 拿他的身份去访问管理接口。如果只用全局 jar，登录会互相覆盖。
+ */
+async function request(
   method: string,
   path: string,
-  body?: unknown,
+  body: unknown,
+  cookieValue: string,
 ): Promise<Res> {
   const headers: Record<string, string> = {};
   if (body !== undefined) {
     headers['content-type'] = 'application/json';
   }
-  if (cookie) {
-    headers.cookie = cookie;
+  if (cookieValue) {
+    headers.cookie = cookieValue;
   }
   const response = await fetch(`${BASE}${path}`, {
     method,
@@ -52,11 +59,6 @@ async function call(
   });
   const raw = await response.text();
   const setCookie = response.headers.get('set-cookie');
-  if (setCookie) {
-    // 只取 name=value 部分
-    const first = setCookie.split(';')[0]!;
-    cookie = first.endsWith('=') ? '' : first;
-  }
   let parsed: any = null;
   try {
     parsed = raw ? JSON.parse(raw) : null;
@@ -68,6 +70,17 @@ async function call(
     `${method} ${path} 的响应里出现了密钥材料`,
   );
   return { status: response.status, body: parsed, setCookie, raw };
+}
+
+/** 主账号用：请求成功后把 Set-Cookie 收进全局 jar */
+async function call(method: string, path: string, body?: unknown): Promise<Res> {
+  const res = await request(method, path, body, cookie);
+  if (res.setCookie) {
+    // 只取 name=value 部分
+    const first = res.setCookie.split(';')[0]!;
+    cookie = first.endsWith('=') ? '' : first;
+  }
+  return res;
 }
 
 function step(name: string): void {
@@ -437,6 +450,99 @@ async function main(): Promise<void> {
   }
   const self = users.find((user) => user.username === ADMIN)!;
   assert.equal(self.dekInitialized, true);
+
+  // ── 用户管理：建号 / 角色 / 启停（D042） ──
+  const MEMBER = 'smoke_member';
+  const MEMBER_PASSWORD = 'member-pass-8f3a2c';
+
+  step('用户：建号 → 201，且响应里没有密码哈希 / 盐 / 密文');
+  res = await call('POST', '/api/admin/users', {
+    username: MEMBER,
+    displayName: '冒烟成员',
+    password: MEMBER_PASSWORD,
+  });
+  assert.equal(res.status, 201, JSON.stringify(res.body));
+  const memberId = String(res.body.id);
+  assert.equal(res.body.role, 'user');
+  assert.equal(res.body.status, 'active');
+  for (const forbidden of ['passwordHash', 'keySalt', 'wrappedDek']) {
+    assert.ok(!(forbidden in res.body), `建号响应泄漏字段 ${forbidden}`);
+  }
+
+  step('用户：用户名重复 → 409（不是 400，这是状态冲突）');
+  res = await call('POST', '/api/admin/users', {
+    username: MEMBER,
+    password: MEMBER_PASSWORD,
+  });
+  assert.equal(res.status, 409, JSON.stringify(res.body));
+
+  step('用户：密码太短 → 400（与改密共用同一条强度规则）');
+  res = await call('POST', '/api/admin/users', { username: 'smoke_short_pw', password: 'short' });
+  assert.equal(res.status, 400, JSON.stringify(res.body));
+
+  step('用户：新号可以直接登录，首次登录才生成 DEK');
+  const memberLogin = await request(
+    'POST',
+    '/api/auth/login',
+    { username: MEMBER, password: MEMBER_PASSWORD },
+    '',
+  );
+  assert.equal(memberLogin.status, 200, JSON.stringify(memberLogin.body));
+  assert.equal(memberLogin.body.unlocked, true);
+  assert.equal(memberLogin.body.user.role, 'user');
+  const memberCookie = (memberLogin.setCookie ?? '').split(';')[0] ?? '';
+
+  res = await call('GET', '/api/admin/users');
+  const memberRow = (res.body as Array<Record<string, unknown>>).find(
+    (it) => it.username === MEMBER,
+  )!;
+  assert.equal(memberRow.dekInitialized, true, '首次登录后 DEK 应已初始化');
+
+  step('用户：普通账号访问管理接口 → 403（角色不是装饰）');
+  res = await request('GET', '/api/admin/users', undefined, memberCookie);
+  assert.equal(res.status, 403);
+
+  step('用户：普通账号照常能用业务接口（他就是一个用户）');
+  res = await request('GET', '/api/instances', undefined, memberCookie);
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body, [], '新账号看不到别人的实例');
+
+  step('用户：停用 → 200，已登录会话立即失效');
+  res = await call('PATCH', `/api/admin/users/${memberId}`, { status: 'disabled' });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.ok(Number(res.body.revokedSessions) >= 1, '停用必须撤销会话');
+  res = await request('GET', '/api/auth/me', undefined, memberCookie);
+  assert.equal(res.status, 401, '旧 cookie 必须立刻失效');
+
+  step('用户：停用后无法登录 → 401，且不区分"已停用"与"密码错"');
+  res = await request(
+    'POST',
+    '/api/auth/login',
+    { username: MEMBER, password: MEMBER_PASSWORD },
+    '',
+  );
+  assert.equal(res.status, 401);
+
+  step('用户：重新启用 → 能登录且 Key 不受影响（停用不是销毁）');
+  res = await call('PATCH', `/api/admin/users/${memberId}`, { status: 'active' });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  res = await request(
+    'POST',
+    '/api/auth/login',
+    { username: MEMBER, password: MEMBER_PASSWORD },
+    '',
+  );
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(res.body.unlocked, true);
+
+  step('用户：不能停用自己 → 403（没有第二个管理员时无法恢复）');
+  res = await call('PATCH', `/api/admin/users/${String(self.id)}`, { status: 'disabled' });
+  assert.equal(res.status, 403, JSON.stringify(res.body));
+
+  step('用户：改显示名 → 200，does not 踢会话（revokedSessions=0）');
+  res = await call('PATCH', `/api/admin/users/${memberId}`, { displayName: '改过的显示名' });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(res.body.revokedSessions, 0);
 
   step('重置自己 → 403（必须走改密路径）');
   res = await call('POST', `/api/admin/users/${String(self.id)}/reset-password`, {

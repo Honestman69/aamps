@@ -56,6 +56,13 @@ export const router = createRouter({
           component: () => import('@/views/CredentialsView.vue'),
           meta: { title: '密钥' },
         },
+        {
+          path: 'users',
+          name: 'users',
+          component: () => import('@/views/UsersView.vue'),
+          // 只有 superadmin 能进。后端每个接口也会再校验一次（界面只是少一次 403）
+          meta: { title: '用户', adminOnly: true },
+        },
       ],
     },
     { path: '/:pathMatch(.*)*', redirect: { name: 'instances' } },
@@ -73,6 +80,10 @@ router.beforeEach(async (to) => {
   }
   if (!auth.isLoggedIn) {
     return { name: 'login', query: { next: to.fullPath } };
+  }
+  if (to.meta.adminOnly && !auth.isSuperadmin) {
+    // 普通用户手敲 URL：安静地送回列表，不弹错（弹错等于告诉他"这里有个管理页"）
+    return { name: 'instances' };
   }
   return true;
 });

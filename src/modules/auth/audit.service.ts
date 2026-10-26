@@ -43,6 +43,8 @@ export const AuditAction = {
   UserLogin: 'user.login',
   UserLoginFailed: 'user.login_failed',
   UserCreate: 'user.create',
+  /** 改显示名 / 角色 / 启停。只记改前改后两个状态，不记密码材料 */
+  UserUpdate: 'user.update',
   UserPasswordChange: 'user.password_change',
   UserPasswordReset: 'user.password_reset',
   UserPasswordResetSelf: 'user.password_reset_self',
