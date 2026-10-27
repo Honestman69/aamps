@@ -6,15 +6,21 @@
 > 仓库里没有 `.env`、没有数据库，直接 `pnpm dev` 会失败。
 
 **最后更新**：2026-10-27
-**当前阶段**：**M4 收尾完成** —— 人设 API（24）、前端工程与静态托管（25）、素材库（26）、
+**当前阶段**：**M4 完成并已合并** —— 人设 API（24）、前端工程与静态托管（25）、素材库（26）、
 管道拆 13 个 pipe（27）、接入配置清单驱动（28，D041）、用户管理（29，D042）、
-会话查看（30，D043）、**审计页（31，D044）** 已完成。后台已有九页，M3 已打标签 `m3-persona`。
+会话查看（30，D043）、审计页（31，D044）。后台九页可用。
+`feat/m4-admin` 已 `--no-ff` 合入 `main`（`bf23e4f`）并打标签 `m4-admin`。
 
-**下一步（默认走这条）**：**M4 合并** —— `feat/m4-admin` → `main`（`--no-ff`）并打标签 `m4-admin`，
-然后进 M5 记忆与反思（管道插槽已就位：`07a-load-memory` / `08a-inject-memory` / `13a-write-memory`）。
+**下一步（默认走这条）**：**M5-1 记忆与反思**。起点是空目录 `src/modules/memory/`
+（现在只有 `.gitkeep`），管道里要新增三个 pipe —— 插入点按现有编号命名：
+`05a-load-memory`（在 `load-window` 之后、`attention` 之前读回记忆）→
+`08a-inject-memory`（在 `assemble-prompt` 里把记忆拼进 system prompt）→
+`13a-write-memory`（`persist-interaction` 之后落库）。**文件与表都还不存在**，这三个名字只是约定。
+动手前先读 D023（记忆挂实例、不挂用户/Provider）与 D031（会话窗口的裁剪口径），
+别把窗口和记忆混成一个东西：窗口是"这次对话的原始消息"，记忆是"跨天仍然成立的事"。
 
-> M4 清单里还剩「规则/约束词配置」未做，它要先把红线存储的 API 形状定下来（见 M4 小节），
-> 不阻塞合并 —— 合并的是"后台能用"，不是"后台完美"。
+> M4 清单里还剩「规则/约束词配置」未做 —— 它要先把红线存储的 API 形状定下来（见 M4 小节），
+> 不影响 M5 开工。
 
 > **多模态要配三样才生效**（都在实例上）：`modelVision`（看图）、`ttsCredentialId` + `ttsModel`（发语音）。
 > 不配就是"能力不存在"——图片只留「[图片]」占位，prompt 里也不提 `[voice]`。
@@ -45,25 +51,25 @@ persist-inbound → load-context → governance → load-mind → load-window
 - **里程碑标签**（回档锚点，见 `AGENTS.md`「分支与合并纪律」）：
   - `m1-skeleton` —— M1 骨架合并点（`9c933b9`，当时 token 鉴权还是坏的）
   - `m1-verified` —— M1 真机验收通过点（反向 WS + token 401 + pong，见「第 7 步」）
+  - `m3-persona` —— M3 拟人完成点（状态机 / 发言决策 / 多模态 / 素材库 / 表达层 / 独白）
+  - `m4-admin` —— M4 后台完成点（`bf23e4f`：人设 API、后台九页、管道拆 13 个 pipe、清单驱动）
   - 合并一律 `git merge --no-ff`，分支保留不删；回档首选 `git revert -m 1 <merge>`
-- 网络：本机 `github.com:22` 会被重置，`~/.ssh/config` 已配置走 `ssh.github.com:443` + `Compression yes`。
-  直接 `git push` 即可；若出现 `Connection reset`，先重试一次，通常是网络波动。
+- 网络：remote 是 **HTTPS**（`https://github.com/Honestman69/aamps.git`），本机没有 SSH key。
+  推送时**按用户当次给的代理端口显式指定**：
+  `https_proxy=http://127.0.0.1:7890 git push origin main --follow-tags`。
+  **端口不固定**（见过 7890 可用、6936 返回 502），环境变量里的 `https_proxy` 可能指向坏口；
+  推之前先 `curl -x http://127.0.0.1:<port> https://github.com/` 探一下，通了再推。
+  **不要把代理写进 `git config`**（端口会变）。
 - 包管理器：本机原本没有 pnpm，已用 `corepack enable pnpm`（9.15.0）装好；依赖已 `pnpm install`。
   `corepack pnpm install` 首次约 9 分钟，别以为卡死了。
 - 构建：`pnpm build` 先构建 `packages/*`（契约包 `main` 指向 `dist/index.js`）再编译主服务。
   只跑 `tsc` 不构建包，运行时会 `ERR_MODULE_NOT_FOUND`。
-- **推送状态**：2026-10-24 已推到 `20d0828`（D028 合并提交）。远端现有：
-  `main` + 各阶段的 `feat/*` 分支（每个结构改造一条，合并后可留作追溯），
-  `m1-skeleton`（`9c933b9`）与 `m1-verified`（`57d37ca`）两个标签。
-  GitHub 凭据已配置在 Git Credential Manager；之前的阻塞是缺凭据（非网络），见提交 `1c8667c`。
-  **push 失败的真正原因（2026-10-24 排查过）**：git 走 SSH，**规则 / PAC 模式的代理管不到 SSH**，
-  只有「全局模式」或 TUN 才会接管。症状是 `Connection reset by 20.205.243.160 port 443`，
-  而同一时刻 `curl https://api.github.com` 可能仍是 200——别被"网是通的"误导。
-  处理办法：把代理切全局，一次就能推上去。**不要**去试 `https_proxy` 的各种组合
-  （HTTP / SOCKS5 / 换 OpenSSL 后端都试过，全无效，纯属浪费）。
-  另有一个坑：全局配置里有 `url.https://ghfast.top/https://github.com/.insteadOf`，
-  会把所有 HTTPS 地址重写成镜像，而镜像只能拉不能推。真要走 HTTPS 就写
-  `https://github.com:443/owner/repo`（带默认端口不匹配该前缀）。平时用 SSH 即可。
+- **推送状态**：2026-10-27 已推到 `bf23e4f`（M4 合并提交）+ 标签 `m4-admin`。
+  远端现有 `main` + 各阶段的 `feat/*` 分支（每个里程碑一条，合并后保留作追溯）+
+  四个标签（`m1-skeleton` / `m1-verified` / `m3-persona` / `m4-admin`）。
+  **成败以远端 ref 为准**（`git ls-remote origin refs/heads/main refs/tags/<tag>`），
+  不要用本地 remote-tracking 反推——曾经出现过"本地以为推上去了、实际是用户用桌面端手动推的"这种误判。
+  这台机器上会有多个代理进程并存，端口对不上就是 502/超时，不是"网坏了"。
   若出现 `could not read Username`，先查 `git credential fill` 能不能返回用户名，不要先去折腾网络。
 - **又一个 push 坑（2026-10-24 晚，HTTPS remote）**：报 `CONNECT tunnel failed, response 502`，
   但同一时刻 `curl -x $https_proxy https://github.com/...info/refs?service=git-upload-pack` 返回 **200**。
@@ -1275,6 +1281,7 @@ POST   /api/personas/:id/activate
 | 2026-10-25 | 表达层落地（D035）：拆条（不丢内容）/ 打字延迟（只乘不减、12s 上限）/ 回 @ / 同会话串行 / 消息级种子；文本、图片、语音分开发；433 单测 |
 | 2026-10-26 | 人设 API 落地（D037）：生命周期（草稿/发布/归档/启用）+ 严格校验 + 审计；479 单测、http-smoke 42 项 |
 | 2026-10-27 | 审计页落地（D044）：只读列表 + 改前改后并排 + id→人名/实例名对照 + 哈希链校验与断点定位（「只看这条」）；http-smoke 78 项（补 `limit` 边界契约）、真浏览器 14 项 + 断链路径实测 |
+| 2026-10-27 | **M4 合并**：`feat/m4-admin` `--no-ff` 合入 `main`（`bf23e4f`）+ 标签 `m4-admin`；分支与标签均已推送到远端（`git ls-remote` 复核） |
 | 2026-10-26 | 会话查看落地（D043）：两个只读接口（owner 连表过滤）+ 实时条数 + id 游标分页 + 不成媒体 URL + 前端两栏记录页；567 单测、http-smoke 76 项、pipeline-smoke 11 项、真浏览器验证 |
 | 2026-10-26 | 用户管理落地（D042）：建号（只写盐不生成 DEK）/ 角色 / 启停 + 会话与内存 DEK 撤销 + 禁止停用自己；前端用户页与导航守卫；555 单测、http-smoke 69 项、真浏览器验证 |
 | 2026-10-26 | 接入配置清单驱动（D041）：`mapsTo` + `requiredWhen` + 注册时校验清单自洽 + `adapterConfig` 翻译层 + 前端共用表单组件；顺带修掉"设置页改了东西保存按钮仍灰着"的响应式 bug；544 单测、http-smoke 58 项、真浏览器验证通过 |
