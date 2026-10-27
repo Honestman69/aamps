@@ -62,6 +62,13 @@ export type PromptContext = {
    * 记忆是它后来经历的；混在一起会让"后来知道的事"变成"一直如此"。
    */
   memory?: { facts: string[]; summaries: string[] } | null;
+  /**
+   * 演化层（M5-2）：它自己变成了什么样。
+   *
+   * `narrative` 是第一人称自述（反思写的），`lines` 是由特质数值翻译出来的几句
+   * （只在明显偏离中间值时才有）。两者都为空 → 整段跳过，直接用种子。
+   */
+  self?: { narrative: string; lines: string[] } | null;
 };
 
 /** 拼装产物：system 消息 + few-shot 对话（examples 作为 user/assistant 成对塞进 messages 前） */
@@ -317,6 +324,32 @@ function buildMemorySection(memory: PromptContext['memory']): string {
 }
 
 /**
+ * 演化层（M5-2 / D020 第 4 条）：现在的你。
+ *
+ * 夹在"出生设定"与"对这个人的印象"之间，顺序不能挪：
+ * 种子说"你出生时是谁"，这一段说"后来你变成了什么样"，记忆说"你认识了谁"。
+ * 把演化放到种子前面，模型会把它当成出厂设定，反而更像在演人设。
+ *
+ * 空就整段跳过 —— 没演化过的人不该有一段"现在的你：（空）"。
+ */
+function buildSelfSection(self: PromptContext['self']): string {
+  if (!self) {
+    return '';
+  }
+  const narrative = (self.narrative ?? '').trim();
+  const lines = (self.lines ?? []).map((line) => line.trim()).filter(Boolean);
+  if (!narrative && lines.length === 0) {
+    return '';
+  }
+  const parts: string[] = [];
+  if (narrative) {
+    parts.push(narrative);
+  }
+  parts.push(...lines);
+  return parts.join('\n');
+}
+
+/**
  * 拼装 system prompt。
  *
  * 返回值里的 `examples` 是 few-shot，调用方要把它**插到对话历史之前**，
@@ -334,7 +367,11 @@ export function assemblePrompt(seed: PersonaSeed, context: PromptContext): Assem
     sections.push(seedSection);
   }
 
-  // ③ 现在的你（SelfState 自述）：M2 无演化层，跳过
+  // ③ 现在的你（SelfState 自述，M5-2）：没演化过就跳过
+  const selfSection = buildSelfSection(context.self);
+  if (selfSection) {
+    sections.push(selfSection);
+  }
 
   // ④ 对这个人的印象：先"对方是谁"，再"你记得他什么"（D045）
   if (context.peerName) {

@@ -23,6 +23,8 @@ import { PLATFORM_CAPABILITIES } from '@newjob/contracts';
 import type { InboundMessage, OutboundAction } from '@newjob/contracts';
 
 import { encryptWithDek, randomDek } from '../src/common/crypto';
+import { AuditService } from '../src/modules/auth/audit.service';
+import { PrismaAuditLogRepository } from '../src/modules/auth/repositories/prisma-auth.repositories';
 import { RuntimeKeyStore } from '../src/modules/auth/runtime-key-store';
 import { GatewayService } from '../src/modules/model/gateway/gateway.service';
 import { MediaAssetService } from '../src/modules/media/assets/asset.service';
@@ -33,6 +35,8 @@ import { TtsService } from '../src/modules/media/tts';
 import { PrismaMindStateRepository } from '../src/modules/mind/state/repositories/prisma-mind-state.repository';
 import { MemoryService, type ReflectionModel } from '../src/modules/memory/memory.service';
 import { PrismaMemoryRepository } from '../src/modules/memory/repositories/prisma-memory.repository';
+import { PrismaSelfStateRepository } from '../src/modules/persona/self/repositories/prisma-self-state.repository';
+import { SelfStateService } from '../src/modules/persona/self/self-state.service';
 import { PrismaPipelineRepository } from '../src/modules/pipeline/repositories/prisma-pipeline.repository';
 import { PipelineService } from '../src/modules/pipeline/pipeline.service';
 import { PrismaSessionAdminRepository } from '../src/modules/session/repositories/prisma-session-admin.repository';
@@ -66,6 +70,8 @@ const THINK_JSON = JSON.stringify({
 const MEMORY_JSON = JSON.stringify({
   summary: '他聊了聊最近的加班和家里的猫。',
   facts: [{ content: '他养了一只叫豆豆的猫', kind: 'fact', importance: 5 }],
+  // 人格演化（M5-2）：只动一个维度 0.02，且在单次上限 0.03 之内
+  self: { traits: { edge: 0.02 }, narrative: '我说话比以前直接了一点。' },
 });
 
 /** 记录每次调用的 purpose：验证双阶段（think → chat） */
@@ -235,11 +241,22 @@ async function main(): Promise<void> {
   // 记忆（M5-1）：主流程用默认阈值（30 条），保证 ①–⑪ 的断言不受反思干扰；
   // ⑫ 单独造一个"攒 2 条就反思"的实例，用真实库跑一遍写入。
   const memoryRepo = new PrismaMemoryRepository(prisma);
-  const memory = new MemoryService(memoryRepo, gatewayStub as unknown as ReflectionModel);
+  // 人格演化（M5-2）：真实仓储 + 真实审计，验证"提案过闸门后落库并留痕"
+  const selfService = new SelfStateService({
+    repo: new PrismaSelfStateRepository(prisma),
+    audit: new AuditService(new PrismaAuditLogRepository(prisma)),
+  });
+  const memory = new MemoryService(
+    memoryRepo,
+    gatewayStub as unknown as ReflectionModel,
+    undefined,
+    selfService,
+  );
   const memoryAggressive = new MemoryService(
     memoryRepo,
     gatewayStub as unknown as ReflectionModel,
     { reflectEvery: 2, transcriptLimit: 40, factLimit: 6, summaryLimit: 3 },
+    selfService,
   );
 
   const baseDeps = {
@@ -251,6 +268,7 @@ async function main(): Promise<void> {
     tts,
     assets: assetService,
     memory,
+    self: selfService,
     config,
     gateway: gatewayStub,
     clock: () => new Date(),
@@ -576,6 +594,10 @@ async function main(): Promise<void> {
     promptWithMemory.includes('不用复述'),
     '应带上"别汇报记忆"的约束（否则每轮都会复读一遍）',
   );
+  assert.ok(
+    promptWithMemory.includes('我说话比以前直接了一点。'),
+    '演化自述应进 system（"现在的你"那段）',
+  );
 
   // 去重：同一批内容再反思一次，不应该再存一遍
   const countBefore = memoryRows.length;
@@ -597,6 +619,61 @@ async function main(): Promise<void> {
   process.stdout.write(
     `⑫ 记忆：反思写出 ${episodic.length} 条摘要 + ${semantic.length} 条事实，` +
       `下一轮 prompt 已带上，重复内容未重存\n`,
+  );
+
+  // ⑬ 人格演化（M5-2 / D046）：提案过闸门 → 落库 + 版本 + 审计；回滚不删历史
+  const selfRow = await prisma.selfState.findUnique({ where: { instanceId: instance.id } });
+  assert.ok(selfRow, '演化后应有 SelfState 行');
+  assert.equal(selfRow.version, 1, '第一次演化是 v1（v0 是基线，不是演化结果）');
+  assert.equal(selfRow.narrative, '我说话比以前直接了一点。');
+
+  const traits = JSON.parse(selfRow.traitsJson) as Record<string, number>;
+  assert.ok(
+    Math.abs((traits.edge ?? 0) - 0.52) < 1e-6,
+    `edge 应从 0.5 涨到 0.52（单次上限 0.03），实际 ${traits.edge}`,
+  );
+  // 没提议的维度不动
+  assert.equal(traits.warm, 0.5, '没提到的维度不该被顺手改掉');
+
+  const versionsBefore = await prisma.selfStateVersion.findMany({
+    where: { instanceId: instance.id },
+    orderBy: { version: 'asc' },
+  });
+  assert.deepEqual(
+    versionsBefore.map((row) => [row.version, row.reason]),
+    [
+      [0, 'create'],
+      [1, 'reflection'],
+    ],
+    '应是 v0 基线 + v1 演化',
+  );
+  assert.ok(versionsBefore[1]?.sourceMemoryIds, '演化必须能溯源到记忆 id');
+
+  const evolveAudit = await prisma.auditLog.findFirst({
+    where: { action: 'self.evolve', target: instance.id },
+    orderBy: { createdAt: 'desc' },
+  });
+  assert.ok(evolveAudit, '演化应留审计');
+  assert.ok(!(evolveAudit.afterJson ?? '').includes('我说话比以前直接了一点'), '审计不记自述正文');
+
+  // 回滚到 v0：追加 v2，历史不删
+  const rolled = await selfService.rollback(
+    { userId: user.id, tenantId: user.tenantId, role: 'user' },
+    instance.id,
+    0,
+  );
+  assert.equal(rolled.createdVersion, 2, '回滚产生新版本 v2');
+  assert.equal(rolled.state.narrative, '', '回滚后自述回到基线（空）');
+  assert.equal(rolled.state.traits.edge, 0.5, '回滚后特质回到中性值');
+
+  const versionsAfter = await prisma.selfStateVersion.findMany({
+    where: { instanceId: instance.id },
+    orderBy: { version: 'asc' },
+  });
+  assert.equal(versionsAfter.length, 3, 'v0/v1/v2 都还在（回滚不删历史）');
+  assert.equal(versionsAfter.at(-1)?.reason, 'rollback');
+  process.stdout.write(
+    `⑬ 人格演化：edge 0.50 → 0.52（v1）、审计已留痕、回滚到 v0 后 v2 生效且 v1 仍在\n`,
   );
 
   process.stdout.write('\nPIPELINE SMOKE PASSED\n');

@@ -136,22 +136,38 @@ export class PrismaMemoryRepository implements IMemoryRepository {
     return new Set(rows.map((row) => row.content));
   }
 
-  async addMany(drafts: MemoryDraft[]): Promise<number> {
+  async addMany(drafts: MemoryDraft[]): Promise<MemoryRecord[]> {
     if (drafts.length === 0) {
-      return 0;
+      return [];
     }
-    const result = await this.prisma.memoryItem.createMany({
-      data: drafts.map((draft) => ({
-        instanceId: draft.instanceId,
-        sessionId: draft.sessionId,
-        subjectId: draft.subjectId,
-        scope: draft.scope,
-        kind: draft.kind,
-        content: draft.content,
-        importance: draft.importance,
-        sourceMsgIds: draft.sourceMsgIds,
-      })),
-    });
-    return result.count;
+    // 一条一条 create（而不是 createMany）：需要拿回 id，供人格演化溯源。
+    // 一批最多 5 条（1 条摘要 + 4 条事实），多几次往返换"能说清它是从哪学来的"值得。
+    const rows: MemoryRecord[] = [];
+    for (const draft of drafts) {
+      const row = await this.prisma.memoryItem.create({
+        data: {
+          instanceId: draft.instanceId,
+          sessionId: draft.sessionId,
+          subjectId: draft.subjectId,
+          scope: draft.scope,
+          kind: draft.kind,
+          content: draft.content,
+          importance: draft.importance,
+          sourceMsgIds: draft.sourceMsgIds,
+        },
+        select: {
+          id: true,
+          scope: true,
+          kind: true,
+          content: true,
+          importance: true,
+          subjectId: true,
+          sessionId: true,
+          createdAt: true,
+        },
+      });
+      rows.push(toRecord(row));
+    }
+    return rows;
   }
 }

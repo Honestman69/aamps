@@ -61,12 +61,22 @@ class FakeRepo implements IMemoryRepository {
     return new Set(contents.filter((content) => this.existing.has(content)));
   }
 
-  async addMany(drafts: MemoryDraft[]): Promise<number> {
+  async addMany(drafts: MemoryDraft[]): Promise<MemoryRecord[]> {
     if (this.failAdd) {
       throw new Error('insert failed');
     }
+    const rows = drafts.map((draft, index) => ({
+      id: `mem-${this.added.length + index + 1}`,
+      scope: draft.scope,
+      kind: draft.kind,
+      content: draft.content,
+      importance: draft.importance,
+      subjectId: draft.subjectId,
+      sessionId: draft.sessionId,
+      createdAt: NOW,
+    }));
     this.added.push(...drafts);
-    return drafts.length;
+    return rows;
   }
 }
 
@@ -90,8 +100,31 @@ class FakeModel implements ReflectionModel {
   }
 }
 
-function makeService(repo: FakeRepo, model: FakeModel, options = DEFAULT_MEMORY_OPTIONS) {
-  return new MemoryService(repo, model, options);
+class FakeEvolution {
+  calls: Array<{ instanceId: string; proposal: unknown; memoryIds: string[] }> = [];
+  applied = true;
+
+  async evolve(input: {
+    instanceId: string;
+    proposal: unknown;
+    memoryIds: readonly string[];
+  }): Promise<{ applied: boolean; reason: string }> {
+    this.calls.push({
+      instanceId: input.instanceId,
+      proposal: input.proposal,
+      memoryIds: [...input.memoryIds],
+    });
+    return { applied: this.applied, reason: this.applied ? 'applied' : 'no-change' };
+  }
+}
+
+function makeService(
+  repo: FakeRepo,
+  model: FakeModel,
+  options = DEFAULT_MEMORY_OPTIONS,
+  evolution?: FakeEvolution,
+) {
+  return new MemoryService(repo, model, options, evolution);
 }
 
 const INPUT = {
@@ -313,5 +346,62 @@ describe('反思原料（buildTranscript）', () => {
     // 保留的是**连续的一段尾部**：最老的那条一定是某个 第N句（N > 0），而不是东拼西凑
     expect(lines.at(-1)).toContain('第39句');
     expect(lines[0]).toMatch(/^阿明：第([1-9]\d?)句/);
+  });
+});
+
+describe('反思与人格演化的衔接（M5-2 / D046）', () => {
+  it('把这次真正写入的记忆 id 递给演化层（溯源，不是让模型报 id）', async () => {
+    const repo = new FakeRepo();
+    const model = new FakeModel();
+    fillMessages(repo, DEFAULT_MEMORY_OPTIONS.reflectEvery);
+    model.reply = JSON.stringify({
+      summary: '聊了聊他最近的压力',
+      facts: [{ content: '他在赶一个上线' }],
+      self: { traits: { edge: 0.02 } },
+    });
+    const evolution = new FakeEvolution();
+
+    const outcome = await makeService(repo, model, DEFAULT_MEMORY_OPTIONS, evolution).maybeReflect(INPUT);
+
+    expect(outcome.written).toBe(2);
+    expect(outcome.evolution).toEqual({ applied: true, reason: 'applied' });
+    expect(evolution.calls).toHaveLength(1);
+    // 两条记忆都写了 → 两个 id 都递过去
+    expect(evolution.calls[0]?.memoryIds).toEqual(['mem-1', 'mem-2']);
+    expect(evolution.calls[0]?.proposal).toEqual({ traits: { edge: 0.02 } });
+  });
+
+  it('全被去重掉（没写新记忆）→ 完全不碰演化层', async () => {
+    const repo = new FakeRepo();
+    const model = new FakeModel();
+    fillMessages(repo, DEFAULT_MEMORY_OPTIONS.reflectEvery);
+    model.reply = JSON.stringify({
+      summary: '同一件事',
+      facts: [{ content: '同一件事' }],
+      self: { traits: { edge: 0.02 } },
+    });
+    repo.existing.add('同一件事');
+    const evolution = new FakeEvolution();
+
+    const outcome = await makeService(repo, model, DEFAULT_MEMORY_OPTIONS, evolution).maybeReflect(INPUT);
+
+    expect(outcome.reason).toBe('nothing-to-remember');
+    expect(evolution.calls).toHaveLength(0);
+  });
+
+  it('演化层抛错：记忆照写，返回结果里标 failed', async () => {
+    const repo = new FakeRepo();
+    const model = new FakeModel();
+    fillMessages(repo, DEFAULT_MEMORY_OPTIONS.reflectEvery);
+    model.reply = JSON.stringify({ summary: '聊了聊', facts: [{ content: '他在做后端' }] });
+    const evolution = new FakeEvolution();
+    evolution.evolve = async () => {
+      throw new Error('gate exploded');
+    };
+
+    const outcome = await makeService(repo, model, DEFAULT_MEMORY_OPTIONS, evolution).maybeReflect(INPUT);
+
+    expect(outcome.written).toBe(2);
+    expect(outcome.evolution).toEqual({ applied: false, reason: 'failed' });
   });
 });

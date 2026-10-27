@@ -8,6 +8,7 @@ import type { MediaAssetRecord } from '@/modules/media/assets/ports';
 import type { IImageFetcher, InboundImage } from '@/modules/media/fetcher';
 import type { TtsResult, TtsService } from '@/modules/media/tts';
 import type { PromptMemory } from '@/modules/memory/types';
+import type { Traits } from '@/modules/persona/self/traits';
 import type { MindState } from '@/modules/mind/state/mind-state';
 import type { IMindStateRepository } from '@/modules/mind/state/ports';
 import type { RelationshipSnapshot } from '@/modules/mind/state/relationship';
@@ -210,6 +211,29 @@ class FakeMemory {
   }
 }
 
+class FakeSelf {
+  /** 默认"还没演化过"：空自述 + 中性特质 */
+  loaded: { narrative: string; traits: Traits; lines: string[] } = {
+    narrative: '',
+    traits: { warm: 0.5, edge: 0.5, playful: 0.5, talkative: 0.5 },
+    lines: [],
+  };
+  calls: string[] = [];
+  throwOnLoad = false;
+
+  async describeForPrompt(instanceId: string): Promise<{
+    narrative: string;
+    traits: Traits;
+    lines: string[];
+  }> {
+    this.calls.push(instanceId);
+    if (this.throwOnLoad) {
+      throw new Error('self db down');
+    }
+    return this.loaded;
+  }
+}
+
 class FakeWindowRepo implements ISessionWindowRepository {
   slice: WindowSlice | null = null;
   /** 按 target 分片覆盖：并发/串行场景里两条消息的 target 不同 */
@@ -358,6 +382,7 @@ type Harness = {
   tts: FakeTts;
   assets: FakeAssetService;
   memory: FakeMemory;
+  self: FakeSelf;
   sent: OutboundAction[];
   /** 表达层请求过的延迟（毫秒），按调用顺序 */
   sleeps: number[];
@@ -382,6 +407,7 @@ function makeHarness(
   const tts = new FakeTts();
   const assets = new FakeAssetService();
   const memory = new FakeMemory();
+  const self = new FakeSelf();
   const sent: OutboundAction[] = [];
   const sleeps: number[] = [];
   const gateway = overrides.gateway ?? gatewayStub({});
@@ -410,6 +436,7 @@ function makeHarness(
     tts: tts as unknown as TtsService,
     assets: assets as unknown as MediaAssetService,
     memory,
+    self,
     config,
     gateway: gateway as unknown as GatewayService,
     clock: () => new Date('2026-10-24T12:00:00'),
@@ -434,6 +461,7 @@ function makeHarness(
     tts,
     assets,
     memory,
+    self,
     sent,
     sleeps,
     service,
@@ -1134,5 +1162,55 @@ describe('管道里的记忆（M5-1 / D045）', () => {
     await h.service.handle(msg, h.send, { capabilities: CAPS });
 
     expect(h.memory.reflectCalls).toHaveLength(0);
+  });
+});
+
+describe('管道里的人格演化（M5-2 / D046）', () => {
+  const personaNoThink = {
+    ...PERSONA_LONG_OUTAGE,
+    fallbacksJson: '{}',
+    behaviorJson: JSON.stringify({ think: { enabled: false } }),
+  };
+
+  it('自述进 system，且排在"正在和你说话的人"之前（种子 → 现在的你 → 印象）', async () => {
+    const h = makeHarness({ persona: personaNoThink });
+    h.self.loaded = {
+      narrative: '我最近说话直接了些。',
+      traits: { warm: 0.5, edge: 0.8, playful: 0.5, talkative: 0.5 },
+      lines: ['你现在说话比以前直接，不太绕弯子，该顶回去就顶回去。'],
+    };
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    const system = (chatCall(h)?.messages as Array<{ content: unknown }>)[0]?.content as string;
+    expect(system).toContain('我最近说话直接了些。');
+    expect(system).toContain('该顶回去就顶回去');
+    expect(system.indexOf('我最近说话直接了些。')).toBeLessThan(system.indexOf('正在和你说话的人'));
+  });
+
+  it('没演化过：不留任何空段', async () => {
+    const h = makeHarness({ persona: personaNoThink });
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    const system = (chatCall(h)?.messages as Array<{ content: unknown }>)[0]?.content as string;
+    // 中性特质不生成任何"你变了很多"的话，空自述也不该留标题
+    expect(system).not.toContain('你比以前');
+    expect(system).not.toContain('你现在说话比以前');
+  });
+
+  it('读演化抛错：照常回复（装饰层不能变单点故障）', async () => {
+    const h = makeHarness({ persona: personaNoThink });
+    h.self.throwOnLoad = true;
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(sentText(h.sent)).toEqual(['你好呀']);
   });
 });

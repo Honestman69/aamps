@@ -18,9 +18,24 @@ import type { TtsService } from '../media/tts';
 import type { PromptMemory } from '../memory/types';
 import type { IMindStateRepository } from '../mind/state/ports';
 import type { GatewayService } from '../model/gateway/gateway.service';
+import type { Traits } from '../persona/self/traits';
 import type { ISessionRepository } from '../session/persistence';
 import type { ISessionWindowRepository } from '../session/ports';
 import type { IPipelineRepository } from './ports';
+
+/**
+ * 人格演化（M5-2）：管道只需要"给我一句现在的你"。
+ *
+ * 不直接依赖 `SelfStateService`：管道测试里给一个返回空自述的假实现就够了，
+ * 而"演化怎么算、什么时候变"是 persona 模块的事。
+ */
+export type PipelineSelf = {
+  describeForPrompt(instanceId: string): Promise<{
+    narrative: string;
+    traits: Traits;
+    lines: string[];
+  }>;
+};
 
 /**
  * 记忆（M5-1）：管道只认这两个方法，不认 `MemoryService` 整个类。
@@ -58,6 +73,8 @@ export type PipelineDeps = {
   assets: MediaAssetService;
   /** 记忆（M5-1）：读回已知的事 / 攒够条数后反思写入 */
   memory: PipelineMemory;
+  /** 人格演化（M5-2）：现在的你 */
+  self: PipelineSelf;
   config: {
     get(
       instanceId: string,

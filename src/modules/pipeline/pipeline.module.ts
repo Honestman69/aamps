@@ -22,7 +22,10 @@ import { IMAGE_FETCHER, MEDIA_ASSET_SERVICE, TTS_SERVICE } from '../media/tokens
 import type { TtsService } from '../media/tts';
 import { MemoryModule } from '../memory/memory.module';
 import { MEMORY_SERVICE } from '../memory/tokens';
-import type { PipelineMemory } from './deps';
+import { PersonaModule } from '../persona/persona.module';
+import { SELF_STATE_SERVICE } from '../persona/tokens';
+import type { SelfStateService } from '../persona/self/self-state.service';
+import type { PipelineMemory, PipelineSelf } from './deps';
 import { PrismaMindStateRepository } from '../mind/state/repositories/prisma-mind-state.repository';
 import type { IMindStateRepository } from '../mind/state/ports';
 import { ModelModule } from '../model/model.module';
@@ -44,7 +47,7 @@ import {
 } from './tokens';
 
 @Module({
-  imports: [AuthModule, ConfigModule, MediaModule, MemoryModule, ModelModule],
+  imports: [AuthModule, ConfigModule, MediaModule, MemoryModule, ModelModule, PersonaModule],
   providers: [
     {
       provide: PIPELINE_REPOSITORY,
@@ -79,6 +82,7 @@ import {
         tts: TtsService,
         assets: MediaAssetService,
         memory: PipelineMemory,
+        self: PipelineSelf,
         config: {
           get(
             instanceId: string,
@@ -96,6 +100,7 @@ import {
           tts,
           assets,
           memory,
+          self,
           config,
           gateway,
         }),
@@ -108,6 +113,7 @@ import {
         TTS_SERVICE,
         MEDIA_ASSET_SERVICE,
         MEMORY_SERVICE,
+        SELF_STATE_SERVICE,
         CONFIG_SERVICE,
         GATEWAY_SERVICE,
       ],

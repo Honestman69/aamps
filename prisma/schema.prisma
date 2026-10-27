@@ -196,6 +196,8 @@ model BotInstance {
   personas      Persona[]       @relation("InstancePersonas")
   sessions      Session[]
   agentState    AgentState?
+  selfState     SelfState?
+  selfVersions  SelfStateVersion[]
   events        InstanceEvent[]
   relationships Relationship[]
   memories      MemoryItem[]
@@ -204,6 +206,57 @@ model BotInstance {
 
   @@unique([platform, accountId])
   @@index([ownerUserId])
+}
+
+// ─────────────────────── 人格演化（D020 的第三层）───────────────────────
+
+/// 眼下的自己：特质数值 + 第一人称自述。
+///
+/// **只有反思任务能写**（经代码闸门），没有手工编辑接口 —— 手改等于绕过闸门，
+/// 一次就能把"慢慢变成另一个人"变成"立刻变成另一个人"。
+/// 种子（`Persona`）是出生设定，这里是"后来变成了什么样"，两者不互相覆盖。
+model SelfState {
+  id         String      @id @default(cuid())
+  instanceId String      @unique
+  instance   BotInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+
+  /// 特质数值，0~1，键见 `persona/self/evolution.ts` 的 `TRAITS`
+  traitsJson String @default("{}")
+  /// 第一人称自述（"我最近话少了一点…"）。空 = 还没开始演化
+  narrative  String @default("")
+
+  /// 版本号：每次被接受的变化 +1；回滚也会 +1（历史只增不改）
+  version Int @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// 演化快照：写入前先落一份，支持回滚到任意版本（D020 第 5 条）。
+///
+/// `deltasJson` 记的是**这次实际应用的变化量**，用来算"单日累计"预算 ——
+/// 靠比较两个版本的差值算不出来（中间可能回滚过）。
+model SelfStateVersion {
+  id         String      @id @default(cuid())
+  instanceId String
+  instance   BotInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+
+  version Int
+  /// 这一版的特质与自述（快照，不是增量）
+  traitsJson String
+  narrative  String
+  /// 这一版相对上一版的变化量（回滚与重置记空对象）
+  deltasJson String @default("{}")
+  /// reflection | rollback | create
+  reason     String
+
+  /// 触发的记忆 id（逗号分隔）：能回答"它为什么变成这样"
+  sourceMemoryIds String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([instanceId, version])
+  @@index([instanceId, createdAt])
 }
 
 // ─────────────────────────── 人设卡片 ───────────────────────────

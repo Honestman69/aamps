@@ -78,6 +78,26 @@ export type ReflectOutcome = {
   written: number;
   reason: 'ok' | 'below-threshold' | 'nothing-to-remember' | 'failed';
   detail?: string;
+  /** 人格演化这一轮的结果（没接演化层时为 undefined） */
+  evolution?: { applied: boolean; reason: string };
+};
+
+/**
+ * 人格演化的入口（M5-2）。
+ *
+ * 定义在记忆模块里，而不是直接依赖 `SelfStateService`：反思只负责"把 self 这一段
+ * 原样递过去"，闸门与落库是 persona 的事。这样 `memory` 不需要知道特质有几个维度，
+ * `persona` 也不需要知道反思是怎么触发的。
+ *
+ * 实现方**不得 throw**：它跑在"消息已发出"之后（同 D045 的写路径）。
+ */
+export type SelfEvolution = {
+  evolve(input: {
+    instanceId: string;
+    proposal: unknown;
+    memoryIds: readonly string[];
+    now: Date;
+  }): Promise<{ applied: boolean; reason: string }>;
 };
 
 /** 反思的原料总字数上限：一条复读机刷屏不该把这次调用撑爆 */
@@ -119,6 +139,11 @@ export class MemoryService {
     private readonly repo: IMemoryRepository,
     private readonly model: ReflectionModel,
     private readonly options: MemoryOptions = DEFAULT_MEMORY_OPTIONS,
+    /**
+     * 人格演化（M5-2）。可选：没接演化层的部署（或单测）照样能反思记忆 ——
+     * "记得住"与"会变"是两件事，前者不该被后者绑住。
+     */
+    private readonly evolution?: SelfEvolution,
   ) {}
 
   /** 读回：事实（按人）+ 最近摘要（按会话）。失败就是"这次没记忆"，不抛。 */
@@ -194,8 +219,22 @@ export class MemoryService {
         return { written: 0, reason: 'nothing-to-remember' };
       }
 
-      const written = await this.repo.addMany(fresh);
-      return { written, reason: 'ok' };
+      const created = await this.repo.addMany(fresh);
+
+      // 人格演化：把这次**真正写进库**的记忆 id 递过去（D046「溯源」）。
+      // 写失败/被闸门拒绝都不影响记忆本身，所以结果只记在返回值里，不抛。
+      const evolution = this.evolution
+        ? await this.evolution
+            .evolve({
+              instanceId: input.instanceId,
+              proposal: digest.self,
+              memoryIds: created.map((row) => row.id),
+              now: input.now,
+            })
+            .catch(() => ({ applied: false, reason: 'failed' }))
+        : undefined;
+
+      return { written: created.length, reason: 'ok', ...(evolution ? { evolution } : {}) };
     } catch (err) {
       // 见文件头：这一步跑在"已经回完消息"之后，不能把异常放出去
       return {

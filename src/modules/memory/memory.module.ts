@@ -15,13 +15,16 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { ModelModule } from '../model/model.module';
 import { GATEWAY_SERVICE } from '../model/tokens';
 import type { GatewayService } from '../model/gateway/gateway.service';
-import { MemoryService, type ReflectionModel } from './memory.service';
+import { PersonaModule } from '../persona/persona.module';
+import type { SelfStateService } from '../persona/self/self-state.service';
+import { SELF_STATE_SERVICE } from '../persona/tokens';
+import { MemoryService, type ReflectionModel, type SelfEvolution } from './memory.service';
 import type { IMemoryRepository } from './ports';
 import { PrismaMemoryRepository } from './repositories/prisma-memory.repository';
 import { MEMORY_REPOSITORY, MEMORY_SERVICE } from './tokens';
 
 @Module({
-  imports: [ModelModule],
+  imports: [ModelModule, PersonaModule],
   providers: [
     {
       provide: MEMORY_REPOSITORY,
@@ -30,9 +33,18 @@ import { MEMORY_REPOSITORY, MEMORY_SERVICE } from './tokens';
     },
     {
       provide: MEMORY_SERVICE,
-      useFactory: (repo: IMemoryRepository, gateway: GatewayService): MemoryService =>
-        new MemoryService(repo, gateway as unknown as ReflectionModel),
-      inject: [MEMORY_REPOSITORY, GATEWAY_SERVICE],
+      useFactory: (
+        repo: IMemoryRepository,
+        gateway: GatewayService,
+        self: SelfStateService,
+      ): MemoryService =>
+        new MemoryService(
+          repo,
+          gateway as unknown as ReflectionModel,
+          undefined,
+          self as unknown as SelfEvolution,
+        ),
+      inject: [MEMORY_REPOSITORY, GATEWAY_SERVICE, SELF_STATE_SERVICE],
     },
   ],
   exports: [MEMORY_SERVICE],

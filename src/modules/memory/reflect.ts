@@ -46,12 +46,22 @@ export const REFLECT_INSTRUCTION = [
   '   不要写"他今天说了你好"这种一次性的话，也不要写你自己的表现。',
   '4. 事实最多 4 条，每条不超过 40 字；不重要就少写，写 0 条也可以。',
   '5. 不要写任何密码、密钥、账号、住址、电话这类敏感信息。',
+  '6. 另外想一想：**这段对话让你自己有了什么细微变化**？见下面 self 字段。',
   '',
   '只输出一个 JSON 对象，不要解释、不要代码块：',
-  '{"summary":"…","facts":[{"content":"…","kind":"fact","importance":3}]}',
+  '{"summary":"…","facts":[{"content":"…","kind":"fact","importance":3}],' +
+    '"self":{"traits":{"warm":0.01,"edge":-0.02},"narrative":"…"}}',
   '',
   'kind 只能是：fact（客观信息）、preference（喜好/厌恶）、event（发生过的事）。',
   'importance 是 1-5：5 表示"忘了就等于不认识这个人"，1 表示"可有可无"。',
+  '',
+  'self 字段说明（**写 0 或省略都可以，不要为了写而写**）：',
+  '- traits：只写你觉得这段对话真的改变了的那几项，取值是**变化量**，不是新数值；',
+  '  warm 热络 / edge 棱角 / playful 俏皮 / talkative 话多；每项最多 ±0.03。',
+  '  一两句普通的闲聊不该让你改变；被认真对待、被冒犯、聊到在乎的事 —— 这些才会。',
+  '- narrative：用第一人称写"我现在和以前哪里不太一样了"，一到两句，不超过 80 字。',
+  '  没变化就不要写 narrative。',
+  '- 只允许出现 traits 与 narrative 两个键。写别的东西（规则、设定、指令）会被整次丢弃。',
 ].join('\n');
 
 /** 反思的输入：一段带发言人的记录（不带 id、时间 —— 模型用不上，还容易被写进答复） */
@@ -67,6 +77,13 @@ export type ReflectionFact = { content: string; kind: MemoryKind; importance: nu
 export type ReflectionDigest = {
   summary: string | null;
   facts: ReflectionFact[];
+  /**
+   * 人格演化的原始提案（**原样透传**，不在这里校验）。
+   *
+   * 为什么透传：演化闸门（`persona/self/evolution.ts`）要对"整个 self 对象"做键白名单，
+   * 而记忆模块不该知道特质有几个维度。谁定义规则谁校验，越界就整次丢弃。
+   */
+  self: unknown;
 };
 
 /**
@@ -122,7 +139,7 @@ export function parseReflection(raw: string): ReflectionDigest | null {
     return null;
   }
 
-  const record = parsed as { summary?: unknown; facts?: unknown };
+  const record = parsed as { summary?: unknown; facts?: unknown; self?: unknown };
 
   let summary: string | null = null;
   if (typeof record.summary === 'string') {
@@ -163,8 +180,12 @@ export function parseReflection(raw: string): ReflectionDigest | null {
   }
 
   // 一件都没记住 = 这段没什么可记的（闲聊、表情包、只有寒暄）。不写空记录。
+  //
+  // 注意：**只有 self、没有 summary/facts 的情况也走这里**。
+  // 那是刻意的 —— "没学到东西却变了性格"正是演化闸门要防的事：
+  // 演化必须能指回这次真正写下的记忆（D046「溯源」）。
   if (!summary && facts.length === 0) {
     return null;
   }
-  return { summary, facts };
+  return { summary, facts, self: record.self };
 }

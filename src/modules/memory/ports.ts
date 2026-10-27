@@ -52,6 +52,11 @@ export interface IMemoryRepository {
    */
   existingContents(instanceId: string, subjectId: string, contents: string[]): Promise<Set<string>>;
 
-  /** 批量写入，返回实际写入条数 */
-  addMany(drafts: MemoryDraft[]): Promise<number>;
+  /**
+   * 批量写入，返回**写进去的行**（带 id）。
+   *
+   * 返回 id 而不是条数，是因为人格演化必须能指回"这次真的记下了什么"（D046 溯源）。
+   * 条数在这里没有用：调用方本来就知道自己提交了几条。
+   */
+  addMany(drafts: MemoryDraft[]): Promise<MemoryRecord[]>;
 }
