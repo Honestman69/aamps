@@ -22,12 +22,15 @@ import type {
   IAuditLogRepository,
   ICredentialAdminRepository,
   ITenantRepository,
+  IUserAdminMutationRepository,
+  IUserAdminQueryRepository,
   IUserAuthRepository,
   IUserProvisionRepository,
 } from './ports';
 import {
   PrismaAuditLogRepository,
   PrismaCredentialAdminRepository,
+  PrismaUserAdminMutationRepository,
   PrismaUserAdminQueryRepository,
   PrismaUserAuthRepository,
 } from './repositories/prisma-auth.repositories';
@@ -36,6 +39,7 @@ import { RuntimeKeyStore } from './runtime-key-store';
 import { SessionGuard } from './session.guard';
 import { SessionService } from './session.service';
 import {
+  ADMIN_USER_MUTATION_REPOSITORY,
   ADMIN_USER_REPOSITORY,
   AUDIT_LOG_REPOSITORY,
   CREDENTIAL_ADMIN_REPOSITORY,
@@ -44,6 +48,7 @@ import {
   USER_PROVISION_REPOSITORY,
 } from './tokens';
 import { UnlockService } from './unlock.service';
+import { UserAdminService } from './user-admin.service';
 
 @Module({
   controllers: [AuthController, AdminController],
@@ -69,7 +74,14 @@ import { UnlockService } from './unlock.service';
     },
     {
       provide: ADMIN_USER_REPOSITORY,
-      useFactory: (prisma: PrismaService) => new PrismaUserAdminQueryRepository(prisma),
+      useFactory: (prisma: PrismaService): IUserAdminQueryRepository =>
+        new PrismaUserAdminQueryRepository(prisma),
+      inject: [PrismaService],
+    },
+    {
+      provide: ADMIN_USER_MUTATION_REPOSITORY,
+      useFactory: (prisma: PrismaService): IUserAdminMutationRepository =>
+        new PrismaUserAdminMutationRepository(prisma),
       inject: [PrismaService],
     },
     {
@@ -124,6 +136,26 @@ import { UnlockService } from './unlock.service';
       inject: [TENANT_REPOSITORY, USER_PROVISION_REPOSITORY, AUDIT_SERVICE],
     },
     {
+      provide: UserAdminService,
+      useFactory: (
+        users: IUserAdminQueryRepository,
+        mutations: IUserAdminMutationRepository,
+        provision: IUserProvisionRepository,
+        sessions: SessionService,
+        keyStore: RuntimeKeyStore,
+        audit: AuditService,
+      ): UserAdminService =>
+        new UserAdminService({ users, mutations, provision, sessions, keyStore, audit }),
+      inject: [
+        ADMIN_USER_REPOSITORY,
+        ADMIN_USER_MUTATION_REPOSITORY,
+        USER_PROVISION_REPOSITORY,
+        SessionService,
+        RuntimeKeyStore,
+        AUDIT_SERVICE,
+      ],
+    },
+    {
       provide: SessionGuard,
       useFactory: (sessions: SessionService): SessionGuard => new SessionGuard(sessions),
       inject: [SessionService],
@@ -138,6 +170,7 @@ import { UnlockService } from './unlock.service';
     BootstrapService,
     UnlockService,
     PasswordService,
+    UserAdminService,
     USER_AUTH_REPOSITORY,
     USER_PROVISION_REPOSITORY,
     TENANT_REPOSITORY,

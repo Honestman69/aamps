@@ -14,6 +14,7 @@ import type { AuditLogRow } from '../audit.service';
 import type {
   IAuditLogRepository,
   ICredentialAdminRepository,
+  IUserAdminMutationRepository,
   IUserAdminQueryRepository,
   IUserAuthRepository,
   UserAdminDTO,
@@ -211,11 +212,49 @@ export class PrismaUserAdminQueryRepository implements IUserAdminQueryRepository
     }));
   }
 
-  async findForAdmin(userId: string, tenantId: string): Promise<{ id: string; username: string } | null> {
+  async findForAdmin(
+    userId: string,
+    tenantId: string,
+  ): Promise<{
+    id: string;
+    username: string;
+    displayName: string | null;
+    role: string;
+    status: string;
+  } | null> {
     // 带 tenantId 一起查：跨租户一律查不到，不靠上层再判断
     return this.prisma.user.findFirst({
       where: { id: userId, tenantId },
-      select: { id: true, username: true },
+      select: { id: true, username: true, displayName: true, role: true, status: true },
     });
+  }
+}
+
+/**
+ * 管理端写：改显示名 / 角色 / 启停。
+ *
+ * 用 `updateMany` 而不是 `update`：`update` 只能按唯一键定位，`where` 里塞不进 tenantId，
+ * 就得先查一次再更新（TOCTOU 窗口）。`updateMany` 的 where 天然带租户条件，
+ * 返回 `count` 即可判断"改了还是没改" —— 跨租户只会得到 0。
+ */
+export class PrismaUserAdminMutationRepository implements IUserAdminMutationRepository {
+  constructor(private readonly prisma: PrismaClient) {}
+
+  async updateForAdmin(input: {
+    tenantId: string;
+    userId: string;
+    displayName?: string | null;
+    role?: string;
+    status?: string;
+  }): Promise<boolean> {
+    const { count } = await this.prisma.user.updateMany({
+      where: { id: input.userId, tenantId: input.tenantId },
+      data: {
+        ...(input.displayName !== undefined ? { displayName: input.displayName } : {}),
+        ...(input.role !== undefined ? { role: input.role } : {}),
+        ...(input.status !== undefined ? { status: input.status } : {}),
+      },
+    });
+    return count > 0;
   }
 }

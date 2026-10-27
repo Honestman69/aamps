@@ -159,19 +159,25 @@
 
 这比运行时判断可靠得多——运行时判断会在某次重构、某个新增接口、某次"临时排查问题"里被绕过。
 
-### 4.1 预留的用户管理接口
+### 4.1 用户管理接口（已实现）
 
-本次不实现，但先占位，避免后期改路由：
+写这节时全是"预留"，现在**六条已经落地**，状态如下：
 
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| GET | `/api/admin/users` | 列表（绝不返回 wrappedDek / keySalt） |
-| POST | `/api/admin/users` | 创建用户（生成 keySalt，等用户首次登录时生成 DEK） |
-| PATCH | `/api/admin/users/:id` | 改显示名、角色、启停 |
-| POST | `/api/auth/password` | **本人改密码**：校验旧密码，重包裹 DEK，Key 不受影响 |
-| POST | `/api/admin/users/:id/reset-password` | **管理员重置**：销毁 `wrappedDek`，该用户 Key 全部报废，见 5.1 |
-| GET | `/api/admin/audit` | 审计日志（可校验哈希链） |
-| GET | `/api/admin/usage/summary` | 全站用量聚合（不含单 Key 明细） |
+| 状态 | 方法 | 路径 | 说明 |
+|---|---|---|---|
+| ✅ | GET | `/api/admin/users` | 列表（绝不返回 wrappedDek / keySalt），带 `isSelf` |
+| ✅ | POST | `/api/admin/users` | 创建用户：只生成 `keySalt`，`wrappedDek` 留空，等用户首次登录时生成 DEK（D042） |
+| ✅ | PATCH | `/api/admin/users/:id` | 改显示名 / 角色 / 启停；改角色或停用会**撤销该用户全部会话**，停用还会清掉内存 DEK（D042） |
+| ✅ | POST | `/api/auth/password` | **本人改密码**：校验旧密码，重包裹 DEK，Key 不受影响 |
+| ✅ | POST | `/api/admin/users/:id/reset-password` | **管理员重置**：销毁 `wrappedDek`，该用户 Key 全部报废，见 5.1 |
+| ✅ | GET | `/api/admin/audit` | 审计日志；另有 `POST /api/admin/audit/verify` 校验哈希链 |
+| 未实现 | GET | `/api/admin/usage/summary` | 全站用量聚合（不含单 Key 明细）—— `ModelUsage` 有数据，只差接口 |
+
+> 未实现的两条没有占位路由：路由是加得回来的，而"文档说有、实际 404"会让排查的人多绕半小时。
+
+**建号为什么不能生成 DEK**（D042）：一旦建号方持有对方的 DEK，他就成了"能解开对方所有 API Key"
+的人，零知识体系当场作废。所以 `POST /api/admin/users` 只写盐，DEK 由用户首次登录时用
+**他自己的密码**派生 KEK 再包裹。管理员因此永远看不到别人的 Key 明文 —— 这不是限制，是设计。
 
 ---
 
@@ -444,10 +450,14 @@ pepper 由 `SESSION_SECRET` 派生，所以**换 `SESSION_SECRET` 会让所有�
 > - 第 1 条：系统里不存在权限枚举这种东西，也没有任何"读明文"的 action；凭据接口只有 `list / create / update / delete`。
 > - 第 2 条：`ICredentialRepository` 的每个方法都带 `userId`，`test/credential/credential.repository.test.ts` 里断言了 `findById` / `findMany` **不存在**，并验证 `ownerUserId` 真的进了 Prisma 的 `where`。
 > - 第 3 条：`CredentialPublicDTO` 与仓储的 `PUBLIC_SELECT` 都是白名单，密文不在其中。
-> - 第 4 条：**目前是 0 处** —— `decryptApiKey` 还没写，凭据模块刻意 `import` 都不 import `decryptWithDek`。等 M2 写 Gateway 时才会出现唯一的那个调用点，到时要回来把这条改成"1 处"。
+> - 第 4 条：**现在是 2 处** —— `model/gateway/gateway.service.ts`（取模型 Key）与
+>   `media/tts.ts`（取语音 Key）；另有 1 处解的是**实例接入 token**（`instance/instance.service.ts`）。
+>   三处都先经 `RuntimeKeyStore.getForUser` 拿 DEK，明文只在内存里活一个调用栈，不外传、不落库。
+>   `credential/` 自己仍然**不 import** `decryptWithDek`（这条当时定的纪律一直保持）。
 > - 第 12 条（启动自检）早已生效，`zk.db` 验收里也复验过：全库不存在 `enc:v1:` 旧格式。
 >
-> 认证链路 50 个单测 + 凭据链路 16 个单测 + 真实库冒烟 + 23 项 HTTP 冒烟 + 零知识直查库，四重复核。
+> 认证链路 50 个单测 + 凭据链路 16 个单测 + 真实库冒烟 + 23 项 HTTP 冒烟 + 零知识直查库。
+> （冒烟脚本后来长到 52 项，覆盖实例 / 人设 / 素材 / 静态托管；**数字以 `STATUS.md` 为准**，本节记的是当时的快照。）
 >
 > **2026-10-24 追加（M1 接入层）**：新增 7.1 节。落地了三条技术兜底——接入地址默认拒绝公网、
 > 连接后核验登录账号、NapCat 数据目录的提交闸门（`pnpm check:local-data`）。

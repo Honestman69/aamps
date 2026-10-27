@@ -32,9 +32,19 @@ export const AuditAction = {
   InstanceDelete: 'instance.delete',
   InstanceConnect: 'instance.connect',
   InstanceDisconnect: 'instance.disconnect',
+  /** 人设：内容是私人设定，审计里只记 name/status/version，不记正文 */
+  PersonaCreate: 'persona.create',
+  PersonaUpdate: 'persona.update',
+  PersonaPublish: 'persona.publish',
+  PersonaArchive: 'persona.archive',
+  PersonaActivate: 'persona.activate',
+  /** 素材：只记"删了哪张、多大"，图片内容本来就不在库里 */
+  AssetDelete: 'asset.delete',
   UserLogin: 'user.login',
   UserLoginFailed: 'user.login_failed',
   UserCreate: 'user.create',
+  /** 改显示名 / 角色 / 启停。只记改前改后两个状态，不记密码材料 */
+  UserUpdate: 'user.update',
   UserPasswordChange: 'user.password_change',
   UserPasswordReset: 'user.password_reset',
   UserPasswordResetSelf: 'user.password_reset_self',

@@ -22,6 +22,29 @@ export type MediaAssetRecord = {
   createdAt: Date;
 };
 
+/**
+ * 管理端要看的字段：比管道侧多 `source`（怎么来的）与 `deletedAt`（是否已软删）。
+ * 这两个字段**不进 prompt、也不参与发送**，所以不塞进 `MediaAssetRecord`。
+ */
+export type MediaAssetAdminRecord = MediaAssetRecord & {
+  source: string;
+  deletedAt: Date | null;
+};
+
+export type MediaAssetListOptions = {
+  /** 后台要能看见已删的（名字仍占位，用户需要知道"为什么这个名字不能用"） */
+  includeDeleted: boolean;
+  limit: number;
+  offset: number;
+};
+
+export type MediaAssetStats = {
+  usable: number;
+  deleted: number;
+  /** 可用素材的总字节数（软删的不算：它们只是记录，文件可能还被别的别名共用） */
+  bytes: number;
+};
+
 export type CreateAssetInput = {
   instanceId: string;
   alias: string;
@@ -56,4 +79,38 @@ export interface IMediaAssetRepository {
   markUsed(instanceId: string, assetId: string, now: Date): Promise<void>;
 
   softDelete(instanceId: string, alias: string, now: Date): Promise<boolean>;
+
+  // ── 管理端（带 owner，供后台列表 / 删除 / 取文件用） ──
+  //
+  // 这几个方法**不接收裸 instanceId**，而是 `(userId, instanceId)`：
+  // 归属过滤写成 `instance: { ownerUserId }`，拿别人的 id 只会得到空结果，
+  // 而不是"查到之后再判断"（AGENTS 硬性规则 5）。
+
+  listForUser(
+    userId: string,
+    instanceId: string,
+    options: MediaAssetListOptions,
+  ): Promise<MediaAssetAdminRecord[]>;
+
+  countForUser(
+    userId: string,
+    instanceId: string,
+    options: Pick<MediaAssetListOptions, 'includeDeleted'>,
+  ): Promise<number>;
+
+  statsForUser(userId: string, instanceId: string): Promise<MediaAssetStats>;
+
+  findForUser(
+    userId: string,
+    instanceId: string,
+    assetId: string,
+  ): Promise<MediaAssetAdminRecord | null>;
+
+  /** 按 id 软删；返回 false = 不存在 / 不属于这个用户 */
+  softDeleteForUser(
+    userId: string,
+    instanceId: string,
+    assetId: string,
+    now: Date,
+  ): Promise<boolean>;
 }

@@ -1,0 +1,199 @@
+/**
+ * 全局样式与设计变量。
+ *
+ * 只做一件事：把 Element Plus 的默认蓝换成一套低饱和的中性配色，
+ * 并统一间距/圆角。组件库本身不重写 —— 重写组件库的样式是维护黑洞，
+ * 后面每次升级都要重新对一遍。
+ */
+
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --border: #e6e8eb;
+  --border-strong: #d6d9de;
+  --text: #16181d;
+  --text-muted: #6b7280;
+  --text-faint: #9aa1ac;
+  --accent: #5b5bd6;
+  --accent-soft: #eeeefc;
+  --danger: #d64545;
+  --ok: #2f9e6e;
+  --warn: #b7791f;
+  --radius: 10px;
+  --radius-sm: 6px;
+  --shadow-sm: 0 1px 2px rgb(16 24 40 / 6%);
+  --shadow-md: 0 8px 24px rgb(16 24 40 / 8%);
+
+  /* Element Plus 主题变量（覆盖它自己的 --el-color-primary 系列） */
+  --el-color-primary: var(--accent);
+  --el-color-primary-light-3: #8282e0;
+  --el-color-primary-light-5: #a3a3e8;
+  --el-color-primary-light-7: #c4c4ef;
+  --el-color-primary-light-8: #d5d5f3;
+  --el-color-primary-light-9: var(--accent-soft);
+  --el-color-primary-dark-2: #4949ac;
+  --el-border-radius-base: var(--radius-sm);
+  --el-font-size-base: 13px;
+  --el-text-color-primary: var(--text);
+  --el-text-color-regular: #414651;
+  --el-border-color: var(--border);
+  --el-border-color-light: var(--border);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+/* ── 通用排版 ── */
+
+.page {
+  padding: 24px 28px 40px;
+  max-width: 1180px;
+}
+
+.page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.page-title {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.page-desc {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.card + .card {
+  margin-top: 16px;
+}
+
+.card-pad {
+  padding: 18px 20px;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 4px;
+  font-size: 13.5px;
+  font-weight: 650;
+}
+
+.section-desc {
+  margin: 0 0 16px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.hint {
+  color: var(--text-faint);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.empty {
+  padding: 40px 0;
+  text-align: center;
+  color: var(--text-faint);
+}
+
+/* ── 表单排布：两列网格，短字段不铺满整行 ── */
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 18px;
+}
+
+.grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0 18px;
+}
+
+.span-2 {
+  grid-column: span 2;
+}
+
+@media (max-width: 900px) {
+  .grid-2,
+  .grid-3 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .span-2 {
+    grid-column: auto;
+  }
+}
+
+/*
+ * 未包在 `el-form` 里的 `el-form-item` 默认是"标签在左"，输入框宽度会随标签长短参差；
+ * 这里统一成"标签在上"（与组件库 label-position="top" 的排版一致），
+ * 这样分区里直接写 form-item 也不会走样。
+ */
+.el-form-item {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  margin-bottom: 14px;
+}
+
+.el-form-item__content {
+  margin-left: 0 !important;
+}
+
+.el-form-item__label {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  padding-bottom: 4px !important;
+}
+
+.el-table {
+  --el-table-border-color: var(--border);
+  font-size: 12.5px;
+}

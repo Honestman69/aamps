@@ -132,8 +132,43 @@ export type UserAdminDTO = {
 
 export interface IUserAdminQueryRepository {
   listForAdmin(tenantId: string): Promise<UserAdminDTO[]>;
-  /** 只在同一租户内可见，跨租户一律当作"无权" */
-  findForAdmin(userId: string, tenantId: string): Promise<{ id: string; username: string } | null>;
+  /**
+   * 只在同一租户内可见，跨租户一律当作"无权"。
+   *
+   * 返回 `role` / `status` 是给"改人之前先看当前值"用的：
+   * 判断"是不是在改自己""角色有没有真的变"都需要它们，
+   * 否则上层只能再发一次查询（或者在请求体里相信前端传来的旧值）。
+   */
+  findForAdmin(
+    userId: string,
+    tenantId: string,
+  ): Promise<{
+    id: string;
+    username: string;
+    displayName: string | null;
+    role: string;
+    status: string;
+  } | null>;
+}
+
+/**
+ * 管理端用户写端口（建号 / 改资料 · 角色 · 启停）。
+ *
+ * 与 `IUserProvisionRepository.createUser` 分开：那个是"种子/建号"的窄接口，
+ * 这里是后台管理面。两者共用同一张表，但职责不同 —— 建号只写 keySalt（不生成 DEK），
+ * 改角色/启停则涉及会话与内存 DEK 的撤销，语义完全不一样。
+ *
+ * 所有方法都带 `tenantId`：跨租户写不进去，不靠上层判断。
+ */
+export interface IUserAdminMutationRepository {
+  /** 返回 false = 不存在 / 不属于这个租户 */
+  updateForAdmin(input: {
+    tenantId: string;
+    userId: string;
+    displayName?: string | null;
+    role?: string;
+    status?: string;
+  }): Promise<boolean>;
 }
 
 /** 审计仓储：只提供 append 与读取，**没有 update / delete 方法**（D009） */export interface IAuditLogRepository {

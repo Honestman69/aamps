@@ -9,7 +9,9 @@
 
 ### 1.1 走第三方协议，所以"接入层"必须是一个可替换的边界
 
-NapCat 提供的是 OneBot 11 协议（WebSocket）。**当前实现是"我们主动连 NapCat 的 WS 服务端"**（`BotInstance.endpoint` 就是那个地址）；NapCat 的"反向 WS"（由它连我们）尚未实现，真机联调时若只能用反连模式，需要给适配器加一个 server 模式。这一点决定了：
+NapCat 提供的是 OneBot 11 协议（WebSocket），**两种接法都已实现**：
+**反向**（NapCat 连本服务，默认推荐 —— token 由我们在握手阶段校验，且云端无需开入站端口，见 D019）
+与**正向**（本服务连 NapCat）。用哪种由 `BotInstance.adapterMode` 决定，`endpoint` 是地址。这一点决定了：
 
 - 业务代码**不许直接知道** OneBot 的存在，只认内部统一的 `InboundMessage` / `OutboundAction` 结构；
 - 未来若切官方 Bot 通道、或 NapCat 挂掉要换 Lagrange / LLONEOneBot，只改一个 Adapter 实现；
@@ -86,10 +88,10 @@ NapCat 提供的是 OneBot 11 协议（WebSocket）。**当前实现是"我们�
 | 后端框架 | NestJS（Fastify 适配器） | Module + DI 天然对应"可替换实现"，是扩展预留最省力的框架 |
 | ORM | Prisma | 一份 schema 同时产出类型与迁移；SQLite → PostgreSQL 改一行 datasource |
 | 数据库 | SQLite（WAL 模式） | 自用单机足够，零运维。消息日志量大后再迁 PG |
-| 队列 | 内存队列（BullMQ 兼容接口） | 单机不需要 Redis；接口对齐 BullMQ，后期换实现不改调用方 |
-| 定时任务 | @nestjs/schedule | 反思、主动消息、清理三类 cron |
+| 队列 | 进程内串行（`PipelineService.sessionQueue`，按会话分片） | 现在**没有队列系统**：消息按会话串行就够，单机不需要 Redis。真要做异步任务（反思、清理）再引入 |
+| 定时任务 | 依赖已装（`@nestjs/schedule`），**尚未使用** | 反思、主动消息、清理三类 cron 属 M5/M6；现在状态靠"读时衰减"，不需要定时器 |
 | 前端 | Vue 3 + Vite + Element Plus + Pinia | 中后台组件齐、开发快 |
-| 部署 | Docker Compose（app + napcat） | 一台小服务器即可 |
+| 部署 | 当前：单进程 `node dist/src/main.js`（同源托管前端）；计划：Docker Compose（app + napcat） | 一台小服务器即可；**容器化还没做** |
 | 日志 | pino + 结构化字段 | 单条消息可全链路追踪 |
 
 **为什么不用 Python**：OneBot 生态里 Python 的 NoneBot 很成熟，但心智引擎要做大量并发定时器（打字延迟、状态衰减、心跳），TS 的 event loop 模型更省心，且前后端同语言省一套类型定义。
@@ -158,19 +160,22 @@ newjob/
 │  │  ├─ adapter/              # 【接入边界】只放主服务侧：AdapterRegistry + 清单接口
 │  │  │                        #   具体协议实现已拆包：packages/adapter-qq（D013）
 │  │  ├─ credential/           # 模型 API Key 托管（加密写入、掩码、4 个接口）
-│  │  ├─ pipeline/
-│  │  │  ├─ inbound/           # 入站管道（各 Pipe）
-│  │  │  └─ outbound/          # 出站管道
+│  │  ├─ session/              # 会话与消息：写入归 Pipeline，读取（后台查看）在这里（D043）
+│  │  ├─ pipeline/             # 消息主链路（D040）
+│  │  │  ├─ pipeline.service.ts # 只做编排：入队串行 / 跑链 / 兜底 / 清理
+│  │  │  └─ pipes/             # 13 个 pipe，一步一文件；顺序见 pipes/index.ts
 │  │  ├─ mind/                 # 【表现层】可选装饰器，可整体关闭
 │  │  │  ├─ state/             # 情绪、精力、关系、日程
 │  │  │  ├─ attention/         # 发言决策
 │  │  │  ├─ reflection/        # 内心独白
 │  │  │  └─ expression/        # 拆条、延迟、表情
 │  │  ├─ media/                # 多模态（D033）：URL 白名单、入站图片抓取、媒体意图、TTS
+│  │  │  ├─ media.module.ts     # M4 起独立成模块：Pipeline 与后台都消费它（D039）
+│  │  │  ├─ media.controller.ts # 素材管理 API：列表 / 软删 / 取文件
 │  │  │  └─ assets/            # 素材库（D034）：存图/表情、按别名取用、内容去重
-│  │  ├─ memory/               # 工作记忆 / 情景记忆 / 语义记忆
-│  │  ├─ persona/              # 人设卡片与版本
-│  │  ├─ rules/                # 约束词与规则引擎
+│  │  ├─ memory/               # 【预留】工作记忆 / 情景记忆 / 语义记忆（M5）
+│  │  ├─ persona/              # 人设卡片与版本（M4：CRUD + 发布/归档/启用，D037）
+│  │  ├─ rules/                # 【预留】约束词与规则引擎
 │  │  ├─ model/                # 【模型接入】见 MODEL-ACCESS.md
 │  │  │  ├─ catalog/           # Provider 预设与模型目录（含定价）
 │  │  │  ├─ credential/        # 密钥托管、加密、掩码、轮换
@@ -178,50 +183,77 @@ newjob/
 │  │  │  ├─ providers/         # openai-compatible · anthropic · gemini · ollama
 │  │  │  └─ metering/          # token 计量、成本、预算告警
 │  │  ├─ session/              # 会话与上下文装配
-│  │  ├─ compliance/           # 标识、未成年人、日志留存
-│  │  ├─ observability/        # 看板、日志检索、告警
-│  │  └─ admin/                # 管理端 REST 控制器
-│  └─ workers/
-│     ├─ reflection.worker.ts  # 每日反思 → 写记忆
-│     ├─ proactive.worker.ts   # 主动消息
-│     ├─ decay.worker.ts       # 状态衰减
-│     └─ risk.worker.ts        # 风控巡检
-└─ web/                        # Vue3 管理后台
+│  │  ├─ compliance/           # 【预留】标识、未成年人、日志留存
+│  │  ├─ observability/        # 【预留】看板、日志检索、告警
+│  │  └─ admin/                # 【预留】管理端 REST（现在的控制器都在各自模块里）
+│  └─ workers/                 # 【预留】目前是空目录
+│     ├─ reflection.worker.ts  # 计划：每日反思 → 写记忆（M5）
+│     ├─ proactive.worker.ts   # 计划：主动消息
+│     ├─ decay.worker.ts       # 计划：状态衰减（当前靠读时衰减，不需要 worker）
+│     └─ risk.worker.ts        # 计划：风控巡检（M6）
+└─ web/                        # Vue3 管理后台（pnpm workspace 成员，构建产物由主服务托管，D038）
+   ├─ src/api/                 # 接口客户端与手抄的 DTO 类型
+   ├─ src/stores/              # Pinia（登录态）
+   ├─ src/views/               # 登录 / 实例 / 设置 / 人设 / 密钥 / 素材 / 会话记录 / 用户 / 审计（后两个仅管理员）
+   └─ dist/                    # vite build 产物（不进版本库）
 ```
 
 ---
 
 ## 5. 消息处理管道
 
-入站与出站都是一串 `IPipe`，按顺序执行，任何一环可以 `drop()` 终止。这是最重要的扩展点：加功能 = 加一个 Pipe，不改主流程。
+**已落地**（D040）：13 个 pipe 在 `src/modules/pipeline/pipes/`，顺序写在 `pipes/index.ts`
+一张平铺的清单里。加功能 = 新建一个 pipe 文件 + 在清单里插一行，不改编排。
 
 ```ts
-interface IPipe<I, O> {
-  name: string;
-  run(ctx: MsgContext, input: I): Promise<O | typeof DROP>;
+interface Pipe {
+  readonly name: string;
+  readonly requires: readonly (keyof PipelineContext)[];  // 要读的字段
+  readonly provides: readonly (keyof PipelineContext)[];  // 写完的字段
+  run(ctx: PipelineContext): Promise<void | Drop>;        // Drop = 到此为止
 }
 ```
 
-### 入站链
+`requires` / `provides` 不是装饰：`assertPipeGraph` 在**服务启动时**校验
+"用到的字段必须被前序 pipe 提供、同一字段不许两个 pipe 都写、名字不许重复"。
+把 `attention` 挪到 `generate` 后面，启动就报错，而不是等线上某条消息返回 `undefined`。
 
-| 顺序 | Pipe | 职责 | 失败策略 |
+### 入站链（实际顺序 = `pipes/index.ts`）
+
+| # | Pipe | 职责 | 结束时 |
 |---|---|---|---|
-| 1 | `normalize` | Adapter 原始事件 → `InboundMessage`（文本/图片/语音/引用统一） | 丢弃并记日志 |
-| 2 | `dedupe` | 事件去重、过滤自己发的消息、过滤系统消息 | 丢弃 |
-| 3 | `governance` | 实例开关、群黑白名单、静默时段、限流 | 丢弃 |
-| 4 | `context` | 载入会话、最近消息、记忆、当前状态 | 降级为空上下文 |
-| 5 | `attention` | **判断要不要回**（详见 6.2） | 只入库不说话 |
-| 6 | `think` | 生成内心独白（不进对话历史） | 跳过，直接生成 |
-| 7 | `generate` | 拼 prompt、调 LLM、流式收集 | 走兜底模型 → 兜底话术 |
-| 8 | `moderate` | 输出审核、命中处置、AI 标识 | 拦截并替换 |
-| 9 | `express` | 拆条、计算打字延迟、决定表情/引用 | 原样输出单条 |
+| ① | `persist-inbound` | 取处理时刻、upsert 会话、入站消息落库 | 抛错 → 兜底 |
+| ② | `load-context` | owner + 人设 + 配置（含会话开关） | 实例没了 → DROP |
+| ③ | `governance` | 人工接管 / 会话静默 → 只入库 | DROP（不写状态） |
+| ④ | `load-mind` | 状态衰减到 now、读关系 | 读失败 → 用默认值 |
+| ⑤ | `load-window` | 取窗口切片并 `buildWindow`（D031） | 空窗口 → DROP |
+| ⑥ | `attention` | **判断要不要回**（详见 6.2） | 不回 → 写状态/关系后 DROP |
+| ⑦ | `collect-media` | 入站图片 → 多模态段、素材清单（D033/D034） | 失败只丢这一张 |
+| ⑧ | `assemble-prompt` | 拼 system（D020）+ 消息数组，图片只挂当前这条 | — |
+| ⑨ | `think` | A 阶段内心独白（D036），产出导演指令 | 失败/关闭 → 退化为无独白 |
+| ⑩ | `generate` | B 阶段生成；带图时指定视觉模型且不参与预算降级 | 抛错 → 兜底话术 |
+| ⑪ | `decide-quote` | 引用决策（D030） | — |
+| ⑫ | `deliver` | 媒体意图 → TTS → 拆条/延迟/回 @ → 发送 + 落库（D033/D035） | 语音失败 → 降级为文字 |
+| ⑬ | `persist-interaction` | 花精力、`emotion_shift` 推动 mood、长亲密度 | 吞异常 |
 
-### 出站链
-
-`sanitize`（长度截断、去掉 Markdown 残留、链接白名单） → `rateLimit`（全局发送节流） → `send`（Adapter） → `persist`（落库 + 写记忆）
+**两种"不回"必须区分**：`DROP` 是"判定不该回"（安静结束），`throw` 是故障
+（交给 `PipelineService.handleFailure` 按 D028 分槽位说兜底话术，可能静默）。
+混成一种，要么欠费时每句都回"我有点累"，要么模型挂了却一声不吭。
 
 **为什么 attention 在 generate 之前**：这是省钱又拟人的关键。自用场景下 60%~80% 的群消息不该回，提前判掉既省 token 又避免"有问必答"。
 
+### 设计里还有、实现里还没有的三个 pipe
+
+`normalize`（协议事件 → `InboundMessage`，现由适配器包承担）、
+`dedupe`（事件去重，现依赖平台的 message id 唯一性）、
+`moderate`（输出审核，M6 的合规一起做）。
+写在这里是为了**别把"架构图画过"当成"已经做了"**。
+
+### 出站链
+
+出站目前是 `deliver` 一步完成（`express` + `send` + `persist` 合体）：
+拆条/延迟/回 @ 与发送、落库是同一件事的三段，分开反而要在两个 pipe 之间传半成品。
+等 M6 加入发送节流与合规审核时，再按"节流 → 审核 → 发送"拆成三步。
 ### 多模态的接缝（D033）
 
 多模态**不是新管道**，只是现有三段各加一次转译：
@@ -238,6 +270,11 @@ interface IPipe<I, O> {
 **素材库（D034）是这条边界的延续**：`[save]名字[/save]` / `[use]名字[/use]` 里的"名字"是模型唯一的入口，
 它不能给 URL。库里存的每张图都至少被真实抓取过一次（`assets/<sha256>.<ext>`），
 所以"发图"这个动作对外只有两种来源：**公网白名单 URL** 或 **我们自己落盘的文件**。
+
+**管理面（M4，D039）**：`GET /api/instances/:id/assets`、`DELETE .../assets/:assetId`、
+`GET .../assets/:assetId/file`。三个动作对应三件事：**看见它存了什么**（隐私）、
+**删掉不想留的**（软删，名字继续占位）、**给缩略图供字节**（同源 + 会话 cookie）。
+刻意没有改名、上传、批量删 —— 理由见 D039。
 
 ---
 
@@ -276,7 +313,8 @@ decide = wake > threshold(busy ? 0.75 : 0.55)
 > **实现现状（M3-1，见 D032）**：`src/modules/mind/state/`（mood/energy 衰减 + 亲密度）与
 > `src/modules/mind/attention/`（阈值与权重来自 `Persona.behaviorJson.attention`）已接入 Pipeline，
 > 判定发生在**调模型之前**。与上式的差异只有两处：`busy` 只抬高群聊阈值（私聊的忙碌是延迟不是失联），
-> 以及**群里被 @ 必回**（硬规则，不参与阈值比较）。`reflection/`（内心独白）与 `expression/`（拆条延迟）尚未实现。
+> 以及**群里被 @ 必回**（硬规则，不参与阈值比较）。`reflection/`（内心独白，D036）与
+> `expression/`（拆条与打字延迟，D035）也已落地 —— 也就是说 6.2 / 6.3 / 6.4 三节现在都是"实现现状"。
 
 ### 6.3 双阶段生成
 
@@ -492,7 +530,25 @@ QQ 号与抖音号是**两份独立人格**，各自演化、互不可见（跨�
 | 4 | 注册依赖 | 根 `package.json` 的 dependencies 加 `"@newjob/adapter-douyin": "workspace:*"` |
 | 5 | 注册工厂 | 主服务 `modules/adapter/registry.ts` 加一行 |
 
-**之后不需要改任何东西**：前端会根据 `manifest.configFields` 自动渲染配置表单，看板根据 `manifest.metrics` 自动出现指标，主服务根据 `protocol` 自动路由。
+**之后不需要改任何东西**：前端根据 `manifest.configFields` 自动渲染配置表单，看板根据 `manifest.metrics` 自动出现指标，主服务根据 `protocol` 自动路由。
+
+### 清单驱动到哪一步（D041）
+
+"自动渲染表单"曾经只做了一半：字段渲染了，但**值怎么落到实例上**没人说。现在由清单自己说：
+
+| 声明 | 作用 |
+|---|---|
+| `ConfigField.mapsTo` | 这个字段的值写进实例的 `accountId` / `adapterMode` / `endpoint` / `accessToken` |
+| `ConfigField.requiredWhen` | 条件必填（如"反向模式必须有 token"），前端星号与后端校验同源 |
+
+```
+前端：manifest.configFields → 渲染表单 → POST adapterConfig:{字段key: 值}（不翻译）
+主服务：assertAdapterManifest（注册时）→ translateAdapterConfig（按 mapsTo 翻成实例列）
+```
+
+三条纪律（写在 `src/modules/adapter/manifest-config.ts` 的注释里）：
+**字段必须能落到槽位**（否则用户填了也没用）、**清单在注册时校验**（开发者错误让服务起不来）、
+**`adapterConfig` 与平铺字段互斥**（同一件事不许有两个来源）。
 
 **主服务里禁止出现的**：`import ... from '@newjob/adapter-douyin'` 之外的任何平台细节；`if (platform === 'douyin')`。
 
@@ -515,7 +571,7 @@ QQ 号与抖音号是**两份独立人格**，各自演化、互不可见（跨�
 | 主服务 pipeline | 否 | 读 `capabilities` 决定行为 |
 | mind / memory / persona / rules / model | 否 | 完全不感知平台 |
 | compliance | 否 | 审核强度由 `capabilities.publicReply` 驱动 |
-| 前端 | 否 | 表单由 `manifest.configFields` 生成 |
+| 前端 | 否 | 表单由 `manifest.configFields` + `mapsTo` 生成（D041） |
 
 真正需要注意的不是代码，而是**语义**：
 
@@ -536,12 +592,26 @@ QQ 号与抖音号是**两份独立人格**，各自演化、互不可见（跨�
 | 阶段 | 内容 | 验收 |
 |---|---|---|
 | **M0 安全底座** | `User` 表、DEK 信封加密、`RuntimeKeyStore`、审计哈希链 | 换个浏览器用 superadmin 登录，翻遍全部接口只看到 `sk-****a1b2` |
-| M1 骨架 | 项目初始化、Prisma schema、OneBot 连接打通、能收能发 | 在 QQ 里收到"pong" |
-| M2 最小闭环 | 单实例 + 单角色卡 + 单 Provider + 简单管道 | 私聊能正常对话 |
-| M3 拟人 | 状态机、发言决策、双阶段生成、表达层 | 群里像一个不太爱说话的人 |
-| M4 后台 | Vue 管理端：人设编辑、规则、密钥、会话查看 | 不改代码能调人设 |
+| M1 骨架 ✅ | 项目初始化、Prisma schema、OneBot 连接打通（正/反向）、能收能发 | 在 QQ 里收到"pong" |
+| M2 最小闭环 ✅ | 单实例 + 单角色卡 + 单 Provider + 管道 | 私聊能正常对话 |
+| M3 拟人 ✅ | 状态机、发言决策、双阶段生成、表达层（+ 多模态与素材库） | 群里像一个不太爱说话的人 |
+| M4 后台 ✅ | 人设 API、管理端九页（含会话查看与审计）、素材库、管道拆分、清单驱动接入配置、用户管理；剩规则/约束词配置 | 不改代码能调人设、能查"谁改了什么" |
 | M5 记忆与自主 | 三层记忆、反思任务、主动消息（默认关） | 隔天能记得昨天聊的事 |
 | M6 风控与观测 | 行为拟人、自动降级、看板、告警 | 健康分可见，异常自动停 |
+
+### 4.1 后台托管与前端边界（D038）
+
+前端是 `web/`（独立 workspace 成员），构建产物 `web/dist` 由**主服务同源托管**
+（`src/common/http/serve-admin.ts`）。三条边界：
+
+| 规则 | 原因 |
+|---|---|
+| 开发期用 Vite 代理 `/api`，生产期同源 | 不为开发方便放宽 `SameSite` 与 CORS（D005） |
+| `/api/*` 的 404 永不回落 `index.html` | 否则前端拿到 HTML，报 `Unexpected token '<'` |
+| 前端不提供"编辑原始 JSON"入口 | 写路径必须能校验（D037 的延伸） |
+
+**类型不共享**：`web/src/api/types.ts` 手抄服务端 DTO。共享要把两端编译目标对齐，
+还会把 zod 打进前端包；手抄的代价只是"改接口记得改两处"。
 
 **M0 必须排在第一位**，不是因为它最紧急，而是因为密钥的存储方式会渗透到每一个 Repository 签名和 DTO 类型。等 M2 写完再补，等于全量返工。
 

@@ -50,13 +50,27 @@ const imageHostsSchema = z
     { message: '只填域名（逗号分隔），不要带协议、路径或端口' },
   );
 
+/**
+ * 适配器配置（D041）：键来自 `manifest.configFields[].key`，由主服务按 `mapsTo` 翻译成实例列。
+ *
+ * 这里**只做形状约束**（是个对象、键是字符串、数量有上限），
+ * 具体字段与必填条件由适配器清单决定 —— 在 DTO 里写死平台字段名，就等于把
+ * "新增平台不改代码"这件事重新做废。
+ */
+const adapterConfigSchema = z
+  .record(z.string().max(64), z.unknown())
+  .refine((value) => Object.keys(value).length <= 20, { message: '接入配置项过多' });
+
+/** 两个入口写同一批槽位时必须二选一：同一件事有两个来源，就是"改了没生效"的起点 */
+const SLOT_INPUT_KEYS = ['accountId', 'adapterMode', 'endpoint', 'accessToken'] as const;
+
 export const createInstanceSchema = z
   .object({
     name: nameSchema,
     /** 平台标识；默认值在 Service 里补，不放在 zod（`.default()` 会把推断类型变成可选，很难看） */
     platform: z.string().trim().min(1).max(32).optional(),
-    /** 平台内账号标识：QQ 为 QQ 号 */
-    accountId: accountIdSchema,
+    /** 平台内账号标识：QQ 为 QQ 号。走 adapterConfig 时由清单里的 selfId 提供，此处可省 */
+    accountId: accountIdSchema.optional(),
     /** 接入方式，对应 registry 的 protocol */
     adapterType: z.string().trim().min(1).max(32).optional(),
     adapterMode: adapterModeSchema.optional(),
@@ -78,8 +92,19 @@ export const createInstanceSchema = z
     ttsModel: modelNameSchema.nullable().optional(),
     ttsVoice: ttsVoiceSchema.optional(),
     imageHosts: imageHostsSchema.optional(),
+    /** 由适配器清单驱动的接入配置（D041）；与下面四个槽位字段互斥 */
+    adapterConfig: adapterConfigSchema.optional(),
   })
-  .strict();
+  .strict()
+  .refine((value) => value.accountId !== undefined || value.adapterConfig !== undefined, {
+    message: '需要提供 accountId 或 adapterConfig',
+  })
+  .refine(
+    (value) =>
+      value.adapterConfig === undefined ||
+      SLOT_INPUT_KEYS.every((key) => value[key] === undefined),
+    { message: 'adapterConfig 与 accountId / adapterMode / endpoint / accessToken 不能同时提供' },
+  );
 
 export const updateInstanceSchema = z
   .object({
@@ -105,9 +130,20 @@ export const updateInstanceSchema = z
     ttsModel: modelNameSchema.nullable().optional(),
     ttsVoice: ttsVoiceSchema.optional(),
     imageHosts: imageHostsSchema.optional(),
+    /**
+     * 接入配置的**增量**（D041）：只传改过的键。
+     * 没传 = 不改；传了空值的必填项仍会被拒（不允许把必填项改空）。
+     */
+    adapterConfig: adapterConfigSchema.optional(),
   })
   .strict()
-  .refine((value) => Object.keys(value).length > 0, { message: '至少提供一个要修改的字段' });
+  .refine((value) => Object.keys(value).length > 0, { message: '至少提供一个要修改的字段' })
+  .refine(
+    (value) =>
+      value.adapterConfig === undefined ||
+      SLOT_INPUT_KEYS.every((key) => value[key] === undefined),
+    { message: 'adapterConfig 与 accountId / adapterMode / endpoint / accessToken 不能同时提供' },
+  );
 
 export const instanceIdSchema = z.string().trim().min(1).max(64);
 

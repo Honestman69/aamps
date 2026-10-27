@@ -12,7 +12,10 @@ import type {
   CreateAssetInput,
   CreateAssetResult,
   IMediaAssetRepository,
+  MediaAssetAdminRecord,
+  MediaAssetListOptions,
   MediaAssetRecord,
+  MediaAssetStats,
 } from '../ports';
 
 const SELECT = {
@@ -29,6 +32,17 @@ const SELECT = {
   lastUsedAt: true,
   createdAt: true,
 } as const;
+
+/** 管理端多要两列：怎么来的、是否已软删 */
+const SELECT_ADMIN = { ...SELECT, source: true, deletedAt: true } as const;
+
+/** 归属过滤：素材挂在实例上，实例挂在用户上 —— 一步到位的 where，不做"查出来再判断" */
+function ownedBy(userId: string, instanceId?: string) {
+  return {
+    ...(instanceId ? { instanceId } : {}),
+    instance: { ownerUserId: userId },
+  } as const;
+}
 
 export class PrismaMediaAssetRepository implements IMediaAssetRepository {
   constructor(private readonly prisma: PrismaClient) {}
@@ -98,6 +112,75 @@ export class PrismaMediaAssetRepository implements IMediaAssetRepository {
   async softDelete(instanceId: string, alias: string, now: Date): Promise<boolean> {
     const { count } = await this.prisma.mediaAsset.updateMany({
       where: { instanceId, alias, deletedAt: null },
+      data: { deletedAt: now },
+    });
+    return count > 0;
+  }
+
+  // ── 管理端 ──
+
+  async listForUser(
+    userId: string,
+    instanceId: string,
+    options: MediaAssetListOptions,
+  ): Promise<MediaAssetAdminRecord[]> {
+    return this.prisma.mediaAsset.findMany({
+      where: {
+        ...ownedBy(userId, instanceId),
+        ...(options.includeDeleted ? {} : { deletedAt: null }),
+      },
+      select: SELECT_ADMIN,
+      // SQLite 里 NULL 排在最前：可用的（deletedAt 为 null）自然排在已删的前面
+      orderBy: [{ deletedAt: 'asc' }, { useCount: 'desc' }, { createdAt: 'desc' }],
+      take: options.limit,
+      skip: options.offset,
+    });
+  }
+
+  async countForUser(
+    userId: string,
+    instanceId: string,
+    options: Pick<MediaAssetListOptions, 'includeDeleted'>,
+  ): Promise<number> {
+    return this.prisma.mediaAsset.count({
+      where: {
+        ...ownedBy(userId, instanceId),
+        ...(options.includeDeleted ? {} : { deletedAt: null }),
+      },
+    });
+  }
+
+  async statsForUser(userId: string, instanceId: string): Promise<MediaAssetStats> {
+    const usableWhere = { ...ownedBy(userId, instanceId), deletedAt: null } as const;
+    const [usable, deleted, sum] = await Promise.all([
+      this.prisma.mediaAsset.count({ where: usableWhere }),
+      this.prisma.mediaAsset.count({
+        where: { ...ownedBy(userId, instanceId), deletedAt: { not: null } },
+      }),
+      this.prisma.mediaAsset.aggregate({ _sum: { bytes: true }, where: usableWhere }),
+    ]);
+    return { usable, deleted, bytes: sum._sum.bytes ?? 0 };
+  }
+
+  async findForUser(
+    userId: string,
+    instanceId: string,
+    assetId: string,
+  ): Promise<MediaAssetAdminRecord | null> {
+    return this.prisma.mediaAsset.findFirst({
+      where: { id: assetId, ...ownedBy(userId, instanceId) },
+      select: SELECT_ADMIN,
+    });
+  }
+
+  async softDeleteForUser(
+    userId: string,
+    instanceId: string,
+    assetId: string,
+    now: Date,
+  ): Promise<boolean> {
+    const { count } = await this.prisma.mediaAsset.updateMany({
+      where: { id: assetId, ...ownedBy(userId, instanceId), deletedAt: null },
       data: { deletedAt: now },
     });
     return count > 0;

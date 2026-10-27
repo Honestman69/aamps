@@ -5,28 +5,33 @@
 > **换机器 / 全新克隆先读 [`AGENTS.md`](../AGENTS.md) 的「换机器 / 全新克隆」**——
 > 仓库里没有 `.env`、没有数据库，直接 `pnpm dev` 会失败。
 
-**最后更新**：2026-10-25
-**当前阶段**：**M3 已完成**（拟人：状态机 / 发言决策 / 双阶段生成 / 表达层，外加多模态与素材库），
-已合并 `main` 并打标签 `m3-persona`。
-M2 及之前全部完成（私聊能对话）。
+**最后更新**：2026-10-27
+**当前阶段**：**M4 收尾完成** —— 人设 API（24）、前端工程与静态托管（25）、素材库（26）、
+管道拆 13 个 pipe（27）、接入配置清单驱动（28，D041）、用户管理（29，D042）、
+会话查看（30，D043）、**审计页（31，D044）** 已完成。后台已有九页，M3 已打标签 `m3-persona`。
 
-**下一步（默认走这条）**：**M4 管理后台** —— Vue3 工程 + 登录页 + 人设编辑器 + 密钥管理页。
-但**先做一件事**：现在所有配置只能改库或走 HTTP 接口（`modelVision` / `ttsCredentialId` / 素材列表都没有界面），
-M4 的第一页应该是"实例设置"，把 D033/D034 那批字段暴露出来，否则它们实际上是不可用的。
+**下一步（默认走这条）**：**M4 合并** —— `feat/m4-admin` → `main`（`--no-ff`）并打标签 `m4-admin`，
+然后进 M5 记忆与反思（管道插槽已就位：`07a-load-memory` / `08a-inject-memory` / `13a-write-memory`）。
 
-M4 之前可选的一条：**M5 的记忆与自主**里的反思任务——它是唯一能给 `mood`/`SelfState` 长期演化的东西；
-不做它，人格只会"当下像人"，不会"越聊越熟"。
+> M4 清单里还剩「规则/约束词配置」未做，它要先把红线存储的 API 形状定下来（见 M4 小节），
+> 不阻塞合并 —— 合并的是"后台能用"，不是"后台完美"。
 
 > **多模态要配三样才生效**（都在实例上）：`modelVision`（看图）、`ttsCredentialId` + `ttsModel`（发语音）。
 > 不配就是"能力不存在"——图片只留「[图片]」占位，prompt 里也不提 `[voice]`。
 > **素材库不需要配置**：平台支持发图即可用，模型说 `[save]名字[/save]` 就存，说 `[use]名字[/use]` 就发。
 
-**M2 已完成的完整链路**（`PipelineService.handle`）：
-入站消息 → 会话/消息落库 → 取 owner + 人设 + 配置（会话开关）→ 状态衰减 + 关系读取
-→ `buildWindow`（D031）→ **attention 判定（M3，判掉就不花 token）** → 拼 system prompt（D020，含语气提示）
-→ `ModelGateway.chat`（D024 预算 / D025 熔断 / 记账）→ `decideQuote`（D030）→ 出站 + 落库
-→ 状态/关系回写。
-失败走 `faultToSlot` + `decideSpeak` + `resolveFallback`（D028/D026），可能静默。
+**当前一条消息的完整链路**（13 个 pipe，见 `pipeline/pipes/index.ts` 与 ARCHITECTURE 第 5 节）：
+
+```
+persist-inbound → load-context → governance → load-mind → load-window
+→ attention（判掉就不花 token）→ collect-media → assemble-prompt（D020）
+→ think（D036，可关）→ generate（D024 预算 / D025 熔断 / 记账）
+→ decide-quote（D030）→ deliver（D033/D035：媒体 + 拆条 + 延迟 + 回 @）
+→ persist-interaction（花精力 / 推动 mood / 长亲密度）
+```
+
+判掉（治理、窗口空、attention 不回）走 `DROP` 安静结束；故障走
+`faultToSlot` + `decideSpeak` + `resolveFallback`（D028/D026），可能静默。
 
 **另一条路（只在"准备上云"时才走）**：P0-2 部署拓扑选型（Tailscale 组网 vs 公网反代），
 它决定一键接入包的 URL/证书策略；不做它也不影响本地开发。
@@ -400,7 +405,7 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 - [x] 只有接入参数变化才重连：改模型/温度/预算不再把连接踢掉
 - [x] 写路径主动失效配置缓存（update / delete）
 
-**还没做的**（M2 后续）：
+**当时记的待办**（M2 之后已全部补齐；保留原文是为了留下"当初为什么这么排"）：
 
 - [x] `ModelGateway`：路由 + 超时 + 重试 + 记账（+ 错误分类与熔断） + 错误码识别（402 → `balance` 熔断）
 - [x] `openai-compatible` Provider 适配器
@@ -532,6 +537,369 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 
 **Pipeline 的出站回调设计**：`send` 作为 `handle(message, send)` 的参数而非依赖注入 ——
 因为 send 绑定到"当前这条连接的 adapter"，每个实例的 adapter 不同，不能全局注入一个。
+
+---
+
+### ~~第 31 步：M4-7 审计页——谁在什么时候动了什么~~ ✅ 已完成（D044）
+
+**为什么做**：`/api/admin/audit` 与哈希链校验从第 9 步就在，但只有 curl 能看。
+出事时（"这个 Key 谁换的""谁把实例删了""密码是不是被重置过"）没人会去敲命令行 ——
+接口存在但不等于可用，这一页补的是"人能不能看懂"。
+
+**做了什么**
+
+- [x] `web/src/views/AuditView.vue`：只读审计页 —— 时间 / 操作者 / 动作 / 目标 / IP 五列，
+      工具条可按关键词与模块筛选，条数三档（100 / 200 / 500）
+- [x] 动作码给中文（`credential.rotate` → 轮换密钥）+ 原码小字；**没配文案的动作显示原码**，
+      新动作不用先改前端才能上
+- [x] 危险动作（删除 / 轮换 / 停用 / 归档 / 重置密码 / 代登录）红标，登录与解锁类弱化为灰
+- [x] 展开行：改前/改后并排，真正变了的字段加重；只有一侧时标「新建」/「删除」，
+      两侧都空时明说"这类事件只记发生过"；下方给该条的 `hash` 与 `prev`
+- [x] **id → 名字**：另拉 `/api/admin/users` + `/api/instances` 建对照表，
+      操作者/目标/归属都显示人名或实例名；查不到（含已删除实例）退回短 id
+- [x] 「校验链完整性」按钮 → `POST /api/admin/audit/verify`：成功显示核对了多少条，
+      失败显示第 N 条 + 原因 + 记录 id，并把该行标红 + 「只看这条」；
+      断点比当前窗口更早时明说"调大显示条数"，不给点了没反应的按钮
+- [x] 路由 `/audit`（`adminOnly`）+ 侧栏入口（仅 superadmin）
+- [x] `web/src/api/`：`AuditEntry` / `AuditChainVerifyResult` 类型 + `admin.audit()` / `admin.verifyAudit()`
+- [x] `http-smoke` 补 2 项：三档 `limit` 全部 200、`0` / `501` 均 400（前端档位与服务端上限的契约）
+
+**验收**
+
+- `pnpm typecheck` / `pnpm web:typecheck` / `pnpm build` / `pnpm web:build` 全部通过
+- `pnpm test` **567 个用例全绿**（纯前端改动，未动服务端用例）
+- `http-smoke` **78 项**全过（新增 2 项 `limit` 边界），`pipeline-smoke` 11 项不受影响
+- `check:local-data` PASSED（304 文件）
+- **真浏览器**（Chrome headless + CDP，14 项断言）：表单登录 → 点侧栏「审计」→ 38 条记录、
+      五列齐全、时间 `2026-10-27 21:00:59` 可读、动作有中文、操作者显示 `smoke_http_admin`
+      → 展开显示出「新建 / 2 个字段 / hash + prev」→ 校验返回「链完整…38 条」
+      → 关键词 `credential.rotate` 过滤到 1 条 → 无 JS 异常
+- **断链路径**（真实篡改一条 `afterJson` 后再还原）：页面显示「链在第 11 条断了 / hash 与内容不匹配 /
+      记录 id …」，该行标红，「只看这条」把表筛成 1 行；还原后重算回到「链完整」
+
+**实现补充（后续不要改）**
+
+- **只读**：没有删除/清空/导出。日志是证据，能改的日志等于没有日志（D044）。
+- **筛选在前端**：服务端仍只认 `limit`。要分页时加的是 `before` 游标（与 D043 同思路），
+  不是 `where` 组合 —— 别在接口上先长出一堆查询参数。
+- **id 换名字失败要静默降级成 id**，不能让整页打不开；已删除实例显示 id 是正确行为。
+- **断点定位用筛选而不是滚动**：`el-table` 行高随展开变化，`index * rowHeight` 是脆弱近似。
+
+---
+
+### ~~第 30 步：M4-6 会话查看——机器人到底跟谁说了什么~~ ✅ 已完成（D043）
+
+**为什么做**：在这之前排查"它怎么这么说话""为什么没回我"只能直连 SQLite 手动查表 ——
+不方便，而且容易在真库上误敲一条 `UPDATE`。
+
+**做了什么**
+
+- [x] `GET /api/instances/:instanceId/sessions`：会话列表（对端、类型、实时条数、最后一条摘要、
+      `aiPaused` / `muted` 标记），返回 `total`
+- [x] `GET /api/sessions/:sessionId/messages?limit=&before=`：消息历史，**按时间升序**返回，
+      `hasMore` 表示还能往前翻
+- [x] `session/` 第一次有自己的 module + controller：只读仓储 `PrismaSessionAdminRepository`，
+      与 Pipeline 的写入仓储分开（写路径不该长出 `listForUser` 这种查询方法）
+- [x] 消息条数**实时 groupBy**（`Session.messageCount` 列从未被维护，读它每个会话都是 0）
+- [x] 「最后一条消息」用一次 groupBy + 一次 `(sessionId, createdAt)` OR 查询，不是每会话一条（避免 N+1）
+- [x] 游标用 **message id**（Prisma `cursor` + `(createdAt desc, id desc)`）：拆条发送时两条消息
+      可能同一毫秒落库，用时间戳做游标会漏
+- [x] 媒体只返回**类型标签**（`image` / `voice` / `at` …），**不带 URL**
+- [x] 内心独白解析成结构（兼容库里 camelCase 与模型 snake_case），坏数据降级为 `null`
+- [x] 前端 `SessionsView`：左会话列表 + 右消息流（气泡、日期分隔、媒体标签、拦截标记、
+      内心独白折叠），打开即滚到最新一句，可「加载更早」
+- [x] 实例列表行加「会话」入口
+
+**验收**
+
+- `pnpm test` **567 个用例全绿**（新增 12：列表 404/截断/空会话/群聊、消息 404/cursor/坏 JSON、
+  `mediaTypes`、`toThinkView` 双命名兼容）
+- `pnpm typecheck` / `pnpm web:typecheck` / `pnpm build` / `pnpm web:build` 全部通过
+- `http-smoke` **76 项**（新增 7：空实例返回 `total=0`、未登录 401、实例不存在 404、
+  `limit` 越界与未知参数 400、别人的实例 404、消息不存在 404、消息 `limit` 越界 400）
+- `pipeline-smoke` **11 项**（新增⑪：真实 SQL 上列表 1 个会话 / 17 条消息 / 实时条数等于真实条数 /
+  游标翻页取到更早 / 别人的会话 404）
+- `check:local-data` PASSED（296 文件）
+- **真浏览器**（Chrome CDP）：列表显示 2 个会话（私聊 7 条、群聊 2 条 + 人工接管标记）→
+  消息流 7 个气泡、图片标签、`被拦截 · rule:redline-1`、独白可展开（意图/语气/长度/要点/想回 80%）
+  → 切群聊正常 → 无运行期异常
+
+**实现补充（后续不要改）**
+
+- **只读，没有删除**：消息是排查的唯一证据，给它删除按钮等于先擦掉证据。
+- **`Session.messageCount` 是死列**（没有任何写入方）。要么实时算，要么永远显示 0 ——
+  不要"顺手读一下"。
+- **消息游标必须是 id**，不是 `createdAt`：同一毫秒的多条消息只按时间比会漏。
+- **媒体只给类型**：URL 是协议端临时链接，几小时就失效，扩散到后台没有价值。
+- **实例不存在 → 404**，不是空列表：两者的排查含义完全不同。
+
+---
+
+### ~~第 29 步：M4-5 用户管理——建号 / 角色 / 启停~~ ✅ 已完成（D042）
+
+**为什么现在做**：`role` 早就是 `superadmin | user` 两种，业务接口完全不看它，
+但**没有建号入口** —— 只有 `BOOTSTRAP_ADMIN_*` 能建那一个管理员，想给家人/朋友开个号只能改库。
+"管理员自己也当普通用户用"是支持的（他不需要第二个账号），缺的只是"再建一个人"这件事。
+
+**做了什么**
+
+- [x] `src/modules/auth/user-admin.service.ts`：建号（只写 `keySalt`、不生成 DEK、租户只取会话）、
+      改显示名 / 角色 / 启停、幂等判断、审计（`user.create` / `user.update`）
+- [x] `IUserAdminMutationRepository.updateForAdmin`：`updateMany` + `where {id, tenantId}`，
+      跨租户只会得到 0 条（不"先查再判"，没有 TOCTOU 窗口）
+- [x] **改角色 / 停用必须撤销会话**（`SessionService.destroyForUser`）：`role` 与 `status`
+      在会话里是登录时的快照，不踢会话会出现"降级了但还是管理员"
+- [x] **停用还要 `keyStore.clearForUser`**：不清内存 DEK，主链路仍能按 owner 取到它，
+      机器人会继续替一个已停用的账号说话
+- [x] **不能停用自己、不能降级自己**（403）：单管理员部署里那是把自己锁死
+- [x] `POST /api/admin/users`、`PATCH /api/admin/users/:id`；列表补 `isSelf`
+- [x] 前端 `UsersView`：账号列表（角色下拉 / 启停开关 / DEK 是否初始化 / 最后登录）、
+      新建（用户名·显示名·密码·角色）、重置密码（要求二次输入目标用户名）；
+      自己那行的停用/降级/重置按钮全部置灰
+- [x] 导航「用户」只对 superadmin 显示；路由 `adminOnly` 守卫（普通用户手敲 URL 静默送回列表）
+
+**验收**
+
+- `pnpm test` **555 个用例全绿**（新增 11：user-admin service）
+- `pnpm typecheck` / `pnpm web:typecheck` / `pnpm build` / `pnpm web:build` 全部通过
+- `http-smoke` **69 项**（新增 11：建号 / 重复用户名 409 / 密码太短 400 / 新号能登录且首次生成 DEK /
+  普通号访问管理接口 403 / 普通号能用业务接口且看不到别人的实例 / 停用后旧 cookie 立刻 401 /
+  停用后无法登录 / 重新启用能登录 / 不能停用自己 403 / 改显示名不踢会话）
+- `pipeline-smoke` 10 项；`check:local-data` PASSED（293 文件）
+- **真浏览器**（Chrome CDP）：菜单出现「用户」→ 列表显示两人（自己那行带「你」且开关/角色/重置都置灰）→
+  新建账号后出现「未初始化 · 首次登录时生成」→ 点停用 → 确认框写明"会被踢下线"→ 表格变「已停用」；
+  接口状态与界面一致；全程无运行期异常
+
+**实现补充（后续不要改）**
+
+- **建号绝不生成 DEK**：只写盐。生成 DEK 的那一刻，建号方就成了"能解开对方 Key 的人"，零知识作废。
+- **改角色和停用都必须撤销会话**：会话里的 `role` / `status` 是快照，不撤销等于改了没生效。
+- **停用清内存 DEK，但不要销毁 `wrappedDek`**：清的是缓存，重新启用后原密码能解回原 DEK，
+  Key 全部可用 —— "停用"不是"销毁"。
+- **不允许停用/降级自己**：要交接先建第二个 superadmin。
+- **不做删号**：实例/人设/Key/素材都挂在他身上，删人会级联带走全部数据。
+- **前端 `isSuperadmin` 只决定菜单显不显示**，权限判定在后端。
+
+---
+
+### ~~第 28 步：M4-4 接入配置由适配器清单驱动~~ ✅ 已完成（D041）
+
+**为什么这一步重要**：D013 承诺"加平台不改前端"，而此前只有**一半**兑现 ——
+`GET /api/adapters` 早就在返回 `configFields`，但新建实例表单写死的是实例契约字段，
+与适配器声明的（`selfId` / `wsUrl` / `mode`）对不上。缺的就是那张映射。
+
+**做了什么**
+
+- [x] `contracts`：`ConfigField` 增 `mapsTo`（指向 `accountId` / `adapterMode` / `endpoint` / `accessToken`）
+      与 `requiredWhen: { field, in }`（条件必填）
+- [x] `packages/adapter-qq/manifest.ts`：四个字段各自声明 `mapsTo`；
+      token 的 `requiredWhen` 写 `{ field: 'mode', in: ['server'] }` ——
+      "反向必须有 token"（D019）从此只有一份定义，前端星号与后端校验都读它
+- [x] `src/modules/adapter/manifest-config.ts`：
+      `assertAdapterManifest`（注册时校验：缺 `mapsTo` / 抢槽位 / select 选项非法 / `requiredWhen` 指向不存在的字段 /
+      没有 `accountId` 映射）、`translateAdapterConfig`（未知字段 400、必填 400、类型规整）、
+      `isFieldRequired` / `requiredFieldKeys`
+- [x] `AdapterRegistry.register` 里调用 `assertAdapterManifest`：不合规的适配器**启动即失败**
+- [x] `POST /api/instances` 与 `PATCH /api/instances/:id` 接受 `adapterConfig`；
+      与四条平铺槽位字段**互斥**（同时给 → 400）；更新是**增量**且按当前实例的清单翻译
+- [x] `web/src/components/AdapterConfigForm.vue`：按清单渲染 text / password / number / switch / select / textarea，
+      新建与设置**共用**；`web/src/api/adapter-config.ts` 放共享判定（必填、默认值、从实例反查、算增量）
+- [x] 设置页的接入区块改为清单驱动：`valuesFromInstance` 按 `mapsTo` 反查当前值，
+      保存只发 `changedValues(...)` 的差分（否则每次保存都触发重连）
+- [x] **顺手修掉一个从第 25 步就存在的真 bug**：设置页 `dirty` 是 computed，
+      首次求值时 `origin` 还是 `null` 且非响应式 → 早退分支没收集依赖 → `dirty` 永远 `false`，
+      现象是"改了东西但保存按钮一直灰着"。现在 `origin` / `originConfig` 都是 `ref`
+
+**验收**
+
+- `pnpm test` **544 个用例全绿**（新增 42：manifest-config 23 + instance adapterConfig 8 + dto 9 + registry 2）
+- `pnpm typecheck` / `pnpm web:typecheck` / `pnpm build` / `pnpm web:build` 全部通过
+- `http-smoke` **58 项**（新增 6：只给 adapterConfig 能建 / 两者同给 400 / 未知字段 400 /
+  反向漏 token 400 / 增量改账号 / 改空必填 400）
+- `pipeline-smoke` 10 项；`check:local-data` PASSED（288 文件）
+- **真浏览器**（Chrome headless + CDP）：新建对话框渲染出清单里的四个字段（反向模式下四个都带必填星号）、
+  不填实例名被拦、创建后 `accountId` 来自 `selfId`；设置页同样的字段且值已按 `mapsTo` 反查、
+  token 显示"已配置，留空表示不修改"；改账号 → 按钮变可用 → 保存后 `accountId` 变、`endpoint` 不变；
+  全程无运行期异常
+
+**实现补充（后续不要改）**
+
+- **`mapsTo` 写在字段上，不单独维护一张映射表**：独立表会漂移（字段有、映射漏），字段上的不可能漏。
+- **只认四个槽位**：塞不进这四个槽的字段意味着 `BotInstance` 缺列 —— 那是表结构变更，
+  不许出现"填了但没地方存"的字段。
+- **清单在注册时校验**，不是创建时：那些是适配器开发者的错，应该让服务起不来。
+- **`adapterConfig` 与平铺字段互斥**：同一件事两个来源，就是"改了没生效"的起点。
+- **更新必须按当前实例的清单翻译**（先 `findForUser` 拿 platform/adapterType），
+  用请求体的 platform 猜会静默丢字段。
+- **前端不翻译**：`web/` 只回传 `{ 字段key: 值 }`，翻译只有一份（在后端）。
+
+---
+
+### ~~第 27 步：管道重构——706 行拆成 13 个 pipe~~ ✅ 已完成（D040）
+
+**为什么先做这个：M5 要往链路上插"取记忆 → 注入 prompt → 写回记忆"**，
+而当时的形态是一个 706 行的 `process()`（M2 时约 200 行，M3 四件事全往里加）。
+加一种人格行为 = 在大函数中间插一段，且没有任何检查告诉你依赖是否就绪。
+
+**做了什么**
+
+- [x] `pipeline.Service` 只留编排：入队串行、跑链、兜底、清理（**706 → 190 行**）
+- [x] `pipeline/pipes/` 一步一文件，共 13 个：
+      `persist-inbound` → `load-context` → `governance` → `load-mind` → `load-window` →
+      `attention` → `collect-media` → `assemble-prompt` → `think` → `generate` →
+      `decide-quote` → `deliver` → `persist-interaction`
+- [x] `PipelineContext`（强类型，不用 `Map<string, unknown>`）；
+      `createContext` 是**全文唯一一处 `as`**，并把"为什么"写在旁边
+- [x] 每个 pipe 声明 `requires` / `provides`，`assertPipeGraph` 在**构造函数里**校验
+      （字段没人提供 / 两个 pipe 抢写 / 名字重复 → 启动即失败）
+- [x] `DROP`（判定不该回）与 `throw`（故障 → 兜底话术）在代码路径上分开，
+      `runPipeChain` 里**故意没有 try**
+- [x] `pipeline/deps.ts`：依赖类型独立成文件，断掉 `service ↔ pipes` 的循环 import
+
+**验收（这次的关键是"数值不变"）**
+
+- `pnpm test` **502 个用例全绿**（+13，全在 `test/pipeline/pipes.test.ts`）；
+      **没有修改任何既有用例** —— 这是纯重构的证据
+- `pipeline-smoke` 10 项：`energy=0.740`、`affinity=3`、`mood=1.00` 与重构前**逐位相同**
+- `http-smoke` 52 项、`typecheck`、`build`、`web:build` 全过
+- 新增顺序不变量测试 4 条：落库在最前/回写在最后、`attention` 早于 `generate`、
+      `governance` 早于 `load-mind`、`decide-quote` 早于 `deliver`
+
+**实现补充（后续不要改）**
+
+- **业务逻辑不许写回 `pipeline.service.ts`**（AGENTS 硬性规则 11）。那里只剩编排。
+- **`requires` / `provides` 必须如实填**：它俩是启动校验的输入，写假了等于把校验关掉。
+- **pipe 里不要 `try/catch` 兜底**：兜底是编排层职责，pipe 自己 catch 会让 D028 的限频失效。
+- **`deliver` 仍是"express + send + persist"一体**：拆条/延迟/发送/落库是同一件事的三段，
+  拆开要在两个 pipe 之间传半成品。M6 加节流与合规审核时再拆。
+- **`contracts/pipe.ts` 的 `IPipe` 仍未启用**（已加注释说明）：两套抽象并存比只有一套更糟。
+
+---
+
+### ~~第 26 步：M4-3 素材库管理——可观测、可删~~ ✅ 已完成（D039）
+
+**为什么先做这个**：D034 写了"存失败时后台素材列表能立刻看出没存上"，
+而那个列表此前**不存在** —— 模型说了"存好了"却没存上时，用户无处可查。
+
+**做了什么**
+
+- [x] `MediaModule`：把素材库 / 图片抓取 / 语音合成从 Pipeline 私有提升为模块级，
+      Pipeline 变成它的消费者（不再在 `pipeline.module.ts` 里 `new` 这些实现）
+- [x] 仓储加 5 个**带 owner** 的方法：`listForUser` / `countForUser` / `statsForUser` /
+      `findForUser` / `softDeleteForUser`，where 一律 `instance: { ownerUserId }`
+- [x] `MediaAdminService`：列表 + 统计、软删、取文件；删除记审计（`asset.delete`，只记别名与字节数）
+- [x] 三个接口：`GET /api/instances/:id/assets`、`DELETE /api/instances/:id/assets/:assetId`、
+      `GET /api/instances/:id/assets/:assetId/file`（流式返回字节，`private, max-age=300`）
+- [x] 前端 `AssetsView`：统计条（用量/上限、占用、已删）、缩略图网格、含已删除开关、
+      删除二次确认、破图降级（不再显示裂图图标）
+- [x] 入口：实例列表行内「素材」、实例设置「打开素材库」
+
+**验收**
+
+- `pnpm test` **489 个用例全绿**（新增 10：列表过滤与分页、软删 + 审计、幂等删除、404、文件丢失）
+- `pnpm typecheck` / `pnpm web:typecheck` / `pnpm build` / `pnpm web:build` 全部通过
+- `http-smoke` **52 项**（新增 4：空列表带统计、非法 query 400、删除不存在 404、取不存在文件 404 JSON）
+- `pipeline-smoke` 10 项；`check:local-data` PASSED（263 文件）
+- **真浏览器**（Chrome headless + CDP）：缩略图 `naturalWidth=96` 真的渲染出来、
+  点删除 → 确认框 → 卡片消失且统计 +1、全程无运行期异常
+
+**实现补充（后续不要改）**
+
+- **只读 + 软删**：不做改名（旧对话里的 `[use]名字[/use]` 会指到别处）、
+  不做上传（没有上传通道）、不做批量删（没有撤销，误点就没了）。
+- **`fileUrl` 由服务端拼**：前端拿到的就是完整地址，路径结构不进浏览器。
+- **文件用流式返回，不用 `reply.sendFile()`**：那是 `@fastify/static` 的相对根（`web/dist`），
+  素材在 `data/media`，两个根混用极易写错。
+- **「文件丢了」与「素材不存在」分开报**：前者是 `ASSET_FILE_MISSING`。
+  用户手工清过 `data/media`、或换机器没搬媒体目录时，必须能看出是盘的问题。
+- **删除幂等**：已经删过的再删返回成功但**不重复记审计**（否则双击删除看起来像删了两个）。
+- **素材文件仍无自动清理**：`data/media/assets` 按内容去重后增长很慢，清理归 M6 的 worker。
+
+---
+
+### ~~第 25 步：M4-2 前端工程与静态托管~~ ✅ 已完成（D038）
+
+**做了什么**
+
+- [x] `web/` 成为 pnpm workspace 成员（Vue 3 + Vite + TS + Pinia + vue-router + Element Plus）
+- [x] **五页**：登录 / 实例列表（含新建、连接、断开、启用开关、删除）/ 实例设置（基础·预算·模型·多模态·接入）
+      / 人设编辑器（基本信息·补充设定·示例·开场白·软禁区·行为参数·故障话术）/ 密钥（新增·轮换·启停·删除）
+- [x] `web/src/api/client.ts`：只用相对 `/api`，错误统一成 `ApiError`（带 `code`/`status`），
+      **网络错误不当 401**（后端重启不该把人踢回登录页）
+- [x] 路由守卫：未登录送 `/login?next=`；已登录访问登录页回列表
+- [x] 布局里显式提示"密钥库已锁定"并就地解锁 —— 服务重启后会话还在、DEK 没了，
+      不提示的话用户只会看到"机器人不回消息"
+- [x] `src/common/http/serve-admin.ts`：主服务托管 `web/dist`（SPA 回落 + `/api` 不回落 +
+      目录穿越 403 + hash 资源长缓存），产物缺失时只打印一行提示、不阻塞纯后端开发
+- [x] `scripts/http-smoke.ts` 增加 6 项托管断言（首页 / 深链回落 / 未知接口 404 JSON /
+      `/api` 鉴权不受影响 / immutable 缓存 / 目录穿越 403）
+
+**验收**
+
+- `pnpm typecheck`（主服务）+ **`pnpm web:typecheck`**（vue-tsc）均无错误
+- `pnpm test` **479 个用例全绿**（本轮未新增单测：前端没有测试基建，
+  验证走"构建 + 真浏览器"两道路径，见下）
+- `pnpm build` + `pnpm web:build` 通过（前端产物 349 KB gzip，Element Plus 全量引入）
+- `pipeline-smoke` 10 项、`http-smoke` **48 项**全过；`check:local-data` PASSED（244 文件）
+- **真浏览器验证**（本机 Chrome headless + CDP，不装 Playwright）：
+  未登录访问 `/instances` → 跳 `/login`；登录后实例/设置/人设/密钥四页
+  文本与控件均正确渲染；设置页在无改动时"保存/放弃改动"均为 disabled；全程无 JS 运行期异常
+
+**实现补充（后续不要改）**
+
+- **不开 CORS**：开发期走 Vite 代理，生产期同源托管。跨端口要同时放宽 `SameSite` 与 CORS 白名单，
+  等于为了开发方便削弱线上策略（D005）。
+- **`sendFile` 必须用 POSIX 分隔符**：Windows 上 `path.relative` 给的是 `assets\x.js`，
+  `@fastify/static` 会把反斜杠路径判成非规范路径直接 403。这个坑只在 Windows 出现，
+  而且表现为"CSS 能加载、JS 500"，很容易误判成构建问题。
+- **`/api` 永不回落 `index.html`**：否则前端 `fetch` 会拿到 HTML，报 `Unexpected token '<'`。
+- **静态资源本身不鉴权**：`index.html` 只是空壳，数据全靠会话 cookie；这和安全不冲突。
+- **前端类型是手抄的**（`web/src/api/types.ts`），不共享主服务类型：两边编译目标不同
+  （Bundler/DOM vs commonjs），共享会把 zod 打进前端包。
+
+---
+
+### ~~第 24 步：M4-1 人设 API——增删改查 / 发布 / 归档 / 启用~~ ✅ 已完成（D037）
+
+**做了什么**
+
+- [x] `src/modules/persona/dto.ts`：入参出参都是**对象**（不是 JSON 字符串），
+      `behavior` / `fallbacks` / `identity` / `examples` / `promptBlocks` 全部 zod 严格校验
+      （拼错字段名 400，而不是"保存成功但没生效"）
+- [x] `ports.ts` + `prisma-persona.repository.ts`：所有读都带 `instance.ownerUserId`，
+      没有 `findById`；列表默认不含归档
+- [x] `persona.service.ts`：生命周期规则（D037）—— 草稿不能启用、改已发布即 version+1 并刷新快照、
+      发布幂等、归档顺手解除 `activePersonaId`、每个写动作留审计（只记 name/status/version）
+- [x] `persona.controller.ts`：7 个路由（列表/新建/详情/更新/发布/归档/启用），全部走 `SessionGuard`
+- [x] 审计新增 5 个 action（`persona.create/update/publish/archive/activate`）
+
+**验收**
+
+- `pnpm test` **479 个用例全绿**（新增 27：persona service 13 + dto 14）
+- `pnpm typecheck` / `pnpm build` 通过
+- `http-smoke` **42 项**全过（新增 10 项人设流程：新建草稿→列表→草稿启用被拒→发布→启用→
+  改已发布升版本→拼错字段 400→合法参数落库→404→归档并解除激活）
+- `pnpm check:local-data` PASSED（235 个文件）
+
+**接口清单（M4-2 前端直接用）**
+
+```
+GET    /api/instances/:instanceId/personas[?includeArchived=1]
+POST   /api/instances/:instanceId/personas
+GET    /api/personas/:id
+PATCH  /api/personas/:id
+POST   /api/personas/:id/publish
+POST   /api/personas/:id/archive
+POST   /api/personas/:id/activate
+```
+
+**实现补充（后续不要改）**
+
+- **改已发布的人设 = 新版**（version+1 + 刷新快照）。不要改成"退回草稿"：那会让线上瞬间没有人设。
+- **草稿不能启用**：409 并提示"请先发布"。
+- **归档解除激活**：否则排查时会看到"archived 人设在生效"。
+- **审计不记人设正文**：内容可能很长、也可能含私人设定。
+- **出参把 JSON 字段还原成对象**，库里的脏 JSON 宽容回落空结构（编辑页不该被一条坏数据打挂）。
 
 ---
 
@@ -791,11 +1159,16 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 
 > 目标：M1~M3 阶段**没有页面**，操作一律走 HTTP 接口（`scripts/connect-instance.ts` 是临时的连接入口）。
 
-- [ ] Vue3 工程 + 登录页
-- [ ] 人设编辑器
-- [ ] 规则/约束词配置
-- [ ] 密钥管理页 + 新增向导（强制测试连接）
-- [ ] 会话查看
+- [x] 人设 API（第 24 步，D037）
+- [x] Vue3 工程 + 登录页（第 25 步，D038）
+- [x] 实例设置（把多模态那几个只能改库的字段暴露出来）
+- [x] 人设编辑器（第 25 步）
+- [x] 密钥管理页（新增 / 轮换 / 启停 / 删除；"强制测试连接"仍未做）
+- [x] 素材库管理页（第 26 步，D039）
+- [x] 用户管理页（第 29 步，D042：建号 / 角色 / 启停 / 重置密码）
+- [x] 会话查看（第 30 步，D043：会话列表 + 消息记录，只读）
+- [x] 审计页（第 31 步，D044：列表 + 改前改后 + 哈希链校验与断点定位，只读）
+- [ ] 规则/约束词配置（红线独立存放，需先定 API 形状）
 
 ### M5 记忆与自主
 
@@ -900,4 +1273,12 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 | 2026-10-25 | 多模态落地（D033）：`media/` 模块（URL 白名单、入站图片抓取、媒体意图解析、TTS）+ 实例字段迁移 `media_capabilities` + Pipeline 出站多媒体；修复主链路 DEK 取用键错误；382 单测、pipeline-smoke 7 项全过 |
 | 2026-10-25 | 素材库落地（D034）：`MediaAsset` 迁移 + `assets/` 服务与仓储 + `[save]`/`[use]` 指令 + prompt 清单 + 适配器 `mface` 映射；407 单测、pipeline-smoke 9 项全过 |
 | 2026-10-25 | 表达层落地（D035）：拆条（不丢内容）/ 打字延迟（只乘不减、12s 上限）/ 回 @ / 同会话串行 / 消息级种子；文本、图片、语音分开发；433 单测 |
+| 2026-10-26 | 人设 API 落地（D037）：生命周期（草稿/发布/归档/启用）+ 严格校验 + 审计；479 单测、http-smoke 42 项 |
+| 2026-10-27 | 审计页落地（D044）：只读列表 + 改前改后并排 + id→人名/实例名对照 + 哈希链校验与断点定位（「只看这条」）；http-smoke 78 项（补 `limit` 边界契约）、真浏览器 14 项 + 断链路径实测 |
+| 2026-10-26 | 会话查看落地（D043）：两个只读接口（owner 连表过滤）+ 实时条数 + id 游标分页 + 不成媒体 URL + 前端两栏记录页；567 单测、http-smoke 76 项、pipeline-smoke 11 项、真浏览器验证 |
+| 2026-10-26 | 用户管理落地（D042）：建号（只写盐不生成 DEK）/ 角色 / 启停 + 会话与内存 DEK 撤销 + 禁止停用自己；前端用户页与导航守卫；555 单测、http-smoke 69 项、真浏览器验证 |
+| 2026-10-26 | 接入配置清单驱动（D041）：`mapsTo` + `requiredWhen` + 注册时校验清单自洽 + `adapterConfig` 翻译层 + 前端共用表单组件；顺带修掉"设置页改了东西保存按钮仍灰着"的响应式 bug；544 单测、http-smoke 58 项、真浏览器验证通过 |
+| 2026-10-26 | 管道重构（D040）：706 行 `process()` 拆成 13 个 pipe + 类型化上下文 + `requires/provides` 启动校验；502 单测（+13，无既有用例改动）、两条冒烟数值与重构前逐位一致 |
+| 2026-10-26 | 素材库管理落地（D039）：`MediaModule` 提升 + 带 owner 的仓储方法 + 列表/删除/取文件三个接口 + 素材页；489 单测、http-smoke 52 项、真浏览器验证缩略图与删除交互 |
+| 2026-10-26 | 前端工程落地（D038）：`web/`（Vue3 + Vite + Element Plus）五页 + 主服务同源托管 SPA + 冒烟补 6 项托管断言；479 单测、http-smoke 48 项、真浏览器验证通过 |
 | 2026-10-25 | 双阶段生成落地（D036）+ M3 收尾：think→导演指令→外显、独白落库不回灌、emotion_shift 推动 mood；452 单测 / smoke 10 项 / http-smoke 32 项全过；合并 main 打标签 `m3-persona` |

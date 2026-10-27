@@ -250,7 +250,31 @@ function setup(options: { failConnect?: boolean } = {}) {
       displayName: 'QQ（OneBot 11）',
       version: 'test',
       capabilities: PLATFORM_CAPABILITIES.qq,
-      configFields: [],
+      // 四字段铺满四个槽位（与真实 QQ 清单同形）：adapterConfig 的翻译才有东西可测（D041）
+      configFields: [
+        {
+          key: 'mode',
+          label: '接入方向',
+          type: 'select',
+          required: true,
+          default: 'server',
+          mapsTo: 'adapterMode',
+          options: [
+            { label: '反向', value: 'server' },
+            { label: '正向', value: 'client' },
+          ],
+        },
+        { key: 'wsUrl', label: 'WebSocket 地址', type: 'text', required: true, mapsTo: 'endpoint' },
+        {
+          key: 'accessToken',
+          label: 'Access Token',
+          type: 'password',
+          secret: true,
+          requiredWhen: { field: 'mode', in: ['server'] },
+          mapsTo: 'accessToken',
+        },
+        { key: 'selfId', label: '机器人账号', type: 'text', required: true, mapsTo: 'accountId' },
+      ],
     },
     create: (deps) => {
       const adapter = new StubAdapter(deps);
@@ -700,5 +724,115 @@ describe('maskAccount', () => {
 
   it('masks very short identifiers entirely', () => {
     expect(maskAccount('1234')).toBe('****');
+  });
+});
+
+describe('InstanceService 适配器配置（D041）', () => {
+  /** 前端"新建实例"实际提交的形状：只有清单里的键 */
+  const CONFIG = {
+    mode: 'server',
+    wsUrl: 'ws://127.0.0.1:3002',
+    accessToken: TOKEN,
+    selfId: '10001',
+  };
+
+  it('按清单翻译成四个实例列，账号来自 selfId 而不是前端硬写的 accountId', async () => {
+    const { repo, keyStore, service } = setup();
+    const dek = randomDek();
+    keyStore.set(SESSION_ALICE, ALICE, dek);
+
+    const dto = await service.create(actor(ALICE), {
+      name: '主号',
+      platform: 'qq',
+      adapterType: 'onebot',
+      adapterConfig: CONFIG,
+    });
+
+    const stored = repo.created[0]!;
+    expect(stored.accountId).toBe('10001');
+    expect(stored.endpoint).toBe('ws://127.0.0.1:3002');
+    expect(stored.adapterMode).toBe('server');
+    expect(decryptWithDek(stored.accessTokenEnc!, dek)).toBe(TOKEN);
+    expect(dto.hasAccessToken).toBe(true);
+  });
+
+  it('反向模式漏 token → 400（这条规则来自清单的 requiredWhen，而不是前端硬编码）', async () => {
+    const { service } = setup();
+    await expect(
+      service.create(actor(ALICE), {
+        name: '主号',
+        adapterConfig: { ...CONFIG, accessToken: '' },
+      }),
+    ).rejects.toThrow(/Access Token/);
+  });
+
+  it('清单外的字段 → 400，而不是静默丢掉', async () => {
+    const { service } = setup();
+    await expect(
+      service.create(actor(ALICE), {
+        name: '主号',
+        adapterConfig: { ...CONFIG, wssUrl: 'ws://x' },
+      }),
+    ).rejects.toThrow(/未知字段/);
+  });
+
+  it('平台没有注册适配器 → 400 说清是哪个平台', async () => {
+    const { service } = setup();
+    await expect(
+      service.create(actor(ALICE), {
+        name: '抖号',
+        platform: 'douyin',
+        adapterType: 'douyin-open',
+        adapterConfig: CONFIG,
+      }),
+    ).rejects.toThrow(/没有注册适配器：douyin\/douyin-open/);
+  });
+
+  it('更新只改动到的那部分：没传的接入参数不进 patch（否则每次保存都重连）', async () => {
+    const { service, repo, keyStore } = setup();
+    keyStore.set(SESSION_ALICE, ALICE, randomDek());
+    const dto = await service.create(actor(ALICE), {
+      name: '主号',
+      adapterConfig: CONFIG,
+    });
+    const before = repo.rows.get(dto.id)!.row;
+
+    await service.update(actor(ALICE), dto.id, { adapterConfig: { selfId: '20002' } });
+
+    const after = repo.rows.get(dto.id)!.row;
+    expect(after.accountId).toBe('20002');
+    // 地址与方向没传，必须原样保留（传了空值同理不能清空）
+    expect(after.endpoint).toBe(before.endpoint);
+    expect(after.adapterMode).toBe(before.adapterMode);
+  });
+
+  it('更新时把必填项改空 → 400', async () => {
+    const { service, keyStore } = setup();
+    keyStore.set(SESSION_ALICE, ALICE, randomDek());
+    const dto = await service.create(actor(ALICE), { name: '主号', adapterConfig: CONFIG });
+    await expect(
+      service.update(actor(ALICE), dto.id, { adapterConfig: { wsUrl: '   ' } }),
+    ).rejects.toThrow(/WebSocket 地址/);
+  });
+
+  it('更新别人的实例 → 404（翻译前先按 owner 取，取不到就当作不存在）', async () => {
+    const { service, keyStore } = setup();
+    keyStore.set(SESSION_ALICE, ALICE, randomDek());
+    const dto = await service.create(actor(ALICE), { name: '主号', adapterConfig: CONFIG });
+    await expect(
+      service.update(actor(BOB), dto.id, { adapterConfig: { selfId: '20002' } }),
+    ).rejects.toThrow(/实例不存在/);
+  });
+
+  it('改 token 走 adapterConfig 时也要先解锁（密文进库，明文不出内存）', async () => {
+    const { service } = setup();
+    const dto = await service.create(actor(ALICE), {
+      name: '主号',
+      adapterConfig: { ...CONFIG, accessToken: '' , mode: 'client' },
+    });
+    // 未解锁：改 accessToken 必须抛 KEY_LOCKED，而不是存进去一串明文
+    await expect(
+      service.update(actor(ALICE), dto.id, { adapterConfig: { accessToken: 'new-token' } }),
+    ).rejects.toThrow(/解锁/);
   });
 });

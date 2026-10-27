@@ -1,5 +1,5 @@
 /**
- * 管理端：用户列表、重置密码、审计查询。
+ * 管理端：用户列表 / 建号 / 改角色与启停 / 重置密码 / 审计查询。
  *
  * 判定依据（D004 / SECURITY.md 5.1）：
  *   **操作者 ≠ 目标用户** 才允许重置。superadmin 改自己的密码也必须走 `/api/auth/password`。
@@ -8,19 +8,53 @@
  * 所有响应体都经过 DTO 收窄：没有 `wrappedDek`、没有 `keySalt`、没有 `apiKeyEnc`。
  */
 
-import { Body, Controller, Get, HttpCode, Inject, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Inject,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { ForbiddenError } from '@newjob/contracts';
 
 import { AuditService } from './audit.service';
-import { auditQuerySchema, parseOrThrow, resetPasswordSchema } from './dto';
+import {
+  auditQuerySchema,
+  createUserSchema,
+  parseOrThrow,
+  resetPasswordSchema,
+  updateUserSchema,
+} from './dto';
 import { PasswordService } from './password.service';
 import type { IUserAdminQueryRepository } from './ports';
 import { ADMIN_USER_REPOSITORY } from './tokens';
 import { CurrentSession, SessionGuard, type AuthedRequest } from './session.guard';
+import { markSelf, UserAdminService, type UserMutationResult } from './user-admin.service';
 
 export const AUDIT_SERVICE = 'AUDIT_SERVICE';
 
 type Session = { id: string; userId: string; tenantId: string; role: string };
+
+function actorOf(session: Session, request: AuthedRequest): {
+  userId: string;
+  tenantId: string;
+  role: string;
+  ip: string | null;
+} {
+  return {
+    userId: session.userId,
+    tenantId: session.tenantId,
+    role: session.role,
+    // 审计要记来源 IP，但不记 UA（隐私，且对排查没帮助）
+    ip: request.ip ?? null,
+  };
+}
 
 function assertSuperadmin(session: Session): void {
   if (session.role !== 'superadmin') {
@@ -36,13 +70,47 @@ export class AdminController {
     @Inject(PasswordService) private readonly passwordService: PasswordService,
     @Inject(AUDIT_SERVICE) private readonly audit: AuditService,
     @Inject(ADMIN_USER_REPOSITORY) private readonly users: IUserAdminQueryRepository,
+    @Inject(UserAdminService) private readonly userAdmin: UserAdminService,
   ) {}
+
+  /**
+   * 建号。
+   *
+   * 建出来的账号 `wrappedDek = null`：DEK 由用户首次登录时用他自己的密码生成并包裹，
+   * 所以管理员**拿不到**对方的 Key 材料（SECURITY.md 4.1）。
+   */
+  @Post('users')
+  async createUser(
+    @Body() body: unknown,
+    @CurrentSession() session: Session,
+    @Req() request: AuthedRequest,
+  ): Promise<UserMutationResult> {
+    assertSuperadmin(session);
+    const input = parseOrThrow(createUserSchema, body);
+    return this.userAdmin.create(actorOf(session, request), input);
+  }
+
+  /** 改显示名 / 角色 / 启停。改角色或停用会撤销对方的全部会话 */
+  @Patch('users/:id')
+  @HttpCode(200)
+  async updateUser(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @CurrentSession() session: Session,
+    @Req() request: AuthedRequest,
+  ): Promise<UserMutationResult> {
+    assertSuperadmin(session);
+    const input = parseOrThrow(updateUserSchema, body);
+    return this.userAdmin.update(actorOf(session, request), id, input);
+  }
 
   /** 用户列表。刻意只有脱敏字段（`dekInitialized` 是布尔，不是密文） */
   @Get('users')
   async listUsers(@CurrentSession() session: Session): Promise<unknown> {
     assertSuperadmin(session);
-    return this.users.listForAdmin(session.tenantId);
+    const rows = await this.users.listForAdmin(session.tenantId);
+    // 带上 isSelf：前端据此禁用"停用/降级自己"的按钮，而不是等后端 403 才知道
+    return markSelf(rows, session.userId);
   }
 
   /** 管理员重置他人密码：销毁 wrappedDek，该用户全部 Key 报废 */

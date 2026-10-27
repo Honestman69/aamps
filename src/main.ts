@@ -7,6 +7,7 @@ import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fa
 import { AppModule } from './app.module';
 import { intEnv } from './common/config/env';
 import { AppExceptionFilter } from './common/http/app-exception.filter';
+import { serveAdmin } from './common/http/serve-admin';
 import { PrismaService } from './common/prisma/prisma.service';
 import { BootstrapService } from './modules/auth/bootstrap.service';
 import { assertNoLegacyCiphertexts } from './modules/auth/startup-check';
@@ -49,6 +50,10 @@ async function bootstrap(): Promise<void> {
   } else {
     logger.log(`跳过初始管理员创建：${seed.reason ?? '未创建'}`);
   }
+
+  // 管理后台与接口同源托管（构建产物不存在时只提示，不阻塞纯后端开发）。
+  // 必须在 listen 之前注册：它挂的是 `/*` 通配，需要先于 Nest 的控制器路由就位。
+  await serveAdmin(app, logger);
 
   const port = intEnv('PORT', 3000);
   const host = process.env.HOST ?? '127.0.0.1';
