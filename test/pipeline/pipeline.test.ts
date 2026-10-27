@@ -7,6 +7,7 @@ import type { MediaAssetService, SaveOutcome } from '@/modules/media/assets/asse
 import type { MediaAssetRecord } from '@/modules/media/assets/ports';
 import type { IImageFetcher, InboundImage } from '@/modules/media/fetcher';
 import type { TtsResult, TtsService } from '@/modules/media/tts';
+import type { PromptMemory } from '@/modules/memory/types';
 import type { MindState } from '@/modules/mind/state/mind-state';
 import type { IMindStateRepository } from '@/modules/mind/state/ports';
 import type { RelationshipSnapshot } from '@/modules/mind/state/relationship';
@@ -174,6 +175,41 @@ class FakeAssetService {
   }
 }
 
+class FakeMemory {
+  /** 读出什么（默认"什么都不记得"） */
+  loaded: PromptMemory = { facts: [], summaries: [] };
+  /** 每次反思调用的入参，按顺序 */
+  reflectCalls: Array<{ instanceId: string; sessionId: string; subjectId: string; at: Date }> = [];
+  /** 让"读记忆"抛错，验证它不会中断对话 */
+  throwOnLoad = false;
+
+  async loadForPrompt(input: {
+    instanceId: string;
+    sessionId: string;
+    subjectId: string;
+  }): Promise<PromptMemory> {
+    if (this.throwOnLoad) {
+      throw new Error('memory db down');
+    }
+    return this.loaded;
+  }
+
+  async maybeReflect(input: {
+    instanceId: string;
+    sessionId: string;
+    subjectId: string;
+    now: Date;
+  }): Promise<{ written: number; reason: string }> {
+    this.reflectCalls.push({
+      instanceId: input.instanceId,
+      sessionId: input.sessionId,
+      subjectId: input.subjectId,
+      at: input.now,
+    });
+    return { written: 0, reason: 'below-threshold' };
+  }
+}
+
 class FakeWindowRepo implements ISessionWindowRepository {
   slice: WindowSlice | null = null;
   /** 按 target 分片覆盖：并发/串行场景里两条消息的 target 不同 */
@@ -321,6 +357,7 @@ type Harness = {
   images: FakeImageFetcher;
   tts: FakeTts;
   assets: FakeAssetService;
+  memory: FakeMemory;
   sent: OutboundAction[];
   /** 表达层请求过的延迟（毫秒），按调用顺序 */
   sleeps: number[];
@@ -344,6 +381,7 @@ function makeHarness(
   const images = new FakeImageFetcher();
   const tts = new FakeTts();
   const assets = new FakeAssetService();
+  const memory = new FakeMemory();
   const sent: OutboundAction[] = [];
   const sleeps: number[] = [];
   const gateway = overrides.gateway ?? gatewayStub({});
@@ -371,6 +409,7 @@ function makeHarness(
     images,
     tts: tts as unknown as TtsService,
     assets: assets as unknown as MediaAssetService,
+    memory,
     config,
     gateway: gateway as unknown as GatewayService,
     clock: () => new Date('2026-10-24T12:00:00'),
@@ -394,6 +433,7 @@ function makeHarness(
     images,
     tts,
     assets,
+    memory,
     sent,
     sleeps,
     service,
@@ -1015,5 +1055,84 @@ describe('Pipeline 双阶段生成（M3-4 / D036）', () => {
 
     expect(h.gateway.calls.map((call) => call.purpose)).toEqual(['chat']);
     expect(sentText(h.sent)).toEqual(['嗯。']);
+  });
+});
+
+describe('管道里的记忆（M5-1 / D045）', () => {
+  const personaWithSeed = {
+    ...PERSONA_LONG_OUTAGE,
+    fallbacksJson: '{}',
+    behaviorJson: JSON.stringify({ think: { enabled: false } }),
+  };
+
+  it('记忆进 system prompt，但**不进对话历史**', async () => {
+    const h = makeHarness({ persona: personaWithSeed });
+    h.memory.loaded = {
+      facts: ['他养了一只叫豆豆的猫', '他在做后端'],
+      summaries: ['上周他抱怨过加班'],
+    };
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    const messages = chatCall(h)?.messages as Array<{ role: string; content: string }>;
+    const system = messages[0]?.content ?? '';
+    expect(system).toContain('他养了一只叫豆豆的猫');
+    expect(system).toContain('上周他抱怨过加班');
+    expect(system).toContain('不用复述');
+    // 记忆只该出现在 system 里；塞进历史会让模型把它当成"对方刚说的话"
+    expect(messages.slice(1).some((m) => m.content.includes('豆豆'))).toBe(false);
+  });
+
+  it('没有记忆时 system 里不出现"你还记得"这类空提示', async () => {
+    const h = makeHarness({ persona: personaWithSeed });
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    const system = (chatCall(h)?.messages as Array<{ content: unknown }>)[0]?.content as string;
+    expect(system).not.toContain('关于这个人，你知道这些');
+    expect(system).not.toContain('你们之前聊过');
+  });
+
+  it('读记忆抛错：照常回复（装饰层不能变单点故障）', async () => {
+    const h = makeHarness({ persona: personaWithSeed });
+    h.memory.throwOnLoad = true;
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    // 只发出正常那一条；如果异常冒出去，这里会多一条兜底话术（'我这会儿有点事，晚点找你'）
+    expect(sentText(h.sent)).toEqual(['你好呀']);
+  });
+
+  it('反思在"出站之后"调用，且带上实例/会话/对方', async () => {
+    const h = makeHarness({ persona: personaWithSeed });
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(h.memory.reflectCalls).toHaveLength(1);
+    expect(h.memory.reflectCalls[0]).toMatchObject({
+      instanceId: 'inst-1',
+      sessionId: h.sessions.sessions[0]?.id,
+      subjectId: 'peer-1',
+    });
+    // 这个时刻来自上下文里的 now，不是各 pipe 自己 new Date()
+    expect(h.memory.reflectCalls[0]?.at).toBeInstanceOf(Date);
+  });
+
+  it('没回消息（DROP）时不反思：这段对话没发生过', async () => {
+    const h = makeHarness({ persona: personaWithSeed });
+    const msg = inbound({ plainText: '   ', segments: [] });
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(h.memory.reflectCalls).toHaveLength(0);
   });
 });

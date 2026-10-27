@@ -380,6 +380,11 @@ model MemoryItem {
 
   @@index([instanceId, scope])
   @@index([subjectId])
+  // 读回 prompt 的两条主查询（D045）：
+  //   「这个人的稳定事实」→ instanceId + subjectId + scope
+  //   「这个会话最近的情节摘要」→ sessionId + scope + createdAt(倒序)
+  @@index([instanceId, subjectId, scope])
+  @@index([sessionId, scope, createdAt])
 }
 
 model Relationship {

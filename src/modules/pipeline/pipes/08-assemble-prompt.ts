@@ -28,6 +28,7 @@ export const assemblePromptPipe: Pipe = {
     'inbound',
     'imageParts',
     'assetAliases',
+    'memories',
     'config',
   ],
   provides: ['system', 'messages'],
@@ -47,6 +48,8 @@ export const assemblePromptPipe: Pipe = {
             voiceReply: voiceReady,
             assets: ctx.assetAliases,
           },
+          // 记忆只影响"印象"那一段，不进 few-shot、不进历史（D045）
+          memory: ctx.memories,
         })
       : { system: NO_PERSONA_SYSTEM, examples: [] as ChatMessage[] };
 

@@ -31,6 +31,8 @@ import type { IImageFetcher } from '../src/modules/media/fetcher';
 import { LocalMediaFileStore } from '../src/modules/media/file-store';
 import { TtsService } from '../src/modules/media/tts';
 import { PrismaMindStateRepository } from '../src/modules/mind/state/repositories/prisma-mind-state.repository';
+import { MemoryService, type ReflectionModel } from '../src/modules/memory/memory.service';
+import { PrismaMemoryRepository } from '../src/modules/memory/repositories/prisma-memory.repository';
 import { PrismaPipelineRepository } from '../src/modules/pipeline/repositories/prisma-pipeline.repository';
 import { PipelineService } from '../src/modules/pipeline/pipeline.service';
 import { PrismaSessionAdminRepository } from '../src/modules/session/repositories/prisma-session-admin.repository';
@@ -60,12 +62,24 @@ const THINK_JSON = JSON.stringify({
   length_hint: '短',
 });
 
+/** 反思（M5-1）返回的记忆：一句摘要 + 一条事实，固定内容便于断言与去重 */
+const MEMORY_JSON = JSON.stringify({
+  summary: '他聊了聊最近的加班和家里的猫。',
+  facts: [{ content: '他养了一只叫豆豆的猫', kind: 'fact', importance: 5 }],
+});
+
 /** 记录每次调用的 purpose：验证双阶段（think → chat） */
 const purposes: string[] = [];
 
+/** 记录 chat 阶段发给模型的 system（验证记忆有没有真的进 prompt） */
+const systemPrompts: string[] = [];
+
 /** 固定返回"你好呀"的 Gateway stub，不真出网 */
 const gatewayStub = {
-  chat: async (input: { purpose?: string }): Promise<{
+  chat: async (input: {
+    purpose?: string;
+    messages?: Array<{ role: string; content: unknown }>;
+  }): Promise<{
     text: string;
     model: string;
     provider: string;
@@ -75,6 +89,17 @@ const gatewayStub = {
     attempts: never[];
   }> => {
     purposes.push(input.purpose ?? 'chat');
+    if (input.purpose === 'reflection') {
+      return {
+        text: MEMORY_JSON,
+        model: 'deepseek-chat',
+        provider: 'deepseek',
+        credentialId: 'cred-1',
+        usage: { tokenIn: 20, tokenOut: 10 },
+        costCents: 0,
+        attempts: [],
+      };
+    }
     if (input.purpose === 'think') {
       return {
         text: THINK_JSON,
@@ -86,6 +111,10 @@ const gatewayStub = {
         attempts: [],
       };
     }
+    // chat 阶段：把 system 记下来，后面验证"记忆真的进了 prompt"
+    const system = input.messages?.[0]?.content;
+    systemPrompts.push(typeof system === 'string' ? system : '');
+
     return {
       text: gatewayReply,
       model: 'deepseek-chat',
@@ -97,7 +126,6 @@ const gatewayStub = {
     };
   },
 } as unknown as GatewayService;
-
 function inbound(overrides: Partial<InboundMessage> = {}): InboundMessage {
   return {
     id: `smoke-msg-${Math.random().toString(36).slice(2, 8)}`,
@@ -203,7 +231,18 @@ async function main(): Promise<void> {
 
   const sent: OutboundAction[] = [];
   const sleeps: number[] = [];
-  const pipeline = new PipelineService({
+
+  // 记忆（M5-1）：主流程用默认阈值（30 条），保证 ①–⑪ 的断言不受反思干扰；
+  // ⑫ 单独造一个"攒 2 条就反思"的实例，用真实库跑一遍写入。
+  const memoryRepo = new PrismaMemoryRepository(prisma);
+  const memory = new MemoryService(memoryRepo, gatewayStub as unknown as ReflectionModel);
+  const memoryAggressive = new MemoryService(
+    memoryRepo,
+    gatewayStub as unknown as ReflectionModel,
+    { reflectEvery: 2, transcriptLimit: 40, factLimit: 6, summaryLimit: 3 },
+  );
+
+  const baseDeps = {
     pipeline: pipelineRepo,
     sessions: sessionRepo,
     windowRepo,
@@ -211,6 +250,7 @@ async function main(): Promise<void> {
     images: imageFetcher,
     tts,
     assets: assetService,
+    memory,
     config,
     gateway: gatewayStub,
     clock: () => new Date(),
@@ -218,7 +258,9 @@ async function main(): Promise<void> {
     sleep: async (ms: number) => {
       sleeps.push(ms);
     },
-  });
+  };
+
+  const pipeline = new PipelineService(baseDeps);
 
   // ① 第一条消息：私聊，回最后一条 → 不引用
   await pipeline.handle(inbound({ instanceId: instance.id, plainText: '你好', segments: [{ type: 'text', text: '你好' }] }), async (a) => {
@@ -458,6 +500,103 @@ async function main(): Promise<void> {
   );
   process.stdout.write(
     `⑪ 会话查看：${listed.items.length} 个会话 / ${summaryRow.messageCount} 条消息 / 游标翻页 OK\n`,
+  );
+
+  // ⑫ 记忆（M5-1 / D045）：反思写入 → 下一轮读回 prompt → 重复内容不重复存
+  const aggressivePipeline = new PipelineService({ ...baseDeps, memory: memoryAggressive });
+  const sessionForMemory = await prisma.session.findFirst({ where: { instanceId: instance.id } });
+  assert.ok(sessionForMemory, '应有会话');
+
+  // 把阈值降到 2 条再跑一轮：真实 SQL 上会真的调一次"反思"（gateway stub 回固定 JSON）
+  purposes.length = 0;
+  systemPrompts.length = 0;
+  gatewayReply = '嗯，豆豆好可爱。';
+  await aggressivePipeline.handle(
+    inbound({
+      instanceId: instance.id,
+      plainText: '今天豆豆又拆家了',
+      segments: [{ type: 'text', text: '今天豆豆又拆家了' }],
+    }),
+    async (a) => {
+      sent.push(a);
+      return { messageId: 'out-memory-1' };
+    },
+    { capabilities: CAPS },
+  );
+
+  assert.ok(
+    purposes.includes('reflection'),
+    `攒够条数应触发反思，实际调用：${purposes.join(',') || '（无）'}`,
+  );
+
+  const memoryRows = await prisma.memoryItem.findMany({
+    where: { instanceId: instance.id },
+    orderBy: { createdAt: 'asc' },
+  });
+  const episodic = memoryRows.filter((row) => row.scope === 'episodic');
+  const semantic = memoryRows.filter((row) => row.scope === 'semantic');
+
+  assert.equal(episodic.length, 1, `应写一条情节摘要，实际 ${episodic.length}`);
+  assert.equal(episodic[0]?.sessionId, sessionForMemory.id, '摘要挂在会话上');
+  assert.equal(episodic[0]?.kind, 'summary');
+  // 溯源：`sourceMsgIds` 存的是**落库后的**消息 id（不是入站时的平台 id），
+  // 所以要拿它回查 Message 表 —— 这才是"这段记忆是从哪些话里总结出来的"。
+  const sourceIds = (episodic[0]?.sourceMsgIds ?? '').split(',').filter(Boolean);
+  assert.ok(sourceIds.length > 0, '摘要应带 sourceMsgIds');
+  const traced = await prisma.message.count({ where: { id: { in: sourceIds } } });
+  assert.equal(traced, sourceIds.length, '溯源 id 必须都能在 Message 表里查到');
+
+  assert.equal(semantic.length, 1, `应写一条事实，实际 ${semantic.length}`);
+  // 事实挂人而不是挂会话：换个会话（群聊）也该记得"他养了只猫"
+  assert.equal(semantic[0]?.sessionId, null, '事实的 sessionId 必须为空');
+  assert.equal(semantic[0]?.subjectId, 'peer-1');
+  assert.equal(semantic[0]?.importance, 5);
+
+  // 再跑一条：读回路径 —— 记忆要真的出现在 system prompt 里
+  systemPrompts.length = 0;
+  await aggressivePipeline.handle(
+    inbound({
+      instanceId: instance.id,
+      plainText: '它还小，不懂事',
+      segments: [{ type: 'text', text: '它还小，不懂事' }],
+    }),
+    async (a) => {
+      sent.push(a);
+      return { messageId: 'out-memory-2' };
+    },
+    { capabilities: CAPS },
+  );
+
+  const promptWithMemory = systemPrompts[0] ?? '';
+  assert.ok(
+    promptWithMemory.includes('他养了一只叫豆豆的猫'),
+    '记忆应注入 system prompt（否则等于没记住）',
+  );
+  assert.ok(
+    promptWithMemory.includes('不用复述'),
+    '应带上"别汇报记忆"的约束（否则每轮都会复读一遍）',
+  );
+
+  // 去重：同一批内容再反思一次，不应该再存一遍
+  const countBefore = memoryRows.length;
+  await aggressivePipeline.handle(
+    inbound({
+      instanceId: instance.id,
+      plainText: '它今天特别闹',
+      segments: [{ type: 'text', text: '它今天特别闹' }],
+    }),
+    async (a) => {
+      sent.push(a);
+      return { messageId: 'out-memory-3' };
+    },
+    { capabilities: CAPS },
+  );
+  const countAfter = await prisma.memoryItem.count({ where: { instanceId: instance.id } });
+  assert.equal(countAfter, countBefore, '相同内容不应重复入库（去重按正文）');
+
+  process.stdout.write(
+    `⑫ 记忆：反思写出 ${episodic.length} 条摘要 + ${semantic.length} 条事实，` +
+      `下一轮 prompt 已带上，重复内容未重存\n`,
   );
 
   process.stdout.write('\nPIPELINE SMOKE PASSED\n');

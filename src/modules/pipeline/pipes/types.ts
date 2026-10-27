@@ -18,6 +18,7 @@
 import type { Drop, InboundMessage, PlatformCapabilities } from '@newjob/contracts';
 
 import type { ResolvedConfig } from '../../config/types';
+import type { PromptMemory } from '../../memory/types';
 import type { MindState } from '../../mind/state/mind-state';
 import type { RelationshipSnapshot } from '../../mind/state/relationship';
 import type { ThinkResult } from '../../mind/reflection/think';
@@ -56,6 +57,8 @@ export type PipelineContext = {
   mind: MindState;
   relationship: RelationshipSnapshot | null;
   window: ContextWindow;
+  /** 读回的记忆（M5-1）：注入 prompt 的"你还记得" */
+  memories: PromptMemory;
   /** 入站图片转成的多模态段（没配视觉模型时为空） */
   imageParts: ContentPart[];
   /** 素材库别名清单（塞进 prompt 的"你手上有这些"） */

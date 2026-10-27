@@ -91,9 +91,20 @@ describe('管道顺序的关键不变量', () => {
   const order = INBOUND_PIPES.map((pipe) => pipe.name);
   const at = (name: string): number => order.indexOf(name);
 
-  it('落库在最前、回写在最后', () => {
+  it('落库在最前、回写在最后（记忆反思是回写之后的收尾，不改变这条不变量）', () => {
     expect(order[0]).toBe('persist-inbound');
-    expect(order[order.length - 1]).toBe('persist-interaction');
+    expect(order.at(-2)).toBe('persist-interaction');
+    // 反思必须是最后一步：它要等消息真的发出去了才算"发生过"
+    expect(order.at(-1)).toBe('write-memory');
+  });
+
+  it('记忆读在 attention 之后 —— 被判掉的消息不值得为它查一次库', () => {
+    expect(at('load-memory')).toBeGreaterThan(at('attention'));
+    expect(at('load-memory')).toBeLessThan(at('assemble-prompt'));
+  });
+
+  it('记忆写在出站之后 —— 反思的耗时不能拖慢对方收到回复', () => {
+    expect(at('write-memory')).toBeGreaterThan(at('deliver'));
   });
 
   it('attention 必须在 generate 之前 —— 判掉就不花 token', () => {

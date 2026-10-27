@@ -20,6 +20,9 @@ import type { IImageFetcher } from '../media/fetcher';
 import { MediaModule } from '../media/media.module';
 import { IMAGE_FETCHER, MEDIA_ASSET_SERVICE, TTS_SERVICE } from '../media/tokens';
 import type { TtsService } from '../media/tts';
+import { MemoryModule } from '../memory/memory.module';
+import { MEMORY_SERVICE } from '../memory/tokens';
+import type { PipelineMemory } from './deps';
 import { PrismaMindStateRepository } from '../mind/state/repositories/prisma-mind-state.repository';
 import type { IMindStateRepository } from '../mind/state/ports';
 import { ModelModule } from '../model/model.module';
@@ -41,7 +44,7 @@ import {
 } from './tokens';
 
 @Module({
-  imports: [AuthModule, ConfigModule, MediaModule, ModelModule],
+  imports: [AuthModule, ConfigModule, MediaModule, MemoryModule, ModelModule],
   providers: [
     {
       provide: PIPELINE_REPOSITORY,
@@ -75,6 +78,7 @@ import {
         images: IImageFetcher,
         tts: TtsService,
         assets: MediaAssetService,
+        memory: PipelineMemory,
         config: {
           get(
             instanceId: string,
@@ -91,6 +95,7 @@ import {
           images,
           tts,
           assets,
+          memory,
           config,
           gateway,
         }),
@@ -102,6 +107,7 @@ import {
         IMAGE_FETCHER,
         TTS_SERVICE,
         MEDIA_ASSET_SERVICE,
+        MEMORY_SERVICE,
         CONFIG_SERVICE,
         GATEWAY_SERVICE,
       ],
