@@ -69,6 +69,12 @@ export const router = createRouter({
           // 只有 superadmin 能进。后端每个接口也会再校验一次（界面只是少一次 403）
           meta: { title: '用户', adminOnly: true },
         },
+        {
+          path: 'audit',
+          name: 'audit',
+          component: () => import('@/views/AuditView.vue'),
+          meta: { title: '审计', adminOnly: true },
+        },
       ],
     },
     { path: '/:pathMatch(.*)*', redirect: { name: 'instances' } },

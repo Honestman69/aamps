@@ -16,6 +16,8 @@ import type {
   AdapterConfigValues,
   AdapterManifest,
   AdminUser,
+  AuditChainVerifyResult,
+  AuditEntry,
   CreateUserInput,
   MessagePage,
   Credential,
@@ -175,6 +177,19 @@ export const api = {
       input: { newPassword: string; confirmUsername: string },
     ): Promise<{ dekVersion: number; disabledCredentials: number; clearedSessions: number }> =>
       request('POST', `/api/admin/users/${encodeURIComponent(id)}/reset-password`, input),
+
+    /**
+     * 审计日志（D044）。**只读**：没有新增/删除/修改接口 —— 日志是证据，
+     * 能改的日志等于没有日志。
+     *
+     * 服务端只支持 `limit`（≤500，按时间倒序取最近 N 条）；筛选全在前端做，
+     * 因为审计表迟早要分页游标，现在先给它加参数会把形状定错。
+     */
+    audit: (limit = 200): Promise<AuditEntry[]> =>
+      request('GET', `/api/admin/audit?limit=${limit}`),
+
+    /** 重算整条哈希链。能报出断在第几条、断在哪条记录（`brokenAtId`） */
+    verifyAudit: (): Promise<AuditChainVerifyResult> => request('POST', '/api/admin/audit/verify'),
   },
 
   /**

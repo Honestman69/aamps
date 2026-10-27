@@ -256,6 +256,36 @@ export type AdminUser = {
   isSelf?: boolean;
 };
 
+/**
+ * 审计记录（D044）。
+ *
+ * `before` / `after` 是**已经脱敏过的业务字段**（服务端按字段名精确裁剪），
+ * 不含密码、密文、完整 QQ 号。前端不要指望它们一定有内容：
+ * `credential.unlock` 这类事件本来就没有字段变化，两边都是 null。
+ */
+export type AuditEntry = {
+  id: string;
+  /** 操作者类型：superadmin / user / system / worker */
+  actor: string;
+  actorUserId: string | null;
+  /** 形如 `credential.rotate`，前缀即模块 */
+  action: string;
+  /** 被操作对象的可读标识（用户名、Key 标签、人设名……），可能为 null */
+  target: string | null;
+  targetOwnerId: string | null;
+  ip: string | null;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+  prevHash: string | null;
+  hash: string;
+  createdAt: string;
+};
+
+/** 哈希链校验结果：失败时带断点，前端据此定位那一行 */
+export type AuditChainVerifyResult =
+  | { ok: true; checked: number }
+  | { ok: false; checked: number; brokenAtId: string; index: number; reason: string };
+
 export type UserMutationResult = {
   id: string;
   username: string;

@@ -650,6 +650,20 @@ async function main(): Promise<void> {
   assert.equal(res.status, 200);
   assert.equal(res.body.ok, true, JSON.stringify(res.body));
 
+  // 审计页的「显示条数」写死成 100/200/500 三档（`AuditView.vue` 的 LIMITS）。
+  // 服务端上限是 500，任何一侧改了这个数，页面就会要么 400、要么白少一档 —— 在这里钉住。
+  step('审计列表：三档 limit 全部可接受');
+  for (const limit of [100, 200, 500]) {
+    res = await call('GET', `/api/admin/audit?limit=${limit}`);
+    assert.equal(res.status, 200, `limit=${limit} 被拒了：${res.raw}`);
+  }
+
+  step('审计列表：越界 limit → 400');
+  for (const limit of [0, 501]) {
+    res = await call('GET', `/api/admin/audit?limit=${limit}`);
+    assert.equal(res.status, 400, `limit=${limit} 应该 400，实际 ${res.status}`);
+  }
+
   step('锁定 → 会话失效');
   res = await call('POST', '/api/auth/lock');
   assert.equal(res.status, 200);
