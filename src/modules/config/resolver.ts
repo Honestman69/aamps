@@ -75,6 +75,8 @@ export function resolveConfig(bundle: ConfigBundle): ResolvedConfig {
     set('dailyMsgCap', instance.dailyMsgCap, 'instance');
   }
   if (hasText(instance.nightQuiet)) set('nightQuiet', instance.nightQuiet, 'instance');
+  // 布尔只认 true：`false` 等于"没开"，与默认值一致，不必抢占 provenance
+  if (instance.proactiveEnabled === true) set('proactiveEnabled', true, 'instance');
   if (hasText(instance.activePersonaId)) set('personaId', instance.activePersonaId, 'instance');
 
   // 预算：`0` 是**合法值**（表示不限），所以这里用 `>= 0` 而不是上面那种 `> 0`。

@@ -37,6 +37,8 @@ import { MemoryService, type ReflectionModel } from '../src/modules/memory/memor
 import { PrismaMemoryRepository } from '../src/modules/memory/repositories/prisma-memory.repository';
 import { PrismaSelfStateRepository } from '../src/modules/persona/self/repositories/prisma-self-state.repository';
 import { SelfStateService } from '../src/modules/persona/self/self-state.service';
+import { ProactiveService } from '../src/modules/proactive/proactive.service';
+import { PrismaProactiveRepository } from '../src/modules/proactive/repositories/prisma-proactive.repository';
 import { PrismaPipelineRepository } from '../src/modules/pipeline/repositories/prisma-pipeline.repository';
 import { PipelineService } from '../src/modules/pipeline/pipeline.service';
 import { PrismaSessionAdminRepository } from '../src/modules/session/repositories/prisma-session-admin.repository';
@@ -675,6 +677,73 @@ async function main(): Promise<void> {
   process.stdout.write(
     `⑬ 人格演化：edge 0.50 → 0.52（v1）、审计已留痕、回滚到 v0 后 v2 生效且 v1 仍在\n`,
   );
+
+  // ⑭ 主动消息（M5-3 / D047）：真实 SQL 上的候选筛选、发一条、冷却挡住第二次
+  await prisma.botInstance.update({
+    where: { id: instance.id },
+    data: { proactiveEnabled: true },
+  });
+  // 造一个"很久没聊、关系够近"的人；原来的 peer-1 刚聊过，必须被 SQL 筛掉
+  await prisma.relationship.create({
+    data: {
+      instanceId: instance.id,
+      peerId: 'peer-idle',
+      nickname: '老周',
+      affinity: 70,
+      lastInteractionAt: new Date(Date.now() - 50 * 3600_000),
+    },
+  });
+
+  const proactiveSent: Array<{ peerId: string; text: string }> = [];
+  const proactiveService = new ProactiveService({
+    repo: new PrismaProactiveRepository(prisma),
+    config: {
+      get: async () => ({
+        config: { proactiveEnabled: true },
+        sessionFlags: { aiPaused: false, muted: false },
+      }),
+    },
+    pipeline: {
+      findOwner: (id: string) => pipelineRepo.findOwner(id),
+      findActivePersona: (id: string) => pipelineRepo.findActivePersona(id),
+    },
+    mind: mindRepo,
+    memory: { loadForPrompt: async () => ({ facts: [], summaries: [] }) },
+    self: { describeForPrompt: async () => ({ narrative: '', lines: [] }) },
+    gateway: {
+      chat: async () => ({ text: '"在忙啥呢"' }),
+    },
+    sessions: sessionRepo,
+    sender: {
+      send: async (_instanceId, action) => {
+        const session = action.session as { peerId: string };
+        const text = action.segments
+          .map((segment) => (segment.type === 'text' ? segment.text : ''))
+          .join('');
+        proactiveSent.push({ peerId: session.peerId, text });
+        return { ok: true };
+      },
+    },
+    clock: () => new Date(),
+  });
+
+  const firstSweep = await proactiveService.sweepInstance(instance.id, new Date());
+  assert.equal(firstSweep.sent, 1, `应只发 1 条（刚聊过的 peer-1 必须被筛掉），实际 ${firstSweep.sent}`);
+  assert.equal(proactiveSent[0]?.peerId, 'peer-idle');
+  assert.equal(proactiveSent[0]?.text, '在忙啥呢', '引号应被清洗掉');
+
+  const proactiveRow = await prisma.message.findFirst({
+    where: { proactive: true, session: { instanceId: instance.id } },
+    orderBy: { createdAt: 'desc' },
+  });
+  assert.ok(proactiveRow, '主动消息应落库');
+  assert.equal(proactiveRow.content, '在忙啥呢');
+
+  // 同一天再扫一次：72 小时冷却 + 当天已发，必须一条都不发
+  const secondSweep = await proactiveService.sweepInstance(instance.id, new Date());
+  assert.equal(secondSweep.sent, 0, '冷却期内不应重复发');
+  assert.equal(proactiveSent.length, 1);
+  process.stdout.write(`⑭ 主动消息：候选筛出 1 人、发出 1 条并落库（proactive=true）、再扫不发\n`);
 
   process.stdout.write('\nPIPELINE SMOKE PASSED\n');
 }

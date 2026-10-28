@@ -209,6 +209,7 @@ export class InstanceService {
       ttsModel: input.ttsModel ?? null,
       ...(input.ttsVoice !== undefined ? { ttsVoice: input.ttsVoice } : {}),
       ...(input.imageHosts !== undefined ? { imageHosts: input.imageHosts } : {}),
+      ...(input.proactiveEnabled !== undefined ? { proactiveEnabled: input.proactiveEnabled } : {}),
     });
 
     await this.deps.audit.record({
@@ -311,6 +312,7 @@ export class InstanceService {
     if (input.ttsModel !== undefined) patch.ttsModel = input.ttsModel;
     if (input.ttsVoice !== undefined) patch.ttsVoice = input.ttsVoice;
     if (input.imageHosts !== undefined) patch.imageHosts = input.imageHosts;
+    if (input.proactiveEnabled !== undefined) patch.proactiveEnabled = input.proactiveEnabled;
 
     // 预算是人格级配置（D024）：改它不需要重连，也不碰任何密钥
     if (input.dailyBudgetCents !== undefined) patch.dailyBudgetCents = input.dailyBudgetCents;
@@ -650,6 +652,32 @@ export class InstanceService {
    * 内部断连：**不写审计**（审计由调用方决定记什么原因），
    * 但一定要清运行时与库里的状态 —— 漏掉任何一处都会留下"幽灵连接"。
    */
+  /**
+   * 主动消息的唯一出口（M5-3 / D047）。
+   *
+   * 放在实例服务里，是因为**只有它知道当前连接挂在哪个 adapter 上**（`InstanceRuntime`）。
+   * 主动消息不经过入站管道，但出站必须和正常回复走同一条路 —— 否则风控、限速、
+   * 发送被拦截这些信号会分叉成两套。
+   *
+   * 实例没连接时返回 `ok: false`，不抛：调用方是定时任务，"这次没发"是正常情况。
+   */
+  async sendOutbound(
+    instanceId: string,
+    action: OutboundAction,
+  ): Promise<{ ok: boolean; messageId?: string }> {
+    const adapter = this.deps.runtime.get(instanceId);
+    if (!adapter) {
+      return { ok: false };
+    }
+    try {
+      const result = await adapter.send(action);
+      return { ok: true, messageId: result.messageId };
+    } catch {
+      // 适配器层的失败已经由它自己记日志；这里只需要一个布尔给调用方
+      return { ok: false };
+    }
+  }
+
   /**
    * 校验凭据归属。错误信息合并"不存在"与"无权"，避免靠报错探测别人的 credentialId。
    */

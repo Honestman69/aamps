@@ -92,6 +92,8 @@ export const createInstanceSchema = z
     ttsModel: modelNameSchema.nullable().optional(),
     ttsVoice: ttsVoiceSchema.optional(),
     imageHosts: imageHostsSchema.optional(),
+    /** 主动消息（M5-3 / D047）：默认关闭；打开后才会"隔了很久主动说一句" */
+    proactiveEnabled: z.boolean().optional(),
     /** 由适配器清单驱动的接入配置（D041）；与下面四个槽位字段互斥 */
     adapterConfig: adapterConfigSchema.optional(),
   })
@@ -130,6 +132,8 @@ export const updateInstanceSchema = z
     ttsModel: modelNameSchema.nullable().optional(),
     ttsVoice: ttsVoiceSchema.optional(),
     imageHosts: imageHostsSchema.optional(),
+    /** 主动消息（M5-3 / D047）：默认关闭；打开后才会"隔了很久主动说一句" */
+    proactiveEnabled: z.boolean().optional(),
     /**
      * 接入配置的**增量**（D041）：只传改过的键。
      * 没传 = 不改；传了空值的必填项仍会被拒（不允许把必填项改空）。
@@ -180,6 +184,8 @@ export type InstancePublicDTO = {
   ttsModel: string | null;
   ttsVoice: string;
   imageHosts: string;
+  /** 主动消息开关（M5-3） */
+  proactiveEnabled: boolean;
   status: string;
   createdAt: string;
   updatedAt: string;
@@ -209,6 +215,7 @@ export function toInstanceDTO(row: InstancePublicRow): InstancePublicDTO {
     ttsModel: row.ttsModel,
     ttsVoice: row.ttsVoice,
     imageHosts: row.imageHosts,
+    proactiveEnabled: row.proactiveEnabled,
     status: row.status,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),

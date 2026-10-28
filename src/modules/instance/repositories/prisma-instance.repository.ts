@@ -44,6 +44,7 @@ const PUBLIC_SELECT = {
   ttsModel: true,
   ttsVoice: true,
   imageHosts: true,
+  proactiveEnabled: true,
   status: true,
   createdAt: true,
   updatedAt: true,
@@ -92,6 +93,7 @@ export class PrismaInstanceRepository implements IInstanceRepository {
         ttsModel: input.ttsModel ?? null,
         ...(input.ttsVoice !== undefined ? { ttsVoice: input.ttsVoice } : {}),
         ...(input.imageHosts !== undefined ? { imageHosts: input.imageHosts } : {}),
+        ...(input.proactiveEnabled !== undefined ? { proactiveEnabled: input.proactiveEnabled } : {}),
       },
       select: { ...PUBLIC_SELECT, accessTokenEnc: true },
     });

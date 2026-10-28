@@ -186,6 +186,10 @@ model BotInstance {
   /// 不填白名单时必须挡住内网/回环地址：图片最终是由协议端去下载的（见 D033）
   imageHosts      String      @default("")
 
+  /// 主动消息（M5-3 / D047）：**默认关闭**。
+  /// 主动开口是封号高危行为，也是一个"会打扰人"的行为 —— 必须由人显式打开。
+  proactiveEnabled Boolean @default(false)
+
   // 当前生效的人设。人格与记忆属于**这个社交平台账号**（D023）
   activePersonaId String?  @unique
   activePersona   Persona? @relation("ActivePersona", fields: [activePersonaId], references: [id])
@@ -404,10 +408,15 @@ model Message {
   blocked     Boolean @default(false)
   blockReason String? // rule:<id> | moderation | owner
 
+  /// 这条是主动发的（不是被叫到才说的）。用来算"今天主动了几次"与"上次主动是什么时候"（D047）
+  proactive   Boolean @default(false)
+
   createdAt DateTime @default(now())
 
   @@index([sessionId, createdAt])
   @@index([createdAt])
+  // 主动消息的两次查询：今天发了几条 / 上次给某人是哪天
+  @@index([proactive, createdAt])
 }
 
 // ─────────────────────────── 记忆 ───────────────────────────

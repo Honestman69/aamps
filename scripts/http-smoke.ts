@@ -336,6 +336,20 @@ async function main(): Promise<void> {
   assert.equal(res.status, 200);
 
   step('实例：改名字 → 200');
+  step('实例：主动消息开关默认关闭，能改能读回');
+  res = await call('GET', '/api/instances');
+  assert.equal(res.status, 200);
+  const listed = (res.body as Array<{ id: string; proactiveEnabled: boolean }>).find(
+    (item) => item.id === instanceId,
+  );
+  assert.ok(listed, '列表里应能查到刚建的实例');
+  assert.equal(listed.proactiveEnabled, false, '默认必须关闭（D047）');
+  res = await call('PATCH', `/api/instances/${instanceId}`, { proactiveEnabled: true });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(res.body.proactiveEnabled, true);
+  res = await call('PATCH', `/api/instances/${instanceId}`, { proactiveEnabled: 'yes' });
+  assert.equal(res.status, 400, '布尔字段不接字符串');
+
   res = await call('PATCH', `/api/instances/${instanceId}`, { name: '改过名的实例' });
   assert.equal(res.status, 200, JSON.stringify(res.body));
   assert.equal(res.body.name, '改过名的实例');

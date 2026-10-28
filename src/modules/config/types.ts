@@ -26,6 +26,8 @@ export type AgentConfig = {
   rateLimitPerMin: number;
   dailyMsgCap: number;
   nightQuiet: string;
+  /** 主动消息开关（M5-3 / D047）：默认关闭；打开后才允许"隔了很久主动说一句" */
+  proactiveEnabled: boolean;
   /** 当前生效的人设；会话层可以临时换 */
   personaId: string | null;
   /** 人格预算（D024）：`0` = 不限。挂在实例上，人设/会话不得覆盖 */
@@ -82,6 +84,8 @@ export const DEFAULT_AGENT_CONFIG: AgentConfig = {
   rateLimitPerMin: 20,
   dailyMsgCap: 800,
   nightQuiet: '00:30-07:30',
+  // 主动消息默认关闭（D047）：没人显式打开时，一行代码都不该跑
+  proactiveEnabled: false,
   personaId: null,
   // 默认不限额：新装的实例不该因为一条默认预算就哑掉
   dailyBudgetCents: 0,
@@ -109,6 +113,8 @@ export type ConfigBundle = {
     rateLimitPerMin: number;
     dailyMsgCap: number;
     nightQuiet: string;
+    /** 主动消息开关（M5-3）：布尔没有"未设置"这个态，默认 false */
+    proactiveEnabled: boolean;
     activePersonaId: string | null;
     dailyBudgetCents: number;
     monthlyBudgetCents: number;

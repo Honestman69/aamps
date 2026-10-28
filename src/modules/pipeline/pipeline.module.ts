@@ -119,6 +119,13 @@ import {
       ],
     },
   ],
-  exports: [PIPELINE_SERVICE],
+  // 主动消息（M5-3）也要用这三样：owner/人设、会话落库、心智状态。
+  // 导出的是仓储令牌（不是服务），避免主动消息绕过管道的业务判断。
+  exports: [
+    PIPELINE_SERVICE,
+    PIPELINE_REPOSITORY,
+    SESSION_REPOSITORY,
+    MIND_STATE_REPOSITORY,
+  ],
 })
 export class PipelineModule {}

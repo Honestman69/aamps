@@ -115,6 +115,7 @@ class FakeInstanceRepository implements IInstanceRepository {
       ttsModel: input.ttsModel ?? null,
       ttsVoice: input.ttsVoice ?? 'alloy',
       imageHosts: input.imageHosts ?? '',
+      proactiveEnabled: input.proactiveEnabled ?? false,
       enabled: input.enabled ?? true,
       dailyBudgetCents: input.dailyBudgetCents ?? 0,
       monthlyBudgetCents: input.monthlyBudgetCents ?? 0,
