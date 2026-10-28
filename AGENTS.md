@@ -177,7 +177,7 @@ newjob/                         pnpm workspace
 └─ src/                     主服务：编排、人设、模型、记忆、合规
    ├─ common/               配置、密码学（crypto）、日志
    ├─ modules/              业务模块（auth / model / persona / ...）
-   └─ workers/              定时任务（【预留】目前空目录，M5/M6 才用）
+   └─ workers/              定时任务（proactive.worker：主动消息心跳，默认关闭）
 ```
 
 **依赖方向是单向的**：`主服务 → 适配器包 → 契约包`。适配器永远不依赖主服务，这条由包结构保证。

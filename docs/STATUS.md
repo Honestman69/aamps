@@ -6,22 +6,22 @@
 > 仓库里没有 `.env`、没有数据库，直接 `pnpm dev` 会失败。
 
 **最后更新**：2026-10-27
-**当前阶段**：**M5-1 记忆 / M5-2 人格演化已完成**，M4 已合并（`bf23e4f` + 标签 `m4-admin`）。
+**当前阶段**：**M5 全部完成**（记忆 / 人格演化 / 主动消息），M4 已合并（`bf23e4f` + 标签 `m4-admin`）。
 M4 一览：人设 API（24）、前端工程与静态托管（25）、素材库（26）、管道拆 13 个 pipe（27）、
 接入配置清单驱动（28，D041）、用户管理（29，D042）、会话查看（30，D043）、审计页（31，D044）。
 M5-1（32，D045）：记忆读写闭环 —— 攒够 30 条就反思写入，下一轮读回注入 prompt。
 M5-2（33，D046）：人格演化 —— 同一次反思顺带产出"我变了什么"，过闸门后落 `SelfState`，
 回滚走版本追加，`GET/POST /api/instances/:id/self*` 可看可退。
+M5-3（34，D047）：主动消息 —— 久未联系且关系够近时主动说一句；默认关闭，五道确定性闸门。
 
-**下一步（默认走这条）**：**M5-3 主动消息（默认关闭）** —— 现在它只会在被叫到的时候说话。
-M5 剩下的就是这一项：让它在"很久没聊"或"上次说的事有下文"时主动开口。
-起点：`src/workers/` 还是空目录（`@nestjs/schedule` 已装但没用过），
-需要三样东西：① 判断"现在该不该主动"的纯函数（参考 `mind/attention` 的写法，
-但输入是"距上次互动多久 / 关系亲密度 / 夜间静默 / 当日配额"而不是一条消息）；
-② 一个 cron（`CronExpression.EVERY_10_MINUTES`）扫候选实例；③ 发出去仍然走 `deliver` 那一套
-（拆条、延迟、媒体、落库），不要另写一条发送路径。
-**默认关闭**：实例上没有开关时一行代码都不该跑。动手前先读 D022（重置语义）与
-第 33 步「实现补充」里关于"不要在用户睡觉时说话"的约束。
+**下一步（默认走这条）**：**M5 合并** —— `feat/m5-memory` → `main`（`--no-ff`）并打标签 `m5-memory`，
+然后进 M6 风控与观测。
+
+M6 的第一件事建议是**行为拟人 + 健康分**（ARCHITECTURE 7.1）：现在 `adapter.onAdapterEvent`
+里的 `send-blocked` 只落了一条 warn，`healthScore` 列从来没人写过。起点：
+① `src/modules/risk/`（空）建一个纯函数算健康分（发送被拦截 / 失败率 / 连掉线次数 → 分）；
+② `workers/risk.worker.ts` 每小时把分数写回 `BotInstance.healthScore`，低于阈值自动降级
+（延长时间间隔 / 暂停主动消息 / 通知 owner 不上话术，D028 的边界仍然有效）。
 
 > M4 清单里还剩「规则/约束词配置」未做 —— 它要先把红线存储的 API 形状定下来（见 M4 小节），
 > 何时做都行，不阻塞 M5。
@@ -42,6 +42,10 @@ persist-inbound → load-context → governance → load-mind → load-window
 → persist-interaction（花精力 / 推动 mood / 长亲密度）
 → write-memory（D045/D046，攒够 30 条才反思；顺带人格演化；失败静默）
 ```
+
+**另一条独立的路径（默认关闭，D047）**：`ProactiveWorker` 每 10 分钟扫一次开了开关的实例 ——
+`decideProactive`（纯函数）判"该不该说" → 生成一句 → `InstanceService.sendOutbound` 发出 →
+落库并标 `proactive=true`。它不进入上面的入站管道。
 
 判掉（治理、窗口空、attention 不回）走 `DROP` 安静结束；故障走
 `faultToSlot` + `decideSpeak` + `resolveFallback`（D028/D026），可能静默。
@@ -550,6 +554,51 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 
 **Pipeline 的出站回调设计**：`send` 作为 `handle(message, send)` 的参数而非依赖注入 ——
 因为 send 绑定到"当前这条连接的 adapter"，每个实例的 adapter 不同，不能全局注入一个。
+
+---
+
+### ~~第 34 步：M5-3 主动消息——它会先开口~~ ✅ 已完成（D047）
+
+**为什么做**：M5 前两项让它记得住、会变，但它仍然只在被叫到时说话 ——
+一个从不主动找你的"人"，再像人也只是个应答机。而主动开口又是全系统风险最高的动作
+（平台当营销号封、人当骚扰），所以这一步的重点不是"能发"，是**先设计"什么时候不说"**。
+
+**做了什么**
+
+- [x] `BotInstance.proactiveEnabled`（**默认 false**）+ `Message.proactive`（标记"这条是主动发的"）
+      + 迁移 `20261028142141_proactive`
+- [x] `src/modules/proactive/`：`decide.ts`（**纯函数五道闸**）/ `ports.ts` / `repositories/` /
+      `proactive.service.ts` / `proactive.module.ts`
+- [x] 五道闸（全确定性，模型不参与）：夜间 23:00–08:00 · 亲密度 ≥ 40 · 48h 未互动 ·
+      同一人 72h 冷却 · 实例每天 ≤ 3 条；参数写死在 `PROACTIVE_LIMITS`
+- [x] 候选查询**下推到 SQL**（亲密度 + 时间边界），不捞全表再筛
+- [x] 生成：人设 + 记忆 + 演化自述 + 心智状态 → 一段"主动开口"指令（含三条禁令：
+      别提"好久没聊"、别问"在吗"、别自我介绍）
+- [x] 出站：`InstanceService.sendOutbound`（唯一出口，走 `InstanceRuntime` 里的 adapter）→
+      **先发后落库**并标 `proactive`
+- [x] 尊重会话级 `aiPaused` / `muted`
+- [x] `src/workers/proactive.worker.ts`：每 10 分钟一次，带重入保护；`ScheduleModule.forRoot()` 装配
+- [x] 实例接口可读写开关（`PATCH /api/instances/:id`）
+
+**验收**
+
+- `pnpm test` **659 个用例全绿**（新增 23：闸门 11、服务 12，含清洗/冷却/暂停/发送失败）
+- `pnpm typecheck` / `pnpm build` 通过（DI 装配在真服务上验过：`ProactiveModule` 正常初始化）
+- `pipeline-smoke` **14 项**（新增⑭，真实 SQL）：SQL 把"刚聊过的 peer-1"筛掉、只对 50 小时没聊的
+  `peer-idle` 发 1 条、引号被清洗、落库 `proactive=true`、**同一天再扫一条都不发**
+- `http-smoke` **84 项**（新增 1）：开关默认 false → PATCH 改 true → 读回 true → 传字符串 400
+- `check:local-data` PASSED（327 文件）
+
+**实现补充（后续不要改）**
+
+- **默认关闭**：开关关着时连候选都不查（不是"查了再跳过"）。要开是人的决定。
+- **只做"久未联系"一个触发**：另外两个（未完结话题 / 纪念日）要语义提取，判断错的代价是
+  **凭空编一件事去开场**，比沉默糟得多。
+- **72h 冷却比文档更保守**：ARCHITECTURE 6.5 写的是"每用户每天 1 次"，照那个做会变成
+  "对方一天不回、第二天再敲一次"。少说一句错的成本远低于被封号。
+- **一条、不拆条、不带媒体**：主动消息不是推送。
+- **必须走 `sendOutbound`**：那是唯一知道"当前连在哪个 adapter"的地方，也保证风控/限流信号不分叉。
+- **落库带 `proactive=true`**：当天条数与 72h 冷却都靠它，别改成"用有没有入站消息去推断"。
 
 ---
 
@@ -1282,7 +1331,7 @@ POST   /api/personas/:id/activate
 - [x] 情节摘要（每 30 条反思一次）—— 第 32 步，D045
 - [x] 语义记忆（关于这个人的稳定事实）—— 第 32 步，D045
 - [x] 人格演化层（`SelfState`：traits + 第一人称自述 + 版本回滚）—— 第 33 步，D046
-- [ ] 主动消息（默认关闭）—— **下一步 M5-3**
+- [x] 主动消息（默认关闭）—— 第 34 步，D047
 
 ### M6 风控与观测
 
@@ -1355,6 +1404,7 @@ POST   /api/personas/:id/activate
 
 | 日期 | 变更 |
 |---|---|
+| 2026-10-28 | 主动消息落地（D047）：`proactiveEnabled`（默认关）+ `Message.proactive`；纯函数五道闸（夜间/亲密度/48h/72h/每日 3 条）；每 10 分钟心跳，走 `sendOutbound` 出站；659 单测、pipeline-smoke 14 项、http-smoke 84 项 |
 | 2026-10-27 | 人格演化落地（D046）：`SelfState` + 版本快照；纯函数闸门（键白名单/单次 0.03/单日 0.08/棱角 0.25）；演化溯源绑真实记忆 id；回滚追加版本不删历史；管道 15 → 16 个 pipe；636 单测、pipeline-smoke 13 项、http-smoke 83 项 |
 | 2026-10-27 | 记忆闭环落地（D045）：反思按条数触发（30 条）→ 摘要挂会话 / 事实挂人 → 下一轮读回注入 system「印象」段；管道 13 → 15 个 pipe；597 单测、pipeline-smoke 12 项、http-smoke 78 项、真实库验证去重与溯源 |
 | 2026-10-23 | 项目初始化：完成需求调研、架构、数据模型、模型接入、安全模型设计与交接文档 |
