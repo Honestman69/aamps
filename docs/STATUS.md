@@ -76,11 +76,10 @@ persist-inbound → load-context → governance → load-mind → load-window
   `corepack pnpm install` 首次约 9 分钟，别以为卡死了。
 - 构建：`pnpm build` 先构建 `packages/*`（契约包 `main` 指向 `dist/index.js`）再编译主服务。
   只跑 `tsc` 不构建包，运行时会 `ERR_MODULE_NOT_FOUND`。
-- **推送状态**：`feat/m5-memory` 已推到远端（`dbfe57c`）；**M5 的合并提交 `2b681d2` 与标签
-  `m5-memory` 只在本地** —— 2026-10-28 23:38 推送时本机 7890 代理已不在（无监听），
-  等代理恢复后执行 `https_proxy=http://127.0.0.1:<port> git push origin main --follow-tags`。
+- **推送状态**：2026-10-28 已推到 `main` = `3be8590`（M5 合并 + 合并记录），
+  标签 `m5-memory` → `2b681d2`，分支 `feat/m5-memory` = `4bf41c3`（三处均用 `git ls-remote` 复核）。
   远端现有 `main` + 各阶段的 `feat/*` 分支（每个里程碑一条，合并后保留作追溯）+
-  即将变成五个标签（`m1-skeleton` / `m1-verified` / `m3-persona` / `m4-admin` / `m5-memory`）。
+  五个标签（`m1-skeleton` / `m1-verified` / `m3-persona` / `m4-admin` / `m5-memory`）。
   **成败以远端 ref 为准**（`git ls-remote origin refs/heads/main refs/tags/<tag>`），
   不要用本地 remote-tracking 反推——曾经出现过"本地以为推上去了、实际是用户用桌面端手动推的"这种误判。
   这台机器上会有多个代理进程并存，端口对不上就是 502/超时，不是"网坏了"。
