@@ -336,6 +336,20 @@ async function main(): Promise<void> {
   assert.equal(res.status, 200);
 
   step('实例：改名字 → 200');
+  step('实例：主动消息开关默认关闭，能改能读回');
+  res = await call('GET', '/api/instances');
+  assert.equal(res.status, 200);
+  const listed = (res.body as Array<{ id: string; proactiveEnabled: boolean }>).find(
+    (item) => item.id === instanceId,
+  );
+  assert.ok(listed, '列表里应能查到刚建的实例');
+  assert.equal(listed.proactiveEnabled, false, '默认必须关闭（D047）');
+  res = await call('PATCH', `/api/instances/${instanceId}`, { proactiveEnabled: true });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(res.body.proactiveEnabled, true);
+  res = await call('PATCH', `/api/instances/${instanceId}`, { proactiveEnabled: 'yes' });
+  assert.equal(res.status, 400, '布尔字段不接字符串');
+
   res = await call('PATCH', `/api/instances/${instanceId}`, { name: '改过名的实例' });
   assert.equal(res.status, 200, JSON.stringify(res.body));
   assert.equal(res.body.name, '改过名的实例');
@@ -584,6 +598,39 @@ async function main(): Promise<void> {
   step('消息：limit 越界 → 400');
   res = await call('GET', '/api/sessions/whatever/messages?limit=999');
   assert.equal(res.status, 400);
+
+  // ── 人格演化（M5-2 / D046）──
+  step('自我：没演化过 → 200 + evolved=false + 版本为空');
+  res = await call('GET', `/api/instances/${sessionInstanceId}/self`);
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(res.body.state.evolved, false);
+  assert.equal(res.body.state.version, 0);
+  assert.deepEqual(res.body.versions, []);
+  // 没演化过时特质是中性值，且**不写库**（下面回滚 404 能佐证库里没有 v0）
+  assert.equal(res.body.state.traits.warm, 0.5);
+
+  step('自我：回滚到不存在的版本 → 404（没演化过就没有基线）');
+  res = await call('POST', `/api/instances/${sessionInstanceId}/self/rollback`, { version: 0 });
+  assert.equal(res.status, 404, JSON.stringify(res.body));
+  assert.equal(res.body.code, 'SELF_VERSION_NOT_FOUND');
+
+  step('自我：limit 越界 / 未知参数 / 版本号非法 → 400');
+  res = await call('GET', `/api/instances/${sessionInstanceId}/self?limit=999`);
+  assert.equal(res.status, 400);
+  res = await call('GET', `/api/instances/${sessionInstanceId}/self?unknown=1`);
+  assert.equal(res.status, 400);
+  res = await call('POST', `/api/instances/${sessionInstanceId}/self/rollback`, { version: -1 });
+  assert.equal(res.status, 400);
+  res = await call('POST', `/api/instances/${sessionInstanceId}/self/rollback`, { version: 1, extra: 1 });
+  assert.equal(res.status, 400);
+
+  step('自我：别人的实例 → 404');
+  res = await request('GET', `/api/instances/${sessionInstanceId}/self`, undefined, memberCookie2);
+  assert.equal(res.status, 404, JSON.stringify(res.body));
+
+  step('自我：实例不存在 → 404');
+  res = await call('GET', '/api/instances/no-such-instance/self');
+  assert.equal(res.status, 404);
 
   res = await call('DELETE', `/api/instances/${sessionInstanceId}`);
   assert.equal(res.status, 200);

@@ -20,6 +20,12 @@ import type { IImageFetcher } from '../media/fetcher';
 import { MediaModule } from '../media/media.module';
 import { IMAGE_FETCHER, MEDIA_ASSET_SERVICE, TTS_SERVICE } from '../media/tokens';
 import type { TtsService } from '../media/tts';
+import { MemoryModule } from '../memory/memory.module';
+import { MEMORY_SERVICE } from '../memory/tokens';
+import { PersonaModule } from '../persona/persona.module';
+import { SELF_STATE_SERVICE } from '../persona/tokens';
+import type { SelfStateService } from '../persona/self/self-state.service';
+import type { PipelineMemory, PipelineSelf } from './deps';
 import { PrismaMindStateRepository } from '../mind/state/repositories/prisma-mind-state.repository';
 import type { IMindStateRepository } from '../mind/state/ports';
 import { ModelModule } from '../model/model.module';
@@ -41,7 +47,7 @@ import {
 } from './tokens';
 
 @Module({
-  imports: [AuthModule, ConfigModule, MediaModule, ModelModule],
+  imports: [AuthModule, ConfigModule, MediaModule, MemoryModule, ModelModule, PersonaModule],
   providers: [
     {
       provide: PIPELINE_REPOSITORY,
@@ -75,6 +81,8 @@ import {
         images: IImageFetcher,
         tts: TtsService,
         assets: MediaAssetService,
+        memory: PipelineMemory,
+        self: PipelineSelf,
         config: {
           get(
             instanceId: string,
@@ -91,6 +99,8 @@ import {
           images,
           tts,
           assets,
+          memory,
+          self,
           config,
           gateway,
         }),
@@ -102,11 +112,20 @@ import {
         IMAGE_FETCHER,
         TTS_SERVICE,
         MEDIA_ASSET_SERVICE,
+        MEMORY_SERVICE,
+        SELF_STATE_SERVICE,
         CONFIG_SERVICE,
         GATEWAY_SERVICE,
       ],
     },
   ],
-  exports: [PIPELINE_SERVICE],
+  // 主动消息（M5-3）也要用这三样：owner/人设、会话落库、心智状态。
+  // 导出的是仓储令牌（不是服务），避免主动消息绕过管道的业务判断。
+  exports: [
+    PIPELINE_SERVICE,
+    PIPELINE_REPOSITORY,
+    SESSION_REPOSITORY,
+    MIND_STATE_REPOSITORY,
+  ],
 })
 export class PipelineModule {}

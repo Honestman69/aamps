@@ -6,35 +6,46 @@
 > 仓库里没有 `.env`、没有数据库，直接 `pnpm dev` 会失败。
 
 **最后更新**：2026-10-27
-**当前阶段**：**M4 完成并已合并** —— 人设 API（24）、前端工程与静态托管（25）、素材库（26）、
-管道拆 13 个 pipe（27）、接入配置清单驱动（28，D041）、用户管理（29，D042）、
-会话查看（30，D043）、审计页（31，D044）。后台九页可用。
-`feat/m4-admin` 已 `--no-ff` 合入 `main`（`bf23e4f`）并打标签 `m4-admin`。
+**当前阶段**：**M5 全部完成**（记忆 / 人格演化 / 主动消息），M4 已合并（`bf23e4f` + 标签 `m4-admin`）。
+M4 一览：人设 API（24）、前端工程与静态托管（25）、素材库（26）、管道拆 13 个 pipe（27）、
+接入配置清单驱动（28，D041）、用户管理（29，D042）、会话查看（30，D043）、审计页（31，D044）。
+M5-1（32，D045）：记忆读写闭环 —— 攒够 30 条就反思写入，下一轮读回注入 prompt。
+M5-2（33，D046）：人格演化 —— 同一次反思顺带产出"我变了什么"，过闸门后落 `SelfState`，
+回滚走版本追加，`GET/POST /api/instances/:id/self*` 可看可退。
+M5-3（34，D047）：主动消息 —— 久未联系且关系够近时主动说一句；默认关闭，五道确定性闸门。
 
-**下一步（默认走这条）**：**M5-1 记忆与反思**。起点是空目录 `src/modules/memory/`
-（现在只有 `.gitkeep`），管道里要新增三个 pipe —— 插入点按现有编号命名：
-`05a-load-memory`（在 `load-window` 之后、`attention` 之前读回记忆）→
-`08a-inject-memory`（在 `assemble-prompt` 里把记忆拼进 system prompt）→
-`13a-write-memory`（`persist-interaction` 之后落库）。**文件与表都还不存在**，这三个名字只是约定。
-动手前先读 D023（记忆挂实例、不挂用户/Provider）与 D031（会话窗口的裁剪口径），
-别把窗口和记忆混成一个东西：窗口是"这次对话的原始消息"，记忆是"跨天仍然成立的事"。
+**下一步（默认走这条）**：**M5 合并** —— `feat/m5-memory` → `main`（`--no-ff`）并打标签 `m5-memory`，
+然后进 M6 风控与观测。
+
+M6 的第一件事建议是**行为拟人 + 健康分**（ARCHITECTURE 7.1）：现在 `adapter.onAdapterEvent`
+里的 `send-blocked` 只落了一条 warn，`healthScore` 列从来没人写过。起点：
+① `src/modules/risk/`（空）建一个纯函数算健康分（发送被拦截 / 失败率 / 连掉线次数 → 分）；
+② `workers/risk.worker.ts` 每小时把分数写回 `BotInstance.healthScore`，低于阈值自动降级
+（延长时间间隔 / 暂停主动消息 / 通知 owner 不上话术，D028 的边界仍然有效）。
 
 > M4 清单里还剩「规则/约束词配置」未做 —— 它要先把红线存储的 API 形状定下来（见 M4 小节），
-> 不影响 M5 开工。
+> 何时做都行，不阻塞 M5。
 
 > **多模态要配三样才生效**（都在实例上）：`modelVision`（看图）、`ttsCredentialId` + `ttsModel`（发语音）。
 > 不配就是"能力不存在"——图片只留「[图片]」占位，prompt 里也不提 `[voice]`。
 > **素材库不需要配置**：平台支持发图即可用，模型说 `[save]名字[/save]` 就存，说 `[use]名字[/use]` 就发。
 
-**当前一条消息的完整链路**（13 个 pipe，见 `pipeline/pipes/index.ts` 与 ARCHITECTURE 第 5 节）：
+**当前一条消息的完整链路**（16 个 pipe，见 `pipeline/pipes/index.ts` 与 ARCHITECTURE 第 5 节）：
 
 ```
 persist-inbound → load-context → governance → load-mind → load-window
-→ attention（判掉就不花 token）→ collect-media → assemble-prompt（D020）
+→ attention（判掉就不花 token）→ collect-media
+→ load-memory（D045，读回事实/摘要）→ load-self（D046，读回"现在的你"）
+→ assemble-prompt（D020：种子 → 现在的你 → 印象 → 情境 → 语气）
 → think（D036，可关）→ generate（D024 预算 / D025 熔断 / 记账）
 → decide-quote（D030）→ deliver（D033/D035：媒体 + 拆条 + 延迟 + 回 @）
 → persist-interaction（花精力 / 推动 mood / 长亲密度）
+→ write-memory（D045/D046，攒够 30 条才反思；顺带人格演化；失败静默）
 ```
+
+**另一条独立的路径（默认关闭，D047）**：`ProactiveWorker` 每 10 分钟扫一次开了开关的实例 ——
+`decideProactive`（纯函数）判"该不该说" → 生成一句 → `InstanceService.sendOutbound` 发出 →
+落库并标 `proactive=true`。它不进入上面的入站管道。
 
 判掉（治理、窗口空、attention 不回）走 `DROP` 安静结束；故障走
 `faultToSlot` + `decideSpeak` + `resolveFallback`（D028/D026），可能静默。
@@ -543,6 +554,144 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 
 **Pipeline 的出站回调设计**：`send` 作为 `handle(message, send)` 的参数而非依赖注入 ——
 因为 send 绑定到"当前这条连接的 adapter"，每个实例的 adapter 不同，不能全局注入一个。
+
+---
+
+### ~~第 34 步：M5-3 主动消息——它会先开口~~ ✅ 已完成（D047）
+
+**为什么做**：M5 前两项让它记得住、会变，但它仍然只在被叫到时说话 ——
+一个从不主动找你的"人"，再像人也只是个应答机。而主动开口又是全系统风险最高的动作
+（平台当营销号封、人当骚扰），所以这一步的重点不是"能发"，是**先设计"什么时候不说"**。
+
+**做了什么**
+
+- [x] `BotInstance.proactiveEnabled`（**默认 false**）+ `Message.proactive`（标记"这条是主动发的"）
+      + 迁移 `20261028142141_proactive`
+- [x] `src/modules/proactive/`：`decide.ts`（**纯函数五道闸**）/ `ports.ts` / `repositories/` /
+      `proactive.service.ts` / `proactive.module.ts`
+- [x] 五道闸（全确定性，模型不参与）：夜间 23:00–08:00 · 亲密度 ≥ 40 · 48h 未互动 ·
+      同一人 72h 冷却 · 实例每天 ≤ 3 条；参数写死在 `PROACTIVE_LIMITS`
+- [x] 候选查询**下推到 SQL**（亲密度 + 时间边界），不捞全表再筛
+- [x] 生成：人设 + 记忆 + 演化自述 + 心智状态 → 一段"主动开口"指令（含三条禁令：
+      别提"好久没聊"、别问"在吗"、别自我介绍）
+- [x] 出站：`InstanceService.sendOutbound`（唯一出口，走 `InstanceRuntime` 里的 adapter）→
+      **先发后落库**并标 `proactive`
+- [x] 尊重会话级 `aiPaused` / `muted`
+- [x] `src/workers/proactive.worker.ts`：每 10 分钟一次，带重入保护；`ScheduleModule.forRoot()` 装配
+- [x] 实例接口可读写开关（`PATCH /api/instances/:id`）
+
+**验收**
+
+- `pnpm test` **659 个用例全绿**（新增 23：闸门 11、服务 12，含清洗/冷却/暂停/发送失败）
+- `pnpm typecheck` / `pnpm build` 通过（DI 装配在真服务上验过：`ProactiveModule` 正常初始化）
+- `pipeline-smoke` **14 项**（新增⑭，真实 SQL）：SQL 把"刚聊过的 peer-1"筛掉、只对 50 小时没聊的
+  `peer-idle` 发 1 条、引号被清洗、落库 `proactive=true`、**同一天再扫一条都不发**
+- `http-smoke` **84 项**（新增 1）：开关默认 false → PATCH 改 true → 读回 true → 传字符串 400
+- `check:local-data` PASSED（327 文件）
+
+**实现补充（后续不要改）**
+
+- **默认关闭**：开关关着时连候选都不查（不是"查了再跳过"）。要开是人的决定。
+- **只做"久未联系"一个触发**：另外两个（未完结话题 / 纪念日）要语义提取，判断错的代价是
+  **凭空编一件事去开场**，比沉默糟得多。
+- **72h 冷却比文档更保守**：ARCHITECTURE 6.5 写的是"每用户每天 1 次"，照那个做会变成
+  "对方一天不回、第二天再敲一次"。少说一句错的成本远低于被封号。
+- **一条、不拆条、不带媒体**：主动消息不是推送。
+- **必须走 `sendOutbound`**：那是唯一知道"当前连在哪个 adapter"的地方，也保证风控/限流信号不分叉。
+- **落库带 `proactive=true`**：当天条数与 72h 冷却都靠它，别改成"用有没有入站消息去推断"。
+
+---
+
+### ~~第 33 步：M5-2 人格演化——它会慢慢变成另一个人~~ ✅ 已完成（D046）
+
+**为什么做**：M5-1 之后它记得住别人，但**不记得自己变过没有**。
+`persona/prompt.ts` 里「现在的你」那一段从 M2 起就是一行注释 ——
+聊三个月和第一天说一样的话，这正是"拟人"最容易露馅的第二处。
+
+**做了什么**
+
+- [x] `SelfState`（`traitsJson` + `narrative` + `version`，`instanceId` 唯一）
+      + `SelfStateVersion`（快照 + `deltasJson` + `reason` + `sourceMemoryIds`），迁移 `20261027134339_self_state`
+- [x] `src/modules/persona/self/`：`traits.ts`（四维定义）/ `evolution.ts`（**纯函数闸门**）/
+      `ports.ts` / `repositories/prisma-self-state.repository.ts` / `self-state.service.ts` / `self.controller.ts` / `dto.ts`
+- [x] **闸门**（D020 第 5 条原样落地，写死在代码里）：键白名单（只允许 `traits`/`narrative`）、
+      单次 |Δ| ≤ 0.03、单日累计 ≤ 0.08、clamp 到 [0.05, 0.95]、`edge` ≥ 0.25、自述 ≤ 1200 字
+- [x] 反思输出多一段 `self`：`{"traits":{"edge":0.02},"narrative":"…"}`
+      （`memory/reflect.ts` 只做透传，闸门与落库归 persona —— 谁定规则谁校验）
+- [x] **溯源**：把这次真正写入的 `MemoryItem.id` 绑进 `sourceMemoryIds`；没有新记忆就不动性格
+- [x] 越界（`self` 里出现 `rules` / `redLines` 之类）→ 整次丢弃 + 审计 `self.evolution_rejected`
+- [x] 接受时先补一版 v0 基线，再写 v1；审计 `self.evolve`（只记版本与特质，**不记自述正文**）
+- [x] 版本与回滚：`GET /api/instances/:id/self`（当前 + 版本列表）、
+      `POST /api/instances/:id/self/rollback`（追加新版本，历史不删）
+- [x] prompt：`buildSelfSection` 插在「出生设定」与「对这个人的印象」之间；
+      特质**只在明显偏离 0.5 时**说一两句（和语气提示同一个思路，避免每轮都"你性格如何"）
+- [x] 管道 15 → 16：`load-self`（与 `load-memory` 并列，都在 `attention` 之后）
+
+**验收**
+
+- `pnpm test` **636 个用例全绿**（新增 39：闸门 22、服务 13、记忆衔接 3、管道 3……按文件计）
+- `pnpm typecheck` / `pnpm build` 通过
+- `pipeline-smoke` **13 项**（新增⑬）：真实库上 edge 0.50 → 0.52（单次上限内）、
+  `warm` 没被顺手改、v0 基线 + v1 演化、审计已留痕且**不含自述正文**、
+  回滚到 v0 后 v2 生效且 v1 仍在（历史不删）
+- `http-smoke` **83 项**（新增 5）：未演化 → `evolved=false` 且版本空、回滚不存在版本 → 404
+  `SELF_VERSION_NOT_FOUND`、`limit`/未知参数/版本号非法 → 400、别人的实例 → 404、实例不存在 → 404
+- `check:local-data` PASSED（316 文件）
+
+**实现补充（后续不要改）**
+
+- **不给手工编辑接口**：手改等于绕过闸门（D046）。要看就看，要退就回滚，要改性格走 D022 的重置。
+- **初值固定 0.5，不从种子推导**：否则一开始就有一份"没发生的演化"，数值与空自述互相打脸。
+- **溯源由代码绑 id**，不是让模型报 id（它会编）；没有新记忆就不动性格。
+- **被闸门拒绝的提案不落基线**：拒绝不该在历史里留痕；只有"真要写"时才补 v0。
+- **审计不记自述正文**：可能长、可能私人；正文在版本表里。
+- **回滚不产生当日变化量**：否则来回回滚能把单日预算烧光。
+- **特质只在偏离 0.5 明显时进 prompt**：把 0.52 写成"你有点温和"只会变成噪声。
+
+---
+
+### ~~第 32 步：M5-1 记忆与反思——它会记得昨天的事~~ ✅ 已完成（D045）
+
+**为什么做**：M3 之后它能像个人地回一句，但**不记得昨天**：窗口只有几小时（D031），
+跨天归零，重启之后连"刚才聊到哪"都没了。每次对话都像第一次见 —— 这是"拟人"最容易露馅的地方。
+
+**做了什么**
+
+- [x] `src/modules/memory/`：`types.ts` / `reflect.ts`（纯函数）/ `ports.ts` /
+      `repositories/prisma-memory.repository.ts` / `memory.service.ts` / `memory.module.ts`
+- [x] **反思**（写）：按条数触发（默认 30 条，`reflectEvery`）。先 `COUNT` 够不够、
+      够了才拉最近 40 条消息 → 调 `purpose: 'reflection'`（走 `modelCheap`）→ 解析 JSON → 落库
+- [x] **代码闸门**：事实 ≤4 条、单条 ≤60 字（**超出丢弃**，超长的事实已不是事实而是叙事）、
+      摘要 ≤160 字（截断）、正文去重（忽略空白与标点）、`kind` 白名单、`importance` 夹到 1-5
+- [x] **归属**：摘要挂会话（`sessionId`）、事实挂人（`subjectId`，`sessionId = null`）——
+      私聊里知道的，到了群里也记得
+- [x] **读回**：`load-memory` pipe 取 top 6 事实 + 最近 3 条摘要 → `assemble-prompt` 把它们拼进
+      system 的「印象」段（`persona/prompt.ts` 新增记忆段）
+- [x] 记忆段**只进 system，不进对话历史**；且必带"不用复述，也别一条条汇报"
+- [x] `MemoryItem` 补两个索引（`(instanceId, subjectId, scope)` / `(sessionId, scope, createdAt)`），迁移 `20261027131956_memory_retrieval_indexes`
+- [x] 管道 13 → 15 个 pipe：`load-memory`（attention 之后，判掉的消息不花这次查询）、
+      `write-memory`（deliver 之后，反思耗时不影响对方收到回复）
+- [x] **两端都不许抛**：读失败 = 这次不记得；写失败 = 这次没记住。
+      写这一步跑在"消息已发出"之后，抛出去会让对方在正常回复之外再收到一句兜底话术
+
+**验收**
+
+- `pnpm test` **597 个用例全绿**（新增 30：反思解析 10、服务 12、管道 5、顺序不变量 2 等）
+- `pnpm typecheck` / `pnpm build` / `pnpm web:typecheck` 通过
+- `pipeline-smoke` **12 项**（新增⑫）：真实 SQL 上跑出反思 → 1 条摘要（挂会话、能溯源到真实消息 id）
+  + 1 条事实（`sessionId` 为空、`importance=5`）→ 下一条消息的 system prompt 里**真的带上了**这条事实
+  → 再跑一轮相同内容**没有重复入库**（去重生效）
+- `http-smoke` **78 项**全过（DI 装配改动后服务照常启动，既有功能无回归）
+- `check:local-data` PASSED（305 文件）
+
+**实现补充（后续不要改）**
+
+- **不做三层**：工作记忆就是会话窗口本身（原文在 `Message` 表、已按 D031 裁剪）。
+  再存一份进记忆表会得到两套不同步的真相。`SelfState` 演化层才是 M5-2。
+- **按条数触发，不用 cron**：cron 假设"机器一直在跑"，三天没开机的实例会空转三次。
+- **`sourceMsgIds` 存的是落库后的 `Message.id`**，不是入站时的平台 id —— 回查 `Message` 表才有意义。
+- **`keywords` 列先留空**：没有检索方就不写，否则只是自欺（D045「明确不做」）。
+- **`write-memory` 的 `.catch` 是护栏**：服务层已经吞过一次，这行防的是将来换实现时把契约弄丢。
 
 ---
 
@@ -1178,10 +1327,11 @@ POST   /api/personas/:id/activate
 
 ### M5 记忆与自主
 
-- [ ] 工作记忆（最近 N 轮）
-- [ ] 反思任务（每日摘要）
-- [ ] 语义记忆（用户画像）
-- [ ] 主动消息（默认关闭）
+- [x] 工作记忆（最近 N 轮）—— **不需要单独做**：会话窗口本身就是（D031/D045）
+- [x] 情节摘要（每 30 条反思一次）—— 第 32 步，D045
+- [x] 语义记忆（关于这个人的稳定事实）—— 第 32 步，D045
+- [x] 人格演化层（`SelfState`：traits + 第一人称自述 + 版本回滚）—— 第 33 步，D046
+- [x] 主动消息（默认关闭）—— 第 34 步，D047
 
 ### M6 风控与观测
 
@@ -1254,6 +1404,9 @@ POST   /api/personas/:id/activate
 
 | 日期 | 变更 |
 |---|---|
+| 2026-10-28 | 主动消息落地（D047）：`proactiveEnabled`（默认关）+ `Message.proactive`；纯函数五道闸（夜间/亲密度/48h/72h/每日 3 条）；每 10 分钟心跳，走 `sendOutbound` 出站；659 单测、pipeline-smoke 14 项、http-smoke 84 项 |
+| 2026-10-27 | 人格演化落地（D046）：`SelfState` + 版本快照；纯函数闸门（键白名单/单次 0.03/单日 0.08/棱角 0.25）；演化溯源绑真实记忆 id；回滚追加版本不删历史；管道 15 → 16 个 pipe；636 单测、pipeline-smoke 13 项、http-smoke 83 项 |
+| 2026-10-27 | 记忆闭环落地（D045）：反思按条数触发（30 条）→ 摘要挂会话 / 事实挂人 → 下一轮读回注入 system「印象」段；管道 13 → 15 个 pipe；597 单测、pipeline-smoke 12 项、http-smoke 78 项、真实库验证去重与溯源 |
 | 2026-10-23 | 项目初始化：完成需求调研、架构、数据模型、模型接入、安全模型设计与交接文档 |
 | 2026-10-23 | 完成密码学底座：Argon2id KEK 派生、DEK 信封加解密、AAD 绑定前缀、13 个测试用例；依赖已安装 |
 | 2026-10-23 | 追加 D014：KDF 库固定 `@node-rs/argon2`（实测 `argon2` 亦可用，依据是"无编译回退路径"而非"跑不起来"）；并补「依赖类取舍写在哪」的判定标准 |

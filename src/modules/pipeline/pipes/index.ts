@@ -2,7 +2,7 @@
  * 入站管道：**顺序即真相**。
  *
  * 这里是一张平铺的清单，不是被拆散的逻辑 —— 想知道"一条消息经过哪些步骤"，
- * 看这 13 行就够了。加一个行为 = 新建一个 pipe 文件 + 在这里插一行。
+ * 看这 16 行就够了。加一个行为 = 新建一个 pipe 文件 + 在这里插一行。
  *
  * 两条纪律：
  *   1. **顺序靠 `assertPipeGraph` 校验**，不靠注释里的编号。谁把 `attention`
@@ -22,12 +22,15 @@ import { loadMindPipe } from './04-load-mind';
 import { loadWindowPipe } from './05-load-window';
 import { attentionPipe } from './06-attention';
 import { collectMediaPipe } from './07-collect-media';
+import { loadMemoryPipe } from './07a-load-memory';
+import { loadSelfPipe } from './07b-load-self';
 import { assemblePromptPipe } from './08-assemble-prompt';
 import { thinkPipe } from './09-think';
 import { generatePipe } from './10-generate';
 import { decideQuotePipe } from './11-decide-quote';
 import { deliverPipe } from './12-deliver';
 import { persistInteractionPipe } from './13-persist-interaction';
+import { writeMemoryPipe } from './13a-write-memory';
 import type { Pipe, PipelineContext } from './types';
 
 export { assertPipeGraph, createContext } from './types';
@@ -43,15 +46,20 @@ export const INBOUND_PIPES: readonly Pipe[] = [
   loadWindowPipe,
   // 省 token 的那一步：判掉就完全不调模型
   attentionPipe,
-  // 模型侧：素材 → prompt → 想 → 说
+  // 模型侧：素材 → 记忆/自我 → prompt → 想 → 说
   collectMediaPipe,
+  // 两个"读回"都放在 attention 之后：被判掉的消息不值得为它查库
+  loadMemoryPipe,
+  loadSelfPipe,
   assemblePromptPipe,
   thinkPipe,
   generatePipe,
-  // 出站：引用 → 发送 → 回写
+  // 出站：引用 → 发送 → 回写 → 反思
   decideQuotePipe,
   deliverPipe,
   persistInteractionPipe,
+  // 最后一个：攒够条数才真的写，写失败也只丢这一批记忆（绝不触发兜底话术）
+  writeMemoryPipe,
 ];
 
 /**

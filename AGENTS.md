@@ -113,7 +113,7 @@ pnpm web:build        # 产物能出来（挂载失败只有真浏览器能看�
     换模型 Provider = **只改 `credentialId` / `modelMain`，人格与记忆零迁移**。
     `Persona` / `SelfState` / `MemoryItem` 里出现 provider / credential / model 字段，一律算错。
 
-11. **业务逻辑写进 pipe，不要写回 `PipelineService`。** 管道是 13 个 pipe
+11. **业务逻辑写进 pipe，不要写回 `PipelineService`。** 管道是 16 个 pipe
     （`src/modules/pipeline/pipes/`），编排层只做"入队串行 / 跑链 / 兜底 / 清理"。
     加一种人格行为 = 新建一个 pipe 文件 + 在 `pipes/index.ts` 的清单里插一行，
     并如实填 `requires` / `provides`（`assertPipeGraph` 会在启动时校验）。
@@ -177,7 +177,7 @@ newjob/                         pnpm workspace
 └─ src/                     主服务：编排、人设、模型、记忆、合规
    ├─ common/               配置、密码学（crypto）、日志
    ├─ modules/              业务模块（auth / model / persona / ...）
-   └─ workers/              定时任务（【预留】目前空目录，M5/M6 才用）
+   └─ workers/              定时任务（proactive.worker：主动消息心跳，默认关闭）
 ```
 
 **依赖方向是单向的**：`主服务 → 适配器包 → 契约包`。适配器永远不依赖主服务，这条由包结构保证。

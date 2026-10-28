@@ -23,6 +23,7 @@ export class PrismaConfigSourceRepository implements IConfigSourceRepository {
         rateLimitPerMin: true,
         dailyMsgCap: true,
         nightQuiet: true,
+        proactiveEnabled: true,
         dailyBudgetCents: true,
         monthlyBudgetCents: true,
         budgetPolicy: true,

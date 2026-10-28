@@ -38,6 +38,8 @@ export type InstancePublicRow = {
   ttsVoice: string;
   /** 允许转发的图片域名白名单（逗号分隔）；空 = 任意公网 https */
   imageHosts: string;
+  /** 主动消息开关（M5-3 / D047） */
+  proactiveEnabled: boolean;
   status: string;
   createdAt: Date;
   updatedAt: Date;
@@ -93,6 +95,7 @@ export type InstanceCreateInput = {
   ttsModel?: string | null;
   ttsVoice?: string;
   imageHosts?: string;
+  proactiveEnabled?: boolean;
 };
 
 export type InstanceUpdatePatch = {
@@ -118,6 +121,7 @@ export type InstanceUpdatePatch = {
   ttsModel?: string | null;
   ttsVoice?: string;
   imageHosts?: string;
+  proactiveEnabled?: boolean;
 };
 
 export interface IInstanceRepository {

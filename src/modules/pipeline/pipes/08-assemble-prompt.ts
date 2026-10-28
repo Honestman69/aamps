@@ -28,6 +28,8 @@ export const assemblePromptPipe: Pipe = {
     'inbound',
     'imageParts',
     'assetAliases',
+    'memories',
+    'selfState',
     'config',
   ],
   provides: ['system', 'messages'],
@@ -47,6 +49,10 @@ export const assemblePromptPipe: Pipe = {
             voiceReply: voiceReady,
             assets: ctx.assetAliases,
           },
+          // 记忆只影响"印象"那一段，不进 few-shot、不进历史（D045）
+          memory: ctx.memories,
+          // 演化层只影响"现在的你"那一段（D046）；空自述 + 中性特质时整段跳过
+          self: { narrative: ctx.selfState.narrative, lines: ctx.selfState.lines },
         })
       : { system: NO_PERSONA_SYSTEM, examples: [] as ChatMessage[] };
 

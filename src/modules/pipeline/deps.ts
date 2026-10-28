@@ -15,11 +15,49 @@ import type { ResolvedConfig } from '../config/types';
 import type { MediaAssetService } from '../media/assets/asset.service';
 import type { IImageFetcher } from '../media/fetcher';
 import type { TtsService } from '../media/tts';
+import type { PromptMemory } from '../memory/types';
 import type { IMindStateRepository } from '../mind/state/ports';
 import type { GatewayService } from '../model/gateway/gateway.service';
+import type { Traits } from '../persona/self/traits';
 import type { ISessionRepository } from '../session/persistence';
 import type { ISessionWindowRepository } from '../session/ports';
 import type { IPipelineRepository } from './ports';
+
+/**
+ * 人格演化（M5-2）：管道只需要"给我一句现在的你"。
+ *
+ * 不直接依赖 `SelfStateService`：管道测试里给一个返回空自述的假实现就够了，
+ * 而"演化怎么算、什么时候变"是 persona 模块的事。
+ */
+export type PipelineSelf = {
+  describeForPrompt(instanceId: string): Promise<{
+    narrative: string;
+    traits: Traits;
+    lines: string[];
+  }>;
+};
+
+/**
+ * 记忆（M5-1）：管道只认这两个方法，不认 `MemoryService` 整个类。
+ *
+ * 写成窄接口而不是直接引用服务：管道测试里给一个两行的假实现就够了，
+ * 不用为了跑一条消息去造仓储与模型。两者都**永不 throw**（见 `memory.service.ts`）。
+ */
+export type PipelineMemory = {
+  loadForPrompt(input: {
+    instanceId: string;
+    sessionId: string;
+    subjectId: string;
+  }): Promise<PromptMemory>;
+  maybeReflect(input: {
+    instanceId: string;
+    ownerUserId: string;
+    sessionId: string;
+    subjectId: string;
+    now: Date;
+  }): Promise<{ written: number; reason: string }>;
+};
+
 
 export type PipelineDeps = {
   pipeline: IPipelineRepository;
@@ -33,6 +71,10 @@ export type PipelineDeps = {
   tts: TtsService;
   /** 素材库（D034）：存表情/图片，按别名取用 */
   assets: MediaAssetService;
+  /** 记忆（M5-1）：读回已知的事 / 攒够条数后反思写入 */
+  memory: PipelineMemory;
+  /** 人格演化（M5-2）：现在的你 */
+  self: PipelineSelf;
   config: {
     get(
       instanceId: string,

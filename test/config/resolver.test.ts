@@ -20,6 +20,7 @@ function bundle(overrides: Partial<ConfigBundle['instance']> = {}, rest: Partial
       rateLimitPerMin: DEFAULT_AGENT_CONFIG.rateLimitPerMin,
       dailyMsgCap: DEFAULT_AGENT_CONFIG.dailyMsgCap,
       nightQuiet: DEFAULT_AGENT_CONFIG.nightQuiet,
+      proactiveEnabled: DEFAULT_AGENT_CONFIG.proactiveEnabled,
       activePersonaId: null,
       dailyBudgetCents: DEFAULT_AGENT_CONFIG.dailyBudgetCents,
       monthlyBudgetCents: DEFAULT_AGENT_CONFIG.monthlyBudgetCents,

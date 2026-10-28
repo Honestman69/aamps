@@ -55,6 +55,20 @@ export type PromptContext = {
    * 混在一起会让模型把"你现在很困"当成性格的一部分，睡一觉就该变的东西被写死。
    */
   state?: { mood: number; energy: number } | null;
+  /**
+   * 记忆（M5-1）：关于这个人的稳定事实 + 这个会话最近的摘要。
+   *
+   * 只影响"对这个人的印象"那一段。**绝不写进出生设定**——那些是它出生就有的，
+   * 记忆是它后来经历的；混在一起会让"后来知道的事"变成"一直如此"。
+   */
+  memory?: { facts: string[]; summaries: string[] } | null;
+  /**
+   * 演化层（M5-2）：它自己变成了什么样。
+   *
+   * `narrative` 是第一人称自述（反思写的），`lines` 是由特质数值翻译出来的几句
+   * （只在明显偏离中间值时才有）。两者都为空 → 整段跳过，直接用种子。
+   */
+  self?: { narrative: string; lines: string[] } | null;
 };
 
 /** 拼装产物：system 消息 + few-shot 对话（examples 作为 user/assistant 成对塞进 messages 前） */
@@ -277,6 +291,65 @@ function buildToneSection(state: PromptContext['state']): string {
 }
 
 /**
+ * 记忆段（M5-1 / D045）：**说"我记得"，不说"以下是记忆条目"**。
+ *
+ * 三条纪律：
+ * 1. **不加编号、不加时间**。写成 `- [3] 他养了只猫（2026-10-20）` 会让模型开始
+ *    在回复里引用条目（"我记得你上次说过…"），那是最像机器人腔的句式。
+ * 2. **必须有一句"不用复述"**。否则模型会把"你还记得"当成任务，每轮都汇报一遍。
+ * 3. **空就整段跳过**。没有记忆时留一行"你还记得："比不写更糟 ——
+ *    那会提示它"这里本该有东西"，然后开始编。
+ */
+function buildMemorySection(memory: PromptContext['memory']): string {
+  const facts = (memory?.facts ?? []).map((item) => item.trim()).filter(Boolean);
+  const summaries = (memory?.summaries ?? []).map((item) => item.trim()).filter(Boolean);
+  if (facts.length === 0 && summaries.length === 0) {
+    return '';
+  }
+
+  const lines: string[] = [];
+  if (facts.length > 0) {
+    lines.push('关于这个人，你知道这些：');
+    lines.push(...facts.map((item) => `- ${item}`));
+  }
+  if (summaries.length > 0) {
+    if (lines.length > 0) {
+      lines.push('');
+    }
+    lines.push('你们之前聊过（按时间先后）：');
+    lines.push(...summaries.map((item) => `- ${item}`));
+  }
+  lines.push('这些都是以前真的发生过的。不用复述，也别一条条汇报；需要的时候自然带出来。');
+  return lines.join('\n');
+}
+
+/**
+ * 演化层（M5-2 / D020 第 4 条）：现在的你。
+ *
+ * 夹在"出生设定"与"对这个人的印象"之间，顺序不能挪：
+ * 种子说"你出生时是谁"，这一段说"后来你变成了什么样"，记忆说"你认识了谁"。
+ * 把演化放到种子前面，模型会把它当成出厂设定，反而更像在演人设。
+ *
+ * 空就整段跳过 —— 没演化过的人不该有一段"现在的你：（空）"。
+ */
+function buildSelfSection(self: PromptContext['self']): string {
+  if (!self) {
+    return '';
+  }
+  const narrative = (self.narrative ?? '').trim();
+  const lines = (self.lines ?? []).map((line) => line.trim()).filter(Boolean);
+  if (!narrative && lines.length === 0) {
+    return '';
+  }
+  const parts: string[] = [];
+  if (narrative) {
+    parts.push(narrative);
+  }
+  parts.push(...lines);
+  return parts.join('\n');
+}
+
+/**
  * 拼装 system prompt。
  *
  * 返回值里的 `examples` 是 few-shot，调用方要把它**插到对话历史之前**，
@@ -294,11 +367,19 @@ export function assemblePrompt(seed: PersonaSeed, context: PromptContext): Assem
     sections.push(seedSection);
   }
 
-  // ③ 现在的你（SelfState 自述）：M2 无演化层，跳过
+  // ③ 现在的你（SelfState 自述，M5-2）：没演化过就跳过
+  const selfSection = buildSelfSection(context.self);
+  if (selfSection) {
+    sections.push(selfSection);
+  }
 
-  // ④ 对这个人的印象：M2 无记忆层，只放"对方是谁"的最小信息
+  // ④ 对这个人的印象：先"对方是谁"，再"你记得他什么"（D045）
   if (context.peerName) {
     sections.push(`正在和你说话的人：${context.peerName}。`);
+  }
+  const memorySection = buildMemorySection(context.memory);
+  if (memorySection) {
+    sections.push(memorySection);
   }
 
   // ⑤ 情境

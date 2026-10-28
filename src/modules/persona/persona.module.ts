@@ -15,11 +15,20 @@ import { PersonaController } from './persona.controller';
 import { PersonaService } from './persona.service';
 import type { IPersonaRepository } from './ports';
 import { PrismaPersonaRepository } from './repositories/prisma-persona.repository';
-import { PERSONA_REPOSITORY, PERSONA_SERVICE } from './tokens';
+import type { ISelfStateRepository } from './self/ports';
+import { PrismaSelfStateRepository } from './self/repositories/prisma-self-state.repository';
+import { SelfController } from './self/self.controller';
+import { SelfStateService } from './self/self-state.service';
+import {
+  PERSONA_REPOSITORY,
+  PERSONA_SERVICE,
+  SELF_STATE_REPOSITORY,
+  SELF_STATE_SERVICE,
+} from './tokens';
 
 @Module({
   imports: [AuthModule],
-  controllers: [PersonaController],
+  controllers: [PersonaController, SelfController],
   providers: [
     {
       provide: PERSONA_REPOSITORY,
@@ -32,7 +41,19 @@ import { PERSONA_REPOSITORY, PERSONA_SERVICE } from './tokens';
         new PersonaService({ personas, audit }),
       inject: [PERSONA_REPOSITORY, AUDIT_SERVICE],
     },
+    {
+      provide: SELF_STATE_REPOSITORY,
+      useFactory: (prisma: PrismaService): ISelfStateRepository =>
+        new PrismaSelfStateRepository(prisma),
+      inject: [PrismaService],
+    },
+    {
+      provide: SELF_STATE_SERVICE,
+      useFactory: (repo: ISelfStateRepository, audit: AuditService): SelfStateService =>
+        new SelfStateService({ repo, audit }),
+      inject: [SELF_STATE_REPOSITORY, AUDIT_SERVICE],
+    },
   ],
-  exports: [PERSONA_SERVICE, PERSONA_REPOSITORY],
+  exports: [PERSONA_SERVICE, PERSONA_REPOSITORY, SELF_STATE_SERVICE],
 })
 export class PersonaModule {}
