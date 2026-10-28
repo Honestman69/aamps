@@ -6,7 +6,8 @@
 > 仓库里没有 `.env`、没有数据库，直接 `pnpm dev` 会失败。
 
 **最后更新**：2026-10-27
-**当前阶段**：**M5 全部完成**（记忆 / 人格演化 / 主动消息），M4 已合并（`bf23e4f` + 标签 `m4-admin`）。
+**当前阶段**：**M5 全部完成并已合并**（记忆 / 人格演化 / 主动消息）。
+M4 合并点 `bf23e4f`（标签 `m4-admin`）；M5 合并点 `2b681d2`（标签 `m5-memory`，`--no-ff`）。
 M4 一览：人设 API（24）、前端工程与静态托管（25）、素材库（26）、管道拆 13 个 pipe（27）、
 接入配置清单驱动（28，D041）、用户管理（29，D042）、会话查看（30，D043）、审计页（31，D044）。
 M5-1（32，D045）：记忆读写闭环 —— 攒够 30 条就反思写入，下一轮读回注入 prompt。
@@ -14,8 +15,7 @@ M5-2（33，D046）：人格演化 —— 同一次反思顺带产出"我变了�
 回滚走版本追加，`GET/POST /api/instances/:id/self*` 可看可退。
 M5-3（34，D047）：主动消息 —— 久未联系且关系够近时主动说一句；默认关闭，五道确定性闸门。
 
-**下一步（默认走这条）**：**M5 合并** —— `feat/m5-memory` → `main`（`--no-ff`）并打标签 `m5-memory`，
-然后进 M6 风控与观测。
+**下一步（默认走这条）**：**M6-1 健康分与行为拟人**。
 
 M6 的第一件事建议是**行为拟人 + 健康分**（ARCHITECTURE 7.1）：现在 `adapter.onAdapterEvent`
 里的 `send-blocked` 只落了一条 warn，`healthScore` 列从来没人写过。起点：
@@ -64,6 +64,7 @@ persist-inbound → load-context → governance → load-mind → load-window
   - `m1-verified` —— M1 真机验收通过点（反向 WS + token 401 + pong，见「第 7 步」）
   - `m3-persona` —— M3 拟人完成点（状态机 / 发言决策 / 多模态 / 素材库 / 表达层 / 独白）
   - `m4-admin` —— M4 后台完成点（`bf23e4f`：人设 API、后台九页、管道拆 13 个 pipe、清单驱动）
+  - `m5-memory` —— M5 记忆与自主完成点（`2b681d2`：反思式记忆、人格演化与回滚、主动消息默认关）
   - 合并一律 `git merge --no-ff`，分支保留不删；回档首选 `git revert -m 1 <merge>`
 - 网络：remote 是 **HTTPS**（`https://github.com/Honestman69/aamps.git`），本机没有 SSH key。
   推送时**按用户当次给的代理端口显式指定**：
@@ -75,9 +76,11 @@ persist-inbound → load-context → governance → load-mind → load-window
   `corepack pnpm install` 首次约 9 分钟，别以为卡死了。
 - 构建：`pnpm build` 先构建 `packages/*`（契约包 `main` 指向 `dist/index.js`）再编译主服务。
   只跑 `tsc` 不构建包，运行时会 `ERR_MODULE_NOT_FOUND`。
-- **推送状态**：2026-10-27 已推到 `bf23e4f`（M4 合并提交）+ 标签 `m4-admin`。
+- **推送状态**：`feat/m5-memory` 已推到远端（`dbfe57c`）；**M5 的合并提交 `2b681d2` 与标签
+  `m5-memory` 只在本地** —— 2026-10-28 23:38 推送时本机 7890 代理已不在（无监听），
+  等代理恢复后执行 `https_proxy=http://127.0.0.1:<port> git push origin main --follow-tags`。
   远端现有 `main` + 各阶段的 `feat/*` 分支（每个里程碑一条，合并后保留作追溯）+
-  四个标签（`m1-skeleton` / `m1-verified` / `m3-persona` / `m4-admin`）。
+  即将变成五个标签（`m1-skeleton` / `m1-verified` / `m3-persona` / `m4-admin` / `m5-memory`）。
   **成败以远端 ref 为准**（`git ls-remote origin refs/heads/main refs/tags/<tag>`），
   不要用本地 remote-tracking 反推——曾经出现过"本地以为推上去了、实际是用户用桌面端手动推的"这种误判。
   这台机器上会有多个代理进程并存，端口对不上就是 502/超时，不是"网坏了"。
@@ -1404,6 +1407,7 @@ POST   /api/personas/:id/activate
 
 | 日期 | 变更 |
 |---|---|
+| 2026-10-28 | **M5 合并**：`feat/m5-memory` `--no-ff` 合入 `main`（`2b681d2`）+ 标签 `m5-memory`；合并前五条检查全绿（659 单测 / http-smoke 84 / pipeline-smoke 14 / 构建 / 数据闸门）；顺带修掉 pipeline-smoke 的时间敏感缺陷（主动消息冒烟在 23 点后必挂） |
 | 2026-10-28 | 主动消息落地（D047）：`proactiveEnabled`（默认关）+ `Message.proactive`；纯函数五道闸（夜间/亲密度/48h/72h/每日 3 条）；每 10 分钟心跳，走 `sendOutbound` 出站；659 单测、pipeline-smoke 14 项、http-smoke 84 项 |
 | 2026-10-27 | 人格演化落地（D046）：`SelfState` + 版本快照；纯函数闸门（键白名单/单次 0.03/单日 0.08/棱角 0.25）；演化溯源绑真实记忆 id；回滚追加版本不删历史；管道 15 → 16 个 pipe；636 单测、pipeline-smoke 13 项、http-smoke 83 项 |
 | 2026-10-27 | 记忆闭环落地（D045）：反思按条数触发（30 条）→ 摘要挂会话 / 事实挂人 → 下一轮读回注入 system「印象」段；管道 13 → 15 个 pipe；597 单测、pipeline-smoke 12 项、http-smoke 78 项、真实库验证去重与溯源 |
