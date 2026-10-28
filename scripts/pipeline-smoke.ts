@@ -683,14 +683,18 @@ async function main(): Promise<void> {
     where: { id: instance.id },
     data: { proactiveEnabled: true },
   });
-  // 造一个"很久没聊、关系够近"的人；原来的 peer-1 刚聊过，必须被 SQL 筛掉
+  // 造一个"很久没聊、关系够近"的人；原来的 peer-1 刚聊过，必须被 SQL 筛掉。
+  //
+  // 时间**写死在一个下午**：闸门里有夜间静默（23:00–08:00），
+  // 用 `Date.now()` 会让这条冒烟在半夜跑时必然失败 —— 那不是代码错，是测试错。
+  const proactiveNow = new Date('2026-10-28T14:00:00');
   await prisma.relationship.create({
     data: {
       instanceId: instance.id,
       peerId: 'peer-idle',
       nickname: '老周',
       affinity: 70,
-      lastInteractionAt: new Date(Date.now() - 50 * 3600_000),
+      lastInteractionAt: new Date(proactiveNow.getTime() - 50 * 3600_000),
     },
   });
 
@@ -724,10 +728,10 @@ async function main(): Promise<void> {
         return { ok: true };
       },
     },
-    clock: () => new Date(),
+    clock: () => proactiveNow,
   });
 
-  const firstSweep = await proactiveService.sweepInstance(instance.id, new Date());
+  const firstSweep = await proactiveService.sweepInstance(instance.id, proactiveNow);
   assert.equal(firstSweep.sent, 1, `应只发 1 条（刚聊过的 peer-1 必须被筛掉），实际 ${firstSweep.sent}`);
   assert.equal(proactiveSent[0]?.peerId, 'peer-idle');
   assert.equal(proactiveSent[0]?.text, '在忙啥呢', '引号应被清洗掉');
@@ -740,7 +744,7 @@ async function main(): Promise<void> {
   assert.equal(proactiveRow.content, '在忙啥呢');
 
   // 同一天再扫一次：72 小时冷却 + 当天已发，必须一条都不发
-  const secondSweep = await proactiveService.sweepInstance(instance.id, new Date());
+  const secondSweep = await proactiveService.sweepInstance(instance.id, proactiveNow);
   assert.equal(secondSweep.sent, 0, '冷却期内不应重复发');
   assert.equal(proactiveSent.length, 1);
   process.stdout.write(`⑭ 主动消息：候选筛出 1 人、发出 1 条并落库（proactive=true）、再扫不发\n`);
