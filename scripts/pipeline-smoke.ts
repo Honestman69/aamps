@@ -39,6 +39,8 @@ import { PrismaSelfStateRepository } from '../src/modules/persona/self/repositor
 import { SelfStateService } from '../src/modules/persona/self/self-state.service';
 import { ProactiveService } from '../src/modules/proactive/proactive.service';
 import { PrismaProactiveRepository } from '../src/modules/proactive/repositories/prisma-proactive.repository';
+import { RiskService } from '../src/modules/risk/risk.service';
+import { PrismaRiskRepository } from '../src/modules/risk/repositories/prisma-risk.repository';
 import { PrismaPipelineRepository } from '../src/modules/pipeline/repositories/prisma-pipeline.repository';
 import { PipelineService } from '../src/modules/pipeline/pipeline.service';
 import { PrismaSessionAdminRepository } from '../src/modules/session/repositories/prisma-session-admin.repository';
@@ -748,6 +750,64 @@ async function main(): Promise<void> {
   assert.equal(secondSweep.sent, 0, '冷却期内不应重复发');
   assert.equal(proactiveSent.length, 1);
   process.stdout.write(`⑭ 主动消息：候选筛出 1 人、发出 1 条并落库（proactive=true）、再扫不发\n`);
+
+  // ⑮ 风控（M6-1 / D048）：真实 SQL 上的信号 → 健康分 → 降级 → 治理真的拦住回复
+  const riskService = new RiskService({
+    repo: new PrismaRiskRepository(prisma),
+    connection: { drop: async () => true },
+  });
+  // 造两次"发送被平台拦"，间隔 10 分钟（都在 24 小时窗口内）
+  for (const minutesAgo of [20, 10]) {
+    await prisma.instanceEvent.create({
+      data: {
+        instanceId: instance.id,
+        level: 'risk',
+        code: 'send_blocked',
+        message: '发送被平台拦截',
+        metaJson: JSON.stringify({ code: 1200 }),
+        createdAt: new Date(Date.now() - minutesAgo * 60_000),
+      },
+    });
+  }
+
+  const sweepReport = await riskService.sweep();
+  assert.ok(sweepReport.degraded >= 1, '应至少降级 1 个实例');
+
+  const riskRow = await prisma.botInstance.findUnique({ where: { id: instance.id } });
+  assert.ok(riskRow);
+  assert.equal(riskRow.healthScore, 50, `两次拦截应剩 50 分，实际 ${riskRow.healthScore}`);
+  assert.equal(riskRow.status, 'risk', '两次拦截应降为只收不发');
+  assert.ok(riskRow.silentUntil && riskRow.silentUntil > new Date(), '应写入静默截止时间');
+
+  const degradeEvent = await prisma.instanceEvent.findFirst({
+    where: { instanceId: instance.id, code: 'auto_degrade' },
+    orderBy: { createdAt: 'desc' },
+  });
+  assert.ok(degradeEvent, '降级必须留事件（半夜不回话要能查到原因）');
+
+  // 静默期内再收一条消息：入库但不回复
+  const sentBeforeSilence = sent.length;
+  await pipeline.handle(
+    inbound({
+      instanceId: instance.id,
+      plainText: '在吗',
+      segments: [{ type: 'text', text: '在吗' }],
+    }),
+    async (a) => {
+      sent.push(a);
+      return { messageId: 'out-silence' };
+    },
+    { capabilities: CAPS },
+  );
+  assert.equal(sent.length, sentBeforeSilence, '静默期内不应发出任何消息');
+  const silenceInbound = await prisma.message.findFirst({
+    where: { session: { instanceId: instance.id }, content: '在吗' },
+    orderBy: { createdAt: 'desc' },
+  });
+  assert.ok(silenceInbound, '消息仍应入库（只入库不说话）');
+  process.stdout.write(
+    `⑮ 风控：两次拦截 → 健康分 50 / status=risk / silentUntil 已写，静默期入库不回复\n`,
+  );
 
   process.stdout.write('\nPIPELINE SMOKE PASSED\n');
 }

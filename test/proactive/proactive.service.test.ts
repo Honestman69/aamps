@@ -62,7 +62,13 @@ function makeHarness(overrides: {
   proactiveEnabled?: boolean;
   aiPaused?: boolean;
   persona?: ActivePersona | null;
-  owner?: { instanceId: string; ownerUserId: string; name: string; accountId: string } | null;
+  owner?: {
+    instanceId: string;
+    ownerUserId: string;
+    name: string;
+    accountId: string;
+    silentUntil: Date | null;
+  } | null;
   reply?: string;
   sendOk?: boolean;
 } = {}) {
@@ -111,7 +117,13 @@ function makeHarness(overrides: {
     pipeline: {
       findOwner: async () =>
         overrides.owner === undefined
-          ? { instanceId: 'inst-1', ownerUserId: 'user-1', name: '小雅', accountId: 'bot-1' }
+          ? {
+              instanceId: 'inst-1',
+              ownerUserId: 'user-1',
+              name: '小雅',
+              accountId: 'bot-1',
+              silentUntil: null,
+            }
           : overrides.owner,
       findActivePersona: async () => (overrides.persona === undefined ? PERSONA : overrides.persona),
     },

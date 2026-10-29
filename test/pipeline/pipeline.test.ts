@@ -250,6 +250,7 @@ class FakePipelineRepo implements IPipelineRepository {
     ownerUserId: 'user-1',
     name: '小雅',
     accountId: 'bot-1',
+    silentUntil: null,
   };
   persona: ActivePersona | null = null;
 
@@ -1206,6 +1207,45 @@ describe('管道里的人格演化（M5-2 / D046）', () => {
   it('读演化抛错：照常回复（装饰层不能变单点故障）', async () => {
     const h = makeHarness({ persona: personaNoThink });
     h.self.throwOnLoad = true;
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(sentText(h.sent)).toEqual(['你好呀']);
+  });
+});
+
+describe('风控静默（M6-1 / D048）', () => {
+  const personaNoThink = {
+    ...PERSONA_LONG_OUTAGE,
+    fallbacksJson: '{}',
+    behaviorJson: JSON.stringify({ think: { enabled: false } }),
+  };
+
+  it('静默期内：入库但不回复，也不调模型（连兜底话术都不发）', async () => {
+    const h = makeHarness({ persona: personaNoThink });
+    // ctx.now 固定为 12:00（见 makeHarness 的 clock）
+    h.pipelineRepo.owner = {
+      ...h.pipelineRepo.owner!,
+      silentUntil: new Date('2026-10-24T12:10:00'),
+    };
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(h.sessions.inboundMessages).toHaveLength(1); // 消息照常入库，可查
+    expect(h.sent).toHaveLength(0); // 一个字都不发
+    expect(h.gateway.calls).toHaveLength(0); // 连模型都不调
+  });
+
+  it('静默期已过期：照常回复', async () => {
+    const h = makeHarness({ persona: personaNoThink });
+    h.pipelineRepo.owner = {
+      ...h.pipelineRepo.owner!,
+      silentUntil: new Date('2026-10-24T11:59:00'),
+    };
     const msg = inbound();
     h.windowRepo.slice = latestOnlySlice(msg);
 

@@ -116,6 +116,7 @@ class FakeInstanceRepository implements IInstanceRepository {
       ttsVoice: input.ttsVoice ?? 'alloy',
       imageHosts: input.imageHosts ?? '',
       proactiveEnabled: input.proactiveEnabled ?? false,
+      healthScore: 100,
       enabled: input.enabled ?? true,
       dailyBudgetCents: input.dailyBudgetCents ?? 0,
       monthlyBudgetCents: input.monthlyBudgetCents ?? 0,
@@ -221,6 +222,12 @@ class FakeInstanceRepository implements IInstanceRepository {
     }
     entry.row.status = status;
     return true;
+  }
+
+  events: Array<{ code: string; level: string }> = [];
+
+  async recordEvent(input: { level: string; code: string }): Promise<void> {
+    this.events.push({ level: input.level, code: input.code });
   }
 
   async countForUser(userId: string): Promise<number> {

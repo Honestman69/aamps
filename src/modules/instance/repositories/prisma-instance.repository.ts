@@ -45,6 +45,7 @@ const PUBLIC_SELECT = {
   ttsVoice: true,
   imageHosts: true,
   proactiveEnabled: true,
+  healthScore: true,
   status: true,
   createdAt: true,
   updatedAt: true,
@@ -94,6 +95,7 @@ export class PrismaInstanceRepository implements IInstanceRepository {
         ...(input.ttsVoice !== undefined ? { ttsVoice: input.ttsVoice } : {}),
         ...(input.imageHosts !== undefined ? { imageHosts: input.imageHosts } : {}),
         ...(input.proactiveEnabled !== undefined ? { proactiveEnabled: input.proactiveEnabled } : {}),
+        // healthScore 不在这里写：它只有风控巡检能改（D048），人手改等于伪造健康）
       },
       select: { ...PUBLIC_SELECT, accessTokenEnc: true },
     });
@@ -175,6 +177,25 @@ export class PrismaInstanceRepository implements IInstanceRepository {
       data: { status },
     });
     return count > 0;
+  }
+
+  async recordEvent(input: {
+    instanceId: string;
+    level: string;
+    code: string;
+    message: string;
+    meta?: Record<string, unknown>;
+  }): Promise<void> {
+    await this.prisma.instanceEvent.create({
+      data: {
+        instanceId: input.instanceId,
+        level: input.level,
+        code: input.code,
+        // 消息里**不许出现 token / QQ 号**（硬性规则 6）：调用方只传固定短语
+        message: input.message,
+        metaJson: JSON.stringify(input.meta ?? {}),
+      },
+    });
   }
 
   async countForUser(userId: string): Promise<number> {

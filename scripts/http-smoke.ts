@@ -632,6 +632,24 @@ async function main(): Promise<void> {
   res = await call('GET', '/api/instances/no-such-instance/self');
   assert.equal(res.status, 404);
 
+  // ── 健康分（M6-1 / D048）──
+  step('风控：新实例 → 200 + 100 分 + healthy + 无动作');
+  res = await call('GET', `/api/instances/${sessionInstanceId}/risk`);
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(res.body.score, 100);
+  assert.equal(res.body.level, 'healthy');
+  assert.equal(res.body.consecutiveBlocks, 0);
+  assert.equal(res.body.action.kind, 'none');
+  assert.deepEqual(res.body.reasons, ['无异常信号']);
+
+  step('风控：别人的实例 → 404');
+  res = await request('GET', `/api/instances/${sessionInstanceId}/risk`, undefined, memberCookie2);
+  assert.equal(res.status, 404, JSON.stringify(res.body));
+
+  step('风控：实例不存在 → 404');
+  res = await call('GET', '/api/instances/no-such-instance/risk');
+  assert.equal(res.status, 404);
+
   res = await call('DELETE', `/api/instances/${sessionInstanceId}`);
   assert.equal(res.status, 200);
 

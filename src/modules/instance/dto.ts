@@ -186,6 +186,8 @@ export type InstancePublicDTO = {
   imageHosts: string;
   /** 主动消息开关（M5-3） */
   proactiveEnabled: boolean;
+  /** 健康分（M6-1）：由风控巡检写，只读 */
+  healthScore: number;
   status: string;
   createdAt: string;
   updatedAt: string;
@@ -216,6 +218,7 @@ export function toInstanceDTO(row: InstancePublicRow): InstancePublicDTO {
     ttsVoice: row.ttsVoice,
     imageHosts: row.imageHosts,
     proactiveEnabled: row.proactiveEnabled,
+    healthScore: row.healthScore,
     status: row.status,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
