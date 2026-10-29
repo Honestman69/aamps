@@ -41,6 +41,8 @@ import { ProactiveService } from '../src/modules/proactive/proactive.service';
 import { PrismaProactiveRepository } from '../src/modules/proactive/repositories/prisma-proactive.repository';
 import { RiskService } from '../src/modules/risk/risk.service';
 import { PrismaRiskRepository } from '../src/modules/risk/repositories/prisma-risk.repository';
+import { OutboundGuardService } from '../src/modules/safety/outbound-guard.service';
+import { PrismaOutboundRepository } from '../src/modules/safety/repositories/prisma-outbound.repository';
 import { PrismaPipelineRepository } from '../src/modules/pipeline/repositories/prisma-pipeline.repository';
 import { PipelineService } from '../src/modules/pipeline/pipeline.service';
 import { PrismaSessionAdminRepository } from '../src/modules/session/repositories/prisma-session-admin.repository';
@@ -244,6 +246,8 @@ async function main(): Promise<void> {
 
   // 记忆（M5-1）：主流程用默认阈值（30 条），保证 ①–⑪ 的断言不受反思干扰；
   // ⑫ 单独造一个"攒 2 条就反思"的实例，用真实库跑一遍写入。
+  // 出站节流（M6-2）：主流程也用真实实现 —— 顺带验证"正常对话不会被自己拦住"
+  const outboundGuard = new OutboundGuardService({ repo: new PrismaOutboundRepository(prisma) });
   const memoryRepo = new PrismaMemoryRepository(prisma);
   // 人格演化（M5-2）：真实仓储 + 真实审计，验证"提案过闸门后落库并留痕"
   const selfService = new SelfStateService({
@@ -273,6 +277,7 @@ async function main(): Promise<void> {
     assets: assetService,
     memory,
     self: selfService,
+    throttle: outboundGuard,
     config,
     gateway: gatewayStub,
     clock: () => new Date(),
@@ -807,6 +812,103 @@ async function main(): Promise<void> {
   assert.ok(silenceInbound, '消息仍应入库（只入库不说话）');
   process.stdout.write(
     `⑮ 风控：两次拦截 → 健康分 50 / status=risk / silentUntil 已写，静默期入库不回复\n`,
+  );
+
+  // ⑯ 出站节流（M6-2 / D049）：真实 SQL 上的窗口计数、连续判定、复读拦截
+  const guard = outboundGuard;
+  const rateSession = await sessionRepo.ensureSession({
+    instanceId: instance.id,
+    kind: 'private',
+    peerId: 'peer-rate',
+    peerName: '限频测试',
+  });
+  const dupSession = await sessionRepo.ensureSession({
+    instanceId: instance.id,
+    kind: 'private',
+    peerId: 'peer-dup',
+    peerName: '复读测试',
+  });
+  const guardNow = new Date('2026-10-29T14:00:00');
+
+  // 干净会话：放行
+  const cleanDecision = await guard.check({
+    instanceId: instance.id,
+    sessionId: rateSession.id,
+    text: '在忙什么呢',
+    now: guardNow,
+  });
+  assert.deepEqual(cleanDecision, { allow: true, waitMs: 0 });
+
+  // 一小时内塞 41 条出站 → 撞会话小时上限
+  for (let i = 0; i < 41; i += 1) {
+    await prisma.message.create({
+      data: {
+        sessionId: rateSession.id,
+        role: 'assistant',
+        content: `限频测试第 ${i} 句`,
+        createdAt: new Date(guardNow.getTime() - i * 60_000),
+      },
+    });
+  }
+  const rateDecision = await guard.check({
+    instanceId: instance.id,
+    sessionId: rateSession.id,
+    text: '在忙什么呢',
+    now: guardNow,
+  });
+  assert.equal(rateDecision.allow, false, '超出一小时 40 条上限应被拦');
+  assert.equal(!rateDecision.allow && rateDecision.reason, 'session-hour-limit');
+
+  // 24 小时内同一句已发 3 次 → 撞复读拦截
+  for (let i = 0; i < 3; i += 1) {
+    await prisma.message.create({
+      data: {
+        sessionId: dupSession.id,
+        role: 'assistant',
+        content: '在忙什么呢？',
+        createdAt: new Date(guardNow.getTime() - (i + 1) * 3600_000),
+      },
+    });
+  }
+  const dupDecision = await guard.check({
+    instanceId: instance.id,
+    sessionId: dupSession.id,
+    text: '在忙什么呢',
+    now: guardNow,
+  });
+  assert.equal(dupDecision.allow, false, '同一句说过 3 次应被拦');
+  assert.equal(!dupDecision.allow && dupDecision.reason, 'similar-content');
+
+  // 连续 5 条且刚说完 → 要求等待冷却
+  const burstSession = await sessionRepo.ensureSession({
+    instanceId: instance.id,
+    kind: 'private',
+    peerId: 'peer-burst',
+    peerName: '连续测试',
+  });
+  for (let i = 0; i < 5; i += 1) {
+    await prisma.message.create({
+      data: {
+        sessionId: burstSession.id,
+        role: 'assistant',
+        content: `连续第 ${i} 句不同的话`,
+        createdAt: new Date(guardNow.getTime() - 2000 - i * 1000),
+      },
+    });
+  }
+  const burstDecision = await guard.check({
+    instanceId: instance.id,
+    sessionId: burstSession.id,
+    text: '下一句',
+    now: guardNow,
+  });
+  assert.equal(burstDecision.allow, true, '连续发言只是要等，不是不发');
+  assert.ok(
+    burstDecision.allow && burstDecision.waitMs > 0,
+    `连续 5 条后应要求等待，实际 ${burstDecision.allow ? burstDecision.waitMs : 'rejected'}`,
+  );
+  process.stdout.write(
+    `⑯ 节流：小时上限/复读被拦，连续 5 条要求等待 ${Math.round((burstDecision.allow ? burstDecision.waitMs : 0) / 1000)}s\n`,
   );
 
   process.stdout.write('\nPIPELINE SMOKE PASSED\n');

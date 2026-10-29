@@ -24,6 +24,22 @@ import type { ISessionWindowRepository } from '../session/ports';
 import type { IPipelineRepository } from './ports';
 
 /**
+ * 出站节流（M6-2）：`deliver` 之前问一句"现在能不能发"。
+ *
+ * 三个结果：放行、放行但要等（连续发言的冷却）、拒发（会话小时上限 / 日上限 / 复读）。
+ * 实现方**永不 throw** —— 数不清发了几条时应当让它说话，而不是把人变成哑巴。
+ */
+export type PipelineThrottle = {
+  check(input: {
+    instanceId: string;
+    sessionId: string;
+    text: string;
+    now: Date;
+    dailyCap?: number;
+  }): Promise<{ allow: true; waitMs: number } | { allow: false; reason: string }>;
+};
+
+/**
  * 人格演化（M5-2）：管道只需要"给我一句现在的你"。
  *
  * 不直接依赖 `SelfStateService`：管道测试里给一个返回空自述的假实现就够了，
@@ -75,6 +91,8 @@ export type PipelineDeps = {
   memory: PipelineMemory;
   /** 人格演化（M5-2）：现在的你 */
   self: PipelineSelf;
+  /** 出站节流（M6-2）：单会话/单日上限、连续冷却、复读拦截 */
+  throttle: PipelineThrottle;
   config: {
     get(
       instanceId: string,

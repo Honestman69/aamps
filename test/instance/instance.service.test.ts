@@ -117,6 +117,7 @@ class FakeInstanceRepository implements IInstanceRepository {
       imageHosts: input.imageHosts ?? '',
       proactiveEnabled: input.proactiveEnabled ?? false,
       healthScore: 100,
+      nightQuiet: input.nightQuiet ?? '00:30-07:30',
       enabled: input.enabled ?? true,
       dailyBudgetCents: input.dailyBudgetCents ?? 0,
       monthlyBudgetCents: input.monthlyBudgetCents ?? 0,

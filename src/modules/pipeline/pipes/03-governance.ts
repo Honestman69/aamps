@@ -14,11 +14,12 @@
 
 import { DROP } from '@newjob/contracts';
 
+import { isWithinQuiet } from '../../safety/quiet';
 import type { Pipe } from './types';
 
 export const governancePipe: Pipe = {
   name: 'governance',
-  requires: ['sessionFlags', 'owner', 'now'],
+  requires: ['sessionFlags', 'owner', 'now', 'config', 'message'],
   provides: [],
   async run(ctx) {
     if (ctx.sessionFlags.aiPaused || ctx.sessionFlags.muted) {
@@ -26,6 +27,21 @@ export const governancePipe: Pipe = {
     }
     // 风控静默期：**一个字都不发**（消息在 ① 已入库，可查）
     if (ctx.owner.silentUntil && ctx.owner.silentUntil.getTime() > ctx.now.getTime()) {
+      return DROP;
+    }
+    /*
+     * 夜间静默（M6-2 / D049）：**只作用于群聊**。
+     *
+     * 群里的半夜一句"哈哈"会打扰所有人，也最容易被举报成机器人；
+     * 私聊只有对面一个人，作息该由 owner 自己定（半夜调试时忽然不回消息，
+     * 第一反应会是"服务坏了"）。被 @ 例外：那是明确叫它。
+     * 配成 `off` 则整条规则关闭（见 `parseQuietWindow`）。
+     */
+    if (
+      ctx.channel === 'group' &&
+      !ctx.message.isMentioned &&
+      isWithinQuiet(ctx.now, ctx.config.nightQuiet)
+    ) {
       return DROP;
     }
   },

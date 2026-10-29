@@ -313,6 +313,7 @@ export class InstanceService {
     if (input.ttsVoice !== undefined) patch.ttsVoice = input.ttsVoice;
     if (input.imageHosts !== undefined) patch.imageHosts = input.imageHosts;
     if (input.proactiveEnabled !== undefined) patch.proactiveEnabled = input.proactiveEnabled;
+    if (input.nightQuiet !== undefined) patch.nightQuiet = input.nightQuiet;
 
     // 预算是人格级配置（D024）：改它不需要重连，也不碰任何密钥
     if (input.dailyBudgetCents !== undefined) patch.dailyBudgetCents = input.dailyBudgetCents;

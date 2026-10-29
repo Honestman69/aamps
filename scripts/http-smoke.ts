@@ -350,6 +350,18 @@ async function main(): Promise<void> {
   res = await call('PATCH', `/api/instances/${instanceId}`, { proactiveEnabled: 'yes' });
   assert.equal(res.status, 400, '布尔字段不接字符串');
 
+  step('实例：夜间静默（M6-2）可改可读回，坏格式 400，off 关闭');
+  res = await call('PATCH', `/api/instances/${instanceId}`, { nightQuiet: '23:00-07:30' });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(res.body.nightQuiet, '23:00-07:30');
+  res = await call('PATCH', `/api/instances/${instanceId}`, { nightQuiet: '25:00-07:30' });
+  assert.equal(res.status, 400, '越界小时应被拦（不能静默按关闭处理）');
+  res = await call('PATCH', `/api/instances/${instanceId}`, { nightQuiet: 'garbage' });
+  assert.equal(res.status, 400);
+  res = await call('PATCH', `/api/instances/${instanceId}`, { nightQuiet: 'off' });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.nightQuiet, 'off');
+
   res = await call('PATCH', `/api/instances/${instanceId}`, { name: '改过名的实例' });
   assert.equal(res.status, 200, JSON.stringify(res.body));
   assert.equal(res.body.name, '改过名的实例');

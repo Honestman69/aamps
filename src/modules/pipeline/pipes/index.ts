@@ -2,7 +2,7 @@
  * 入站管道：**顺序即真相**。
  *
  * 这里是一张平铺的清单，不是被拆散的逻辑 —— 想知道"一条消息经过哪些步骤"，
- * 看这 16 行就够了。加一个行为 = 新建一个 pipe 文件 + 在这里插一行。
+ * 看这 17 行就够了。加一个行为 = 新建一个 pipe 文件 + 在这里插一行。
  *
  * 两条纪律：
  *   1. **顺序靠 `assertPipeGraph` 校验**，不靠注释里的编号。谁把 `attention`
@@ -28,6 +28,7 @@ import { assemblePromptPipe } from './08-assemble-prompt';
 import { thinkPipe } from './09-think';
 import { generatePipe } from './10-generate';
 import { decideQuotePipe } from './11-decide-quote';
+import { throttlePipe } from './11a-throttle';
 import { deliverPipe } from './12-deliver';
 import { persistInteractionPipe } from './13-persist-interaction';
 import { writeMemoryPipe } from './13a-write-memory';
@@ -54,8 +55,10 @@ export const INBOUND_PIPES: readonly Pipe[] = [
   assemblePromptPipe,
   thinkPipe,
   generatePipe,
-  // 出站：引用 → 发送 → 回写 → 反思
+  // 出站：引用 → 节流 → 发送 → 回写 → 反思
   decideQuotePipe,
+  // 节流在 deliver 之前：超上限就这一次不说（消息已入库）
+  throttlePipe,
   deliverPipe,
   persistInteractionPipe,
   // 最后一个：攒够条数才真的写，写失败也只丢这一批记忆（绝不触发兜底话术）

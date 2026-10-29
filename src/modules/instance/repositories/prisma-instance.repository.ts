@@ -46,6 +46,7 @@ const PUBLIC_SELECT = {
   imageHosts: true,
   proactiveEnabled: true,
   healthScore: true,
+  nightQuiet: true,
   status: true,
   createdAt: true,
   updatedAt: true,
@@ -95,6 +96,7 @@ export class PrismaInstanceRepository implements IInstanceRepository {
         ...(input.ttsVoice !== undefined ? { ttsVoice: input.ttsVoice } : {}),
         ...(input.imageHosts !== undefined ? { imageHosts: input.imageHosts } : {}),
         ...(input.proactiveEnabled !== undefined ? { proactiveEnabled: input.proactiveEnabled } : {}),
+        ...(input.nightQuiet !== undefined ? { nightQuiet: input.nightQuiet } : {}),
         // healthScore 不在这里写：它只有风控巡检能改（D048），人手改等于伪造健康）
       },
       select: { ...PUBLIC_SELECT, accessTokenEnc: true },

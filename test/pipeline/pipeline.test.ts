@@ -234,6 +234,23 @@ class FakeSelf {
   }
 }
 
+class FakeThrottle {
+  /** 默认放行；测试可以改成"要等"或"拒发" */
+  decision: { allow: true; waitMs: number } | { allow: false; reason: string } = {
+    allow: true,
+    waitMs: 0,
+  };
+  calls: Array<{ text: string; dailyCap?: number }> = [];
+
+  async check(input: {
+    text: string;
+    dailyCap?: number;
+  }): Promise<{ allow: true; waitMs: number } | { allow: false; reason: string }> {
+    this.calls.push({ text: input.text, dailyCap: input.dailyCap });
+    return this.decision;
+  }
+}
+
 class FakeWindowRepo implements ISessionWindowRepository {
   slice: WindowSlice | null = null;
   /** 按 target 分片覆盖：并发/串行场景里两条消息的 target 不同 */
@@ -384,6 +401,7 @@ type Harness = {
   assets: FakeAssetService;
   memory: FakeMemory;
   self: FakeSelf;
+  throttle: FakeThrottle;
   sent: OutboundAction[];
   /** 表达层请求过的延迟（毫秒），按调用顺序 */
   sleeps: number[];
@@ -409,6 +427,7 @@ function makeHarness(
   const assets = new FakeAssetService();
   const memory = new FakeMemory();
   const self = new FakeSelf();
+  const throttle = new FakeThrottle();
   const sent: OutboundAction[] = [];
   const sleeps: number[] = [];
   const gateway = overrides.gateway ?? gatewayStub({});
@@ -438,6 +457,7 @@ function makeHarness(
     assets: assets as unknown as MediaAssetService,
     memory,
     self,
+    throttle,
     config,
     gateway: gateway as unknown as GatewayService,
     clock: () => new Date('2026-10-24T12:00:00'),
@@ -463,6 +483,7 @@ function makeHarness(
     assets,
     memory,
     self,
+    throttle,
     sent,
     sleeps,
     service,
@@ -1252,5 +1273,110 @@ describe('风控静默（M6-1 / D048）', () => {
     await h.service.handle(msg, h.send, { capabilities: CAPS });
 
     expect(sentText(h.sent)).toEqual(['你好呀']);
+  });
+});
+
+describe('出站节流（M6-2 / D049）', () => {
+  const personaNoThink = {
+    ...PERSONA_LONG_OUTAGE,
+    fallbacksJson: '{}',
+    behaviorJson: JSON.stringify({ think: { enabled: false } }),
+  };
+
+  it('拒发时不发送，但消息照常入库（人能查到它本来想说什么）', async () => {
+    const h = makeHarness({ persona: personaNoThink });
+    h.throttle.decision = { allow: false, reason: 'session-hour-limit' };
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(h.sent).toHaveLength(0);
+    expect(h.sessions.inboundMessages).toHaveLength(1);
+    expect(h.sessions.outboundMessages).toHaveLength(0);
+  });
+
+  it('要等冷却时按算出的时长等，再发', async () => {
+    const h = makeHarness({ persona: personaNoThink });
+    h.throttle.decision = { allow: true, waitMs: 25_000 };
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(h.sleeps).toContain(25_000);
+    expect(sentText(h.sent)).toEqual(['你好呀']);
+  });
+
+  it('节流拿到的是要发出去的正文与配置里的日上限', async () => {
+    const h = makeHarness({ persona: personaNoThink, config: { dailyMsgCap: 123 } });
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(h.throttle.calls).toHaveLength(1);
+    expect(h.throttle.calls[0]?.dailyCap).toBe(123);
+  });
+});
+
+describe('夜间静默（M6-2 / D049）', () => {
+  const personaNoThink = {
+    ...PERSONA_LONG_OUTAGE,
+    fallbacksJson: '{}',
+    behaviorJson: JSON.stringify({ think: { enabled: false } }),
+  };
+  /** ctx.now 固定 12:00，所以把静默窗口设成 11:00-13:00 就等于"现在是夜里" */
+  const nightConfig = { nightQuiet: '11:00-13:00' };
+
+  it('群聊 + 未 @ + 静默期 → 不回复', async () => {
+    const h = makeHarness({ persona: personaNoThink, config: nightConfig });
+    const msg = inbound({
+      session: { kind: 'group', peerId: 'group-1' },
+      isMentioned: false,
+    });
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(h.sent).toHaveLength(0);
+    expect(h.sessions.inboundMessages).toHaveLength(1);
+    // 静默在 governance 就 DROP 了，连状态都不该写（人工接管同理）
+    expect(h.mind.savedStates).toHaveLength(0);
+  });
+
+  it('群聊 + 被 @ → 照常回复（明确叫它就该应）', async () => {
+    const h = makeHarness({ persona: personaNoThink, config: nightConfig });
+    const msg = inbound({
+      session: { kind: 'group', peerId: 'group-1' },
+      isMentioned: true,
+    });
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(sentText(h.sent)).toEqual(['你好呀']);
+  });
+
+  it('私聊不受夜间静默影响（作息由 owner 自己定）', async () => {
+    const h = makeHarness({ persona: personaNoThink, config: nightConfig });
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(sentText(h.sent)).toEqual(['你好呀']);
+  });
+
+  it('nightQuiet 配成 off → 静默不再拦，消息会走到 attention 那一步', async () => {
+    const h = makeHarness({ persona: personaNoThink, config: { nightQuiet: 'off' } });
+    const msg = inbound({ session: { kind: 'group', peerId: 'group-1' }, isMentioned: false });
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    // 群里没被 @ 时 attention 本来就会判"不回"，但那是**判断**不是**静默**：
+    // 区别在于它会写状态/关系（静默是连这一步都不做）
+    expect(h.mind.savedStates).toHaveLength(1);
   });
 });

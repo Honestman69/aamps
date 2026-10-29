@@ -42,6 +42,8 @@ export type InstancePublicRow = {
   proactiveEnabled: boolean;
   /** 健康分（M6-1 / D048）：0-100，由风控巡检写入 */
   healthScore: number;
+  /** 夜间静默时段（M6-2）：`HH:MM-HH:MM` 或 `off` */
+  nightQuiet: string;
   status: string;
   createdAt: Date;
   updatedAt: Date;
@@ -98,6 +100,7 @@ export type InstanceCreateInput = {
   ttsVoice?: string;
   imageHosts?: string;
   proactiveEnabled?: boolean;
+  nightQuiet?: string;
 };
 
 export type InstanceUpdatePatch = {
@@ -124,6 +127,7 @@ export type InstanceUpdatePatch = {
   ttsVoice?: string;
   imageHosts?: string;
   proactiveEnabled?: boolean;
+  nightQuiet?: string;
 };
 
 export interface IInstanceRepository {

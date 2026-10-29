@@ -23,9 +23,12 @@ import type { TtsService } from '../media/tts';
 import { MemoryModule } from '../memory/memory.module';
 import { MEMORY_SERVICE } from '../memory/tokens';
 import { PersonaModule } from '../persona/persona.module';
+import { SafetyModule } from '../safety/safety.module';
+import { OUTBOUND_GUARD } from '../safety/tokens';
+import type { OutboundGuardService } from '../safety/outbound-guard.service';
 import { SELF_STATE_SERVICE } from '../persona/tokens';
 import type { SelfStateService } from '../persona/self/self-state.service';
-import type { PipelineMemory, PipelineSelf } from './deps';
+import type { PipelineMemory, PipelineSelf, PipelineThrottle } from './deps';
 import { PrismaMindStateRepository } from '../mind/state/repositories/prisma-mind-state.repository';
 import type { IMindStateRepository } from '../mind/state/ports';
 import { ModelModule } from '../model/model.module';
@@ -47,7 +50,16 @@ import {
 } from './tokens';
 
 @Module({
-  imports: [AuthModule, ConfigModule, MediaModule, MemoryModule, ModelModule, PersonaModule],
+  imports: [
+    AuthModule,
+    ConfigModule,
+    MediaModule,
+    MemoryModule,
+    ModelModule,
+    PersonaModule,
+    // 出站节流（M6-2）：独立模块，避免 Pipeline → Risk → Instance → Pipeline 成环
+    SafetyModule,
+  ],
   providers: [
     {
       provide: PIPELINE_REPOSITORY,
@@ -81,8 +93,10 @@ import {
         images: IImageFetcher,
         tts: TtsService,
         assets: MediaAssetService,
+        guard: OutboundGuardService,
         memory: PipelineMemory,
         self: PipelineSelf,
+        throttle: PipelineThrottle,
         config: {
           get(
             instanceId: string,
@@ -101,6 +115,7 @@ import {
           assets,
           memory,
           self,
+          throttle: guard,
           config,
           gateway,
         }),
@@ -112,6 +127,7 @@ import {
         IMAGE_FETCHER,
         TTS_SERVICE,
         MEDIA_ASSET_SERVICE,
+        OUTBOUND_GUARD,
         MEMORY_SERVICE,
         SELF_STATE_SERVICE,
         CONFIG_SERVICE,
