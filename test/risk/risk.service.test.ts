@@ -33,6 +33,19 @@ class FakeRepo implements IRiskRepository {
     return this.signals;
   }
 
+  events: Array<{
+    id: string;
+    level: string;
+    code: string;
+    message: string;
+    metaJson: string;
+    createdAt: Date;
+  }> = [];
+
+  async listEvents(): Promise<typeof this.events> {
+    return this.events;
+  }
+
   async saveAssessment(input: {
     instanceId: string;
     score: number;
@@ -170,5 +183,50 @@ describe('只读查询（inspect / inspectFor）', () => {
     const { repo, service } = makeService();
     repo.owned = false;
     await expect(service.inspectFor({ userId: 'u1' }, 'inst-1', NOW)).rejects.toThrow(/实例不存在/);
+  });
+});
+
+describe('事件列表（M6-3）', () => {
+  it('返回倒序事件并把 meta 解析成对象', async () => {
+    const { repo, service } = makeService();
+    repo.events = [
+      {
+        id: 'e1',
+        level: 'risk',
+        code: 'send_blocked',
+        message: '发送被平台拦截',
+        metaJson: JSON.stringify({ code: 1200 }),
+        createdAt: NOW,
+      },
+    ];
+
+    const items = await service.listEventsFor({ userId: 'u1' }, 'inst-1', 50);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ code: 'send_blocked', meta: { code: 1200 } });
+    expect(items[0]?.createdAt).toBe(NOW.toISOString());
+  });
+
+  it('meta 是坏 JSON → 空对象（坏数据不该让整页 500）', async () => {
+    const { repo, service } = makeService();
+    repo.events = [
+      {
+        id: 'e2',
+        level: 'warn',
+        code: 'offline',
+        message: '掉线',
+        metaJson: '{oops',
+        createdAt: NOW,
+      },
+    ];
+
+    const items = await service.listEventsFor({ userId: 'u1' }, 'inst-1');
+    expect(items[0]?.meta).toEqual({});
+  });
+
+  it('不是自己的实例 → 404', async () => {
+    const { repo, service } = makeService();
+    repo.owned = false;
+    await expect(service.listEventsFor({ userId: 'u1' }, 'inst-1')).rejects.toThrow(/实例不存在/);
   });
 });

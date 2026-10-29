@@ -14,6 +14,8 @@
 
 import type {
   AdapterConfigValues,
+  InstanceEvent,
+  RiskOverview,
   AdapterManifest,
   AdminUser,
   AuditChainVerifyResult,
@@ -190,6 +192,21 @@ export const api = {
 
     /** 重算整条哈希链。能报出断在第几条、断在哪条记录（`brokenAtId`） */
     verifyAudit: (): Promise<AuditChainVerifyResult> => request('POST', '/api/admin/audit/verify'),
+  },
+
+  /**
+   * 风控（M6-1 / M6-3）：**只读**。
+   *
+   * 没有"手动降级/解除"的接口（D048）：降级是机器按信号做的，
+   * 人手关静默的理由永远是"现在要见客户"。要看就看看，要停就停用实例。
+   */
+  risk: {
+    get: (instanceId: string): Promise<RiskOverview> =>
+      request('GET', `/api/instances/${encodeURIComponent(instanceId)}/risk`),
+    events: (instanceId: string, options?: { limit?: number }): Promise<{ items: InstanceEvent[] }> => {
+      const query = options?.limit ? `?limit=${options.limit}` : '';
+      return request('GET', `/api/instances/${encodeURIComponent(instanceId)}/events${query}`);
+    },
   },
 
   /**

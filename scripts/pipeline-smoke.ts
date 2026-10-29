@@ -810,8 +810,18 @@ async function main(): Promise<void> {
     orderBy: { createdAt: 'desc' },
   });
   assert.ok(silenceInbound, '消息仍应入库（只入库不说话）');
+  // 事件列表（M6-3）：后台「健康与事件」页读的就是这一条
+  const eventList = await riskService.listEventsFor({ userId: user.id }, instance.id, 50);
+  assert.ok(eventList.length >= 3, `应能查到拦截与降级事件，实际 ${eventList.length} 条`);
+  assert.ok(
+    eventList.some((item) => item.code === 'auto_degrade'),
+    '应包含风控自动降级事件',
+  );
+  assert.ok(eventList.some((item) => item.code === 'send_blocked'), '应包含平台拦截事件');
+  const eventTimes = eventList.map((item) => Date.parse(item.createdAt));
+  assert.deepEqual(eventTimes, [...eventTimes].sort((a, b) => b - a), '事件应按时间倒序');
   process.stdout.write(
-    `⑮ 风控：两次拦截 → 健康分 50 / status=risk / silentUntil 已写，静默期入库不回复\n`,
+    `⑮ 风控：两次拦截 → 健康分 50 / status=risk / silentUntil 已写，静默期入库不回复；事件列表 ${eventList.length} 条\n`,
   );
 
   // ⑯ 出站节流（M6-2 / D049）：真实 SQL 上的窗口计数、连续判定、复读拦截

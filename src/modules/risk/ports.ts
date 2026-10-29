@@ -7,6 +7,15 @@
 
 import type { DegradeAction, RiskSignal } from './health';
 
+export type RiskEventRow = {
+  id: string;
+  level: string;
+  code: string;
+  message: string;
+  metaJson: string;
+  createdAt: Date;
+};
+
 export type RiskInstanceRow = {
   id: string;
   status: string;
@@ -22,6 +31,9 @@ export interface IRiskRepository {
 
   /** 归属校验（接口层要用）：拿别人的实例 id 只能得到 false */
   isInstanceOwned(instanceId: string, userId: string): Promise<boolean>;
+
+  /** 事件列表（倒序）：后台"最近发生了什么"用，与巡检读的是同一张表 */
+  listEvents(instanceId: string, limit: number): Promise<RiskEventRow[]>;
 
   /** 按时间**倒序**给信号（连续拦截的判定依赖顺序） */
   listSignals(instanceId: string, since: Date, limit: number): Promise<RiskSignal[]>;

@@ -11,7 +11,7 @@
 
 import type { PrismaClient } from '@prisma/client';
 
-import type { IRiskRepository, RiskInstanceRow } from '../ports';
+import type { IRiskRepository, RiskEventRow, RiskInstanceRow } from '../ports';
 import type { DegradeAction, RiskSignal } from '../health';
 
 export class PrismaRiskRepository implements IRiskRepository {
@@ -36,6 +36,22 @@ export class PrismaRiskRepository implements IRiskRepository {
       where: { id: instanceId, ownerUserId: userId },
     });
     return count > 0;
+  }
+
+  async listEvents(instanceId: string, limit: number): Promise<RiskEventRow[]> {
+    return this.prisma.instanceEvent.findMany({
+      where: { instanceId },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      select: {
+        id: true,
+        level: true,
+        code: true,
+        message: true,
+        metaJson: true,
+        createdAt: true,
+      },
+    });
   }
 
   async listSignals(instanceId: string, since: Date, limit: number): Promise<RiskSignal[]> {

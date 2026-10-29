@@ -22,6 +22,14 @@ import type { DegradeAction, HealthResult } from './health';
 import { assessHealth, DEGRADE_LIMITS, HEALTH_LIMITS, planDegradation } from './health';
 import type { IRiskRepository } from './ports';
 
+function safeParseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return {};
+  }
+}
+
 export type RiskOverview = HealthResult & {
   instanceId: string;
   /** 本次巡检给出的动作（只读查询时为 `none`，不落库） */
@@ -67,6 +75,30 @@ export class RiskService {
       throw new AppError('INSTANCE_NOT_FOUND', '实例不存在', 404);
     }
     return overview;
+  }
+
+  /** 事件列表（带归属校验）：后台"最近发生了什么" */
+  async listEventsFor(
+    actor: { userId: string },
+    instanceId: string,
+    limit = 50,
+  ): Promise<
+    Array<{ id: string; level: string; code: string; message: string; meta: unknown; createdAt: string }>
+  > {
+    const owned = await this.deps.repo.isInstanceOwned(instanceId, actor.userId);
+    if (!owned) {
+      throw new AppError('INSTANCE_NOT_FOUND', '实例不存在', 404);
+    }
+    const rows = await this.deps.repo.listEvents(instanceId, limit);
+    return rows.map((row) => ({
+      id: row.id,
+      level: row.level,
+      code: row.code,
+      message: row.message,
+      // meta 可能是坏 JSON（手工改库/历史数据）：坏了就返回空对象，别让整页 500
+      meta: safeParseJson(row.metaJson),
+      createdAt: row.createdAt.toISOString(),
+    }));
   }
 
   /** 只读：给人看的"它现在怎么样"（不落库，不改任何状态） */

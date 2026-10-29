@@ -654,6 +654,24 @@ async function main(): Promise<void> {
   assert.equal(res.body.action.kind, 'none');
   assert.deepEqual(res.body.reasons, ['无异常信号']);
 
+  step('前端：健康页路由刷新 → 回落 index.html（M6-3）');
+  const healthPage = await fetch(`${BASE}/instances/whatever/health`, {
+    headers: { accept: 'text/html' },
+  });
+  assert.equal(healthPage.status, 200, '新页面的深链刷新不能 404');
+  assert.ok((await healthPage.text()).includes('<div id="app">'), '应返回后台的挂载点');
+
+  step('风控：事件列表（M6-3）→ 200，且默认限 50 条');
+  res = await call('GET', `/api/instances/${sessionInstanceId}/events`);
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.deepEqual(res.body.items, [], '新实例还没有事件');
+  res = await call('GET', `/api/instances/${sessionInstanceId}/events?limit=500`);
+  assert.equal(res.status, 400, 'limit 越界应 400');
+  res = await call('GET', `/api/instances/${sessionInstanceId}/events?foo=1`);
+  assert.equal(res.status, 400, '未知参数应 400');
+  res = await request('GET', `/api/instances/${sessionInstanceId}/events`, undefined, memberCookie2);
+  assert.equal(res.status, 404, '别人的实例 → 404');
+
   step('风控：别人的实例 → 404');
   res = await request('GET', `/api/instances/${sessionInstanceId}/risk`, undefined, memberCookie2);
   assert.equal(res.status, 404, JSON.stringify(res.body));

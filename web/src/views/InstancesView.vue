@@ -222,6 +222,10 @@ function goSessions(row: Instance): void {
 function goAssets(row: Instance): void {
   void router.push({ name: 'instance-assets', params: { id: row.id } });
 }
+
+function goHealth(row: Instance): void {
+  void router.push({ name: 'instance-health', params: { id: row.id } });
+}
 </script>
 
 <template>
@@ -290,6 +294,7 @@ function goAssets(row: Instance): void {
               <el-button link type="primary" @click="goSessions(row)">会话</el-button>
               <el-button link type="primary" @click="goPersona(row)">人设</el-button>
               <el-button link type="primary" @click="goAssets(row)">素材</el-button>
+              <el-button link type="primary" @click="goHealth(row)">健康</el-button>
               <el-button link :loading="busyId === row.id" @click="connect(row)">连接</el-button>
               <el-button link :loading="busyId === row.id" @click="disconnect(row)">断开</el-button>
               <el-button link type="danger" @click="remove(row)">删除</el-button>
