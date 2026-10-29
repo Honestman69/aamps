@@ -6,7 +6,7 @@
 > 仓库里没有 `.env`、没有数据库，直接 `pnpm dev` 会失败。
 
 **最后更新**：2026-10-27
-**当前阶段**：**M6 进行中** —— M6-1 健康分与自动降级已完成（35，D048）。
+**当前阶段**：**M6 进行中** —— M6-1 健康分与自动降级（35，D048）、M6-2 行为拟人（36，D049）已完成。
 M5 全部完成并已合并（记忆 / 人格演化 / 主动消息）。
 M4 合并点 `bf23e4f`（标签 `m4-admin`）；M5 合并点 `2b681d2`（标签 `m5-memory`，`--no-ff`）。
 M4 一览：人设 API（24）、前端工程与静态托管（25）、素材库（26）、管道拆 13 个 pipe（27）、
@@ -16,15 +16,13 @@ M5-2（33，D046）：人格演化 —— 同一次反思顺带产出"我变了�
 回滚走版本追加，`GET/POST /api/instances/:id/self*` 可看可退。
 M5-3（34，D047）：主动消息 —— 久未联系且关系够近时主动说一句；默认关闭，五道确定性闸门。
 
-**下一步（默认走这条）**：**M6-2 行为拟人（ARCHITECTURE 7.1 的落地）** ——
-现在发送间隔/拆条已有（D035），但**这几条一条都没执行**：单群每小时上限 40、单日 800、
-连续 5 条后冷却 30s、夜间静默 `00:30-07:30`（`nightQuiet` 列已经存着，读它的人还不存在）、
-24h 内相似内容 > 3 次拦截。起点有两个：
-① `src/modules/risk/throttle.ts`（纯函数：给"最近 N 分钟该会话发了几条 / 连续几条"算出"现在能不能发、
-该等多久"），拍板 `deliver` 之前调用；
-② `03-governance` 里加夜间静默判定（读 `config.nightQuiet`，群聊被 @ 时放行 —— 与 attention 的
-"被 @ 必回"保持一致）。
-注意顺序：**先做限频再做夜间静默**，因为限频是"少发"，夜间静默是"不发"，后者影响面更大。
+**下一步（默认走这条）**：**M6-3 观测与看板** —— 现在健康分、实例事件、审计都在库里，
+但后台没有一页能看。起点：
+① 后端加 `GET /api/instances/:id/events?limit=`（`InstanceEvent` 已按 `(instanceId, createdAt)` 建索引）；
+② 前端加「健康」页：分数趋势（用 `healthScore` 快照 + `auto_degrade` 事件）、最近事件列表、
+　 风险等级徽标（healthy/degraded/readonly/stopped）；顺手把 `nightQuiet` / `proactiveEnabled`
+　 两个新开关放进设置页（现在只有接口，没有界面）。
+③ 告警先不做推送（D028 的边界：不做主动通知），先把"能看见"做出来。
 
 > M4 清单里还剩「规则/约束词配置」未做 —— 它要先把红线存储的 API 形状定下来（见 M4 小节），
 > 何时做都行，不阻塞 M5。
@@ -33,7 +31,7 @@ M5-3（34，D047）：主动消息 —— 久未联系且关系够近时主动�
 > 不配就是"能力不存在"——图片只留「[图片]」占位，prompt 里也不提 `[voice]`。
 > **素材库不需要配置**：平台支持发图即可用，模型说 `[save]名字[/save]` 就存，说 `[use]名字[/use]` 就发。
 
-**当前一条消息的完整链路**（16 个 pipe，见 `pipeline/pipes/index.ts` 与 ARCHITECTURE 第 5 节）：
+**当前一条消息的完整链路**（17 个 pipe，见 `pipeline/pipes/index.ts` 与 ARCHITECTURE 第 5 节）：
 
 ```
 persist-inbound → load-context → governance → load-mind → load-window
@@ -41,7 +39,8 @@ persist-inbound → load-context → governance → load-mind → load-window
 → load-memory（D045，读回事实/摘要）→ load-self（D046，读回"现在的你"）
 → assemble-prompt（D020：种子 → 现在的你 → 印象 → 情境 → 语气）
 → think（D036，可关）→ generate（D024 预算 / D025 熔断 / 记账）
-→ decide-quote（D030）→ deliver（D033/D035：媒体 + 拆条 + 延迟 + 回 @）
+→ decide-quote（D030）→ throttle（D049：会话/日上限、复读、连续冷却）
+→ deliver（D033/D035：媒体 + 拆条 + 延迟 + 回 @）
 → persist-interaction（花精力 / 推动 mood / 长亲密度）
 → write-memory（D045/D046，攒够 30 条才反思；顺带人格演化；失败静默）
 ```
@@ -559,6 +558,45 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 
 **Pipeline 的出站回调设计**：`send` 作为 `handle(message, send)` 的参数而非依赖注入 ——
 因为 send 绑定到"当前这条连接的 adapter"，每个实例的 adapter 不同，不能全局注入一个。
+
+---
+
+### ~~第 36 步：M6-2 行为拟人——把 7.1 那张表接上电~~ ✅ 已完成（D049）
+
+**为什么做**：`docs/ARCHITECTURE.md` 7.1 那张表从 M1 就写着，但到 M6-1 为止**只有"单条消息间隔"是真的**。
+`dailyMsgCap`、`nightQuiet` 这些列存着、配置链也解析了，读它们的代码一行都没有。
+
+**做了什么**
+
+- [x] `src/modules/safety/throttle.ts`（**纯函数**）：归一化（去空白/标点/emoji）、
+      `countSimilar`、`countConsecutive`（遇到对方说话就停）、`decideOutbound`
+- [x] `src/modules/safety/quiet.ts`（**纯函数**）：`parseQuietWindow` / `isWithinQuiet`，
+      左闭右开、跨零点靠 `start > end`、`off` 与坏值都等于关闭
+- [x] `safety` 模块（独立：`Pipeline → Risk → Instance → Pipeline` 会成环，节流只能独立成模块）
+- [x] 新 pipe `11a-throttle`（`decide-quote` 之后、`deliver` 之前）：
+      超上限 **DROP**（这次不说）、连续 5 条 **等冷却剩余时间**（用 `ctx.wait`）
+- [x] 治理 pipe 加夜间静默：**群聊** + 未 @ + 在窗口内 → DROP；私聊不受影响
+- [x] `nightQuiet` 接进实例接口（`HH:MM-HH:MM` / `off`，坏格式 400）—— 之前**没有任何入口能改它**
+- [x] 管道 16 → 17 个 pipe
+
+**验收**
+
+- `pnpm test` **714 个用例全绿**（新增 30：归一化/相似/连续 8、decide 9、静默 5、
+  节流服务 6、管道级节流与夜间静默 7 等）
+- `pnpm typecheck` / `pnpm build` 通过（DI 装配在真服务上验过）
+- `pipeline-smoke` **16 项**（新增⑯，真实 SQL）：干净会话放行 → 塞 41 条撞会话小时上限 →
+  同一句 3 次撞复读 → 连续 5 条要求等 28 秒；主流程全程走**真实节流**（证明正常对话不会被自己拦住）
+- `http-smoke` **88 项**（新增 1）：`nightQuiet` 改值读回、`25:00-07:30` 与 `garbage` 都 400、`off` 生效
+- `check:local-data` PASSED（347 文件）
+
+**实现补充（后续不要改）**
+
+- **超限是"这次不说"不是"排队补发"**：半小时后补发一句"哈哈"比沉默更像故障。
+  唯一会等的是连续 5 条后的 30 秒冷却（那是同一段回复的节奏）。
+- **夜间静默只管群聊**：私聊作息由 owner 定（半夜调试时忽然不回会被当成故障）。这是对 7.1 的收窄。
+- **相似判定必须归一化**：`在吗？` 与 `在吗` 是同一条；少于 4 个字不参与（"嗯"本来就会重复）。
+- **节流读库失败就放行**：数据抖一下不该让它失语；"多发三条"的代价不对称地小。
+- **参数写死或走配置**，不做自适应学习。
 
 ---
 
@@ -1450,6 +1488,7 @@ POST   /api/personas/:id/activate
 
 | 日期 | 变更 |
 |---|---|
+| 2026-10-29 | 行为拟人落地（D049）：`safety/throttle.ts` + `safety/quiet.ts` 纯函数、新 pipe `11a-throttle`、治理层夜间静默（仅群聊、@ 放行）、`nightQuiet` 接进接口；714 单测、pipeline-smoke 16 项、http-smoke 88 项 |
 | 2026-10-29 | 健康分与自动降级落地（D048）：`risk/health.ts` 纯函数（24h 窗口 + 扣分矩阵）、降级阶梯（10 分钟冷却 / 6 小时只收不发 / 停实例）、5 分钟巡检 worker、治理 pipe 执行 `silentUntil`、只读接口；684 单测、pipeline-smoke 15 项、http-smoke 87 项 |
 | 2026-10-28 | **M5 合并**：`feat/m5-memory` `--no-ff` 合入 `main`（`2b681d2`）+ 标签 `m5-memory`；合并前五条检查全绿（659 单测 / http-smoke 84 / pipeline-smoke 14 / 构建 / 数据闸门）；顺带修掉 pipeline-smoke 的时间敏感缺陷（主动消息冒烟在 23 点后必挂） |
 | 2026-10-28 | 主动消息落地（D047）：`proactiveEnabled`（默认关）+ `Message.proactive`；纯函数五道闸（夜间/亲密度/48h/72h/每日 3 条）；每 10 分钟心跳，走 `sendOutbound` 出站；659 单测、pipeline-smoke 14 项、http-smoke 84 项 |
