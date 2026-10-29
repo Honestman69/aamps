@@ -6,7 +6,8 @@
 > 仓库里没有 `.env`、没有数据库，直接 `pnpm dev` 会失败。
 
 **最后更新**：2026-10-27
-**当前阶段**：**M6 进行中** —— M6-1 健康分与自动降级（35，D048）、M6-2 行为拟人（36，D049）已完成。
+**当前阶段**：**M6 完成**（35 健康分与降级 / 36 行为拟人 / 37 观测与看板：D048/D049/D050）。
+M5 已合并并推送（标签 `m5-memory`）；M6 尚未合并。
 M5 全部完成并已合并（记忆 / 人格演化 / 主动消息）。
 M4 合并点 `bf23e4f`（标签 `m4-admin`）；M5 合并点 `2b681d2`（标签 `m5-memory`，`--no-ff`）。
 M4 一览：人设 API（24）、前端工程与静态托管（25）、素材库（26）、管道拆 13 个 pipe（27）、
@@ -16,13 +17,9 @@ M5-2（33，D046）：人格演化 —— 同一次反思顺带产出"我变了�
 回滚走版本追加，`GET/POST /api/instances/:id/self*` 可看可退。
 M5-3（34，D047）：主动消息 —— 久未联系且关系够近时主动说一句；默认关闭，五道确定性闸门。
 
-**下一步（默认走这条）**：**M6-3 观测与看板** —— 现在健康分、实例事件、审计都在库里，
-但后台没有一页能看。起点：
-① 后端加 `GET /api/instances/:id/events?limit=`（`InstanceEvent` 已按 `(instanceId, createdAt)` 建索引）；
-② 前端加「健康」页：分数趋势（用 `healthScore` 快照 + `auto_degrade` 事件）、最近事件列表、
-　 风险等级徽标（healthy/degraded/readonly/stopped）；顺手把 `nightQuiet` / `proactiveEnabled`
-　 两个新开关放进设置页（现在只有接口，没有界面）。
-③ 告警先不做推送（D028 的边界：不做主动通知），先把"能看见"做出来。
+**下一步（默认走这条）**：**M6 合并** —— `feat/m6-risk` → `main`（`--no-ff`）+ 标签 `m6-risk`，
+然后按 `ARCHITECTURE` 的 M6 清单盘点剩余项（规则/约束词配置、合规壳子），
+再决定是补 M4 遗留的「规则/约束词配置」还是开 M7。
 
 > M4 清单里还剩「规则/约束词配置」未做 —— 它要先把红线存储的 API 形状定下来（见 M4 小节），
 > 何时做都行，不阻塞 M5。
@@ -558,6 +555,40 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 
 **Pipeline 的出站回调设计**：`send` 作为 `handle(message, send)` 的参数而非依赖注入 ——
 因为 send 绑定到"当前这条连接的 adapter"，每个实例的 adapter 不同，不能全局注入一个。
+
+---
+
+### ~~第 37 步：M6-3 观测与看板——"它昨晚怎么不回话"要能自己查到~~ ✅ 已完成（D050）
+
+**为什么做**：健康分、节流都只有接口。出事时的典型场景是"它昨晚怎么不回话"，
+而答案（被平台拦了 3 次 → 停实例）只躺在 `InstanceEvent` 表里，只有会写 SQL 的人能看到。
+
+**做了什么**
+
+- [x] 后端 `GET /api/instances/:id/events?limit=`（默认 50、上限 200、未知参数 400、别人的实例 404）；
+      `metaJson` 坏掉 → 返回 `{}`（一条脏数据不该让整页 500）
+- [x] 前端「健康与事件」页（`/instances/:id/health`）：分数 + 等级徽标 + 理由、
+      当前处置（连续被拦 / 本次动作 / 静默截止 / 实例状态）、最近 50 条事件表
+- [x] 实例列表加「健康」入口；**页面零操作**（没有解除静默、没有重置分数 —— D050）
+- [x] 实例设置页新增「行为」卡片：`nightQuiet`（`HH:MM-HH:MM` / `off`）与
+      `proactiveEnabled` 两个开关 —— 之前**只有接口没有界面**，事实上不可用
+- [x] 契约类型与客户端方法（`RiskOverview` / `InstanceEvent` / `api.risk.*`）
+
+**验收**
+
+- `pnpm test` **717 个用例全绿**（新增 3：事件列表返回/坏 meta/非本人 404）
+- `pnpm typecheck` / `pnpm build` / `pnpm web:typecheck` / `pnpm web:build` 通过
+- `pipeline-smoke` **16 项**：⑮ 里顺带断言事件列表（≥3 条、含 `send_blocked` 与 `auto_degrade`、倒序）
+- `http-smoke` **90 项**（新增 2）：事件列表 200/空、`limit=500` 与未知参数 400、别人的实例 404、
+  健康页深链刷新回落 `index.html`
+- `check:local-data` PASSED（347 文件）
+
+**实现补充（后续不要改）**
+
+- **实时分数与历史事件分成两条接口**：分数是算出来的（会随时间衰减），落库的只是巡检那一刻的快照。
+- **页面不给操作**：解除降级 = 修好问题等静默过去，或明确停用再启用（有审计）。
+- **不做推送告警**（D028 的边界）：自用场景"打开看一眼"够用，推送要引入外部依赖与凭据。
+- **不做趋势图**：事件列表已能回答"为什么"，画折线是"看起来专业"。
 
 ---
 
@@ -1488,6 +1519,7 @@ POST   /api/personas/:id/activate
 
 | 日期 | 变更 |
 |---|---|
+| 2026-10-29 | 观测与看板落地（D050）：`GET /instances/:id/events` 只读接口、前端「健康与事件」页（分数/等级/处置/事件表）、实例设置页补 `nightQuiet` 与 `proactiveEnabled` 两个开关；717 单测、pipeline-smoke 16 项、http-smoke 90 项 |
 | 2026-10-29 | 行为拟人落地（D049）：`safety/throttle.ts` + `safety/quiet.ts` 纯函数、新 pipe `11a-throttle`、治理层夜间静默（仅群聊、@ 放行）、`nightQuiet` 接进接口；714 单测、pipeline-smoke 16 项、http-smoke 88 项 |
 | 2026-10-29 | 健康分与自动降级落地（D048）：`risk/health.ts` 纯函数（24h 窗口 + 扣分矩阵）、降级阶梯（10 分钟冷却 / 6 小时只收不发 / 停实例）、5 分钟巡检 worker、治理 pipe 执行 `silentUntil`、只读接口；684 单测、pipeline-smoke 15 项、http-smoke 87 项 |
 | 2026-10-28 | **M5 合并**：`feat/m5-memory` `--no-ff` 合入 `main`（`2b681d2`）+ 标签 `m5-memory`；合并前五条检查全绿（659 单测 / http-smoke 84 / pipeline-smoke 14 / 构建 / 数据闸门）；顺带修掉 pipeline-smoke 的时间敏感缺陷（主动消息冒烟在 23 点后必挂） |
