@@ -6,7 +6,8 @@
 > 仓库里没有 `.env`、没有数据库，直接 `pnpm dev` 会失败。
 
 **最后更新**：2026-10-27
-**当前阶段**：**M5 全部完成并已合并**（记忆 / 人格演化 / 主动消息）。
+**当前阶段**：**M6 进行中** —— M6-1 健康分与自动降级已完成（35，D048）。
+M5 全部完成并已合并（记忆 / 人格演化 / 主动消息）。
 M4 合并点 `bf23e4f`（标签 `m4-admin`）；M5 合并点 `2b681d2`（标签 `m5-memory`，`--no-ff`）。
 M4 一览：人设 API（24）、前端工程与静态托管（25）、素材库（26）、管道拆 13 个 pipe（27）、
 接入配置清单驱动（28，D041）、用户管理（29，D042）、会话查看（30，D043）、审计页（31，D044）。
@@ -15,13 +16,15 @@ M5-2（33，D046）：人格演化 —— 同一次反思顺带产出"我变了�
 回滚走版本追加，`GET/POST /api/instances/:id/self*` 可看可退。
 M5-3（34，D047）：主动消息 —— 久未联系且关系够近时主动说一句；默认关闭，五道确定性闸门。
 
-**下一步（默认走这条）**：**M6-1 健康分与行为拟人**。
-
-M6 的第一件事建议是**行为拟人 + 健康分**（ARCHITECTURE 7.1）：现在 `adapter.onAdapterEvent`
-里的 `send-blocked` 只落了一条 warn，`healthScore` 列从来没人写过。起点：
-① `src/modules/risk/`（空）建一个纯函数算健康分（发送被拦截 / 失败率 / 连掉线次数 → 分）；
-② `workers/risk.worker.ts` 每小时把分数写回 `BotInstance.healthScore`，低于阈值自动降级
-（延长时间间隔 / 暂停主动消息 / 通知 owner 不上话术，D028 的边界仍然有效）。
+**下一步（默认走这条）**：**M6-2 行为拟人（ARCHITECTURE 7.1 的落地）** ——
+现在发送间隔/拆条已有（D035），但**这几条一条都没执行**：单群每小时上限 40、单日 800、
+连续 5 条后冷却 30s、夜间静默 `00:30-07:30`（`nightQuiet` 列已经存着，读它的人还不存在）、
+24h 内相似内容 > 3 次拦截。起点有两个：
+① `src/modules/risk/throttle.ts`（纯函数：给"最近 N 分钟该会话发了几条 / 连续几条"算出"现在能不能发、
+该等多久"），拍板 `deliver` 之前调用；
+② `03-governance` 里加夜间静默判定（读 `config.nightQuiet`，群聊被 @ 时放行 —— 与 attention 的
+"被 @ 必回"保持一致）。
+注意顺序：**先做限频再做夜间静默**，因为限频是"少发"，夜间静默是"不发"，后者影响面更大。
 
 > M4 清单里还剩「规则/约束词配置」未做 —— 它要先把红线存储的 API 形状定下来（见 M4 小节），
 > 何时做都行，不阻塞 M5。
@@ -556,6 +559,47 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 
 **Pipeline 的出站回调设计**：`send` 作为 `handle(message, send)` 的参数而非依赖注入 ——
 因为 send 绑定到"当前这条连接的 adapter"，每个实例的 adapter 不同，不能全局注入一个。
+
+---
+
+### ~~第 35 步：M6-1 健康分与自动降级——被平台盯上时它会自己退~~ ✅ 已完成（D048）
+
+**为什么做**：`BotInstance.healthScore` 从建表起就没人写过，`send_blocked` 只落一条 warn。
+第三方协议的风控是渐进式的（静默 → 拦发送 → 限登录 → 封号），
+没人盯着看板，等于封号那天才发现，前面的信号全丢了。
+
+**做了什么**
+
+- [x] 信号落库：`InstanceService` 在 `send-blocked` 时写 `InstanceEvent(send_blocked)`；
+      适配器 status 只有三态，**平台封禁拿不到事件，不假装能判**（D048 明确不做）
+- [x] `src/modules/risk/health.ts`（**纯函数**）：`assessHealth` 算分（24h 窗口，
+      拦截 -25/次 上限 -60、掉线 -10/次 上限 -30、状态 risk -20 / banned -100），
+      `planDegradation` 只按"连续拦截次数"给动作
+- [x] 降级阶梯：1 次 → 冷却 10 分钟；2 次 → 只收不发 6 小时 + `status=risk`；≥3 次 →
+      `enabled=false` + `status=banned` + 断连接；静默**只升不降**
+- [x] `workers/risk.worker.ts` 每 5 分钟巡检；`RiskRepository` 落分 + 降级 + 写
+      `InstanceEvent(auto_degrade)`（半夜不回话要能查到原因）
+- [x] **治理 pipe 认 `silentUntil`**：静默期只入库、一个字都不发（连兜底话术也不发）；
+      `InstanceOwner` 增加 `silentUntil`，由 `findOwner` 一并取出
+- [x] 接口：`GET /api/instances/:id/risk` 只读（分数/等级/理由/连续次数/本次动作/静默截止）
+- [x] 实例 DTO 暴露 `healthScore`；实例 CRUD **不接受**写它（手改等于伪造体检报告）
+
+**验收**
+
+- `pnpm test` **684 个用例全绿**（新增 25：评分矩阵 9、阶梯 5、巡检 9、治理静默 2）
+- `pnpm typecheck` / `pnpm build` 通过
+- `pipeline-smoke` **15 项**（新增⑮，真实 SQL）：写两条 `send_blocked` → 巡检 → 健康分 50 /
+  `status=risk` / `silentUntil` 已写 / `auto_degrade` 事件留痕 → **静默期那条消息入库但不回复**
+- `http-smoke` **87 项**（新增 3）：新实例 100 分 healthy、别人的实例 404、实例不存在 404
+- `check:local-data` PASSED（337 文件）
+
+**实现补充（后续不要改）**
+
+- **分数与阶梯分开**：分数给人看，阶梯给机器执行。用分数驱动降级会让"掉线多"也停实例。
+- **静默期一个字都不发**：兜底话术也是一次发送，冷却期发它等于把 10 分钟变成 0。
+- **接口只读**：解除降级 = 等静默过去，或明确停用再启用实例（有审计）。人手改分数 = 伪造。
+- **写库与断连接分开**：库里的 `status`/`enabled` 由风险模块写，进程内 adapter 由实例模块断。
+- **平台封禁判不了**：适配器 status 没有 banned 态，`statusPenalty` 只在人工标记后生效。
 
 ---
 
@@ -1406,6 +1450,7 @@ POST   /api/personas/:id/activate
 
 | 日期 | 变更 |
 |---|---|
+| 2026-10-29 | 健康分与自动降级落地（D048）：`risk/health.ts` 纯函数（24h 窗口 + 扣分矩阵）、降级阶梯（10 分钟冷却 / 6 小时只收不发 / 停实例）、5 分钟巡检 worker、治理 pipe 执行 `silentUntil`、只读接口；684 单测、pipeline-smoke 15 项、http-smoke 87 项 |
 | 2026-10-28 | **M5 合并**：`feat/m5-memory` `--no-ff` 合入 `main`（`2b681d2`）+ 标签 `m5-memory`；合并前五条检查全绿（659 单测 / http-smoke 84 / pipeline-smoke 14 / 构建 / 数据闸门）；顺带修掉 pipeline-smoke 的时间敏感缺陷（主动消息冒烟在 23 点后必挂） |
 | 2026-10-28 | 主动消息落地（D047）：`proactiveEnabled`（默认关）+ `Message.proactive`；纯函数五道闸（夜间/亲密度/48h/72h/每日 3 条）；每 10 分钟心跳，走 `sendOutbound` 出站；659 单测、pipeline-smoke 14 项、http-smoke 84 项 |
 | 2026-10-27 | 人格演化落地（D046）：`SelfState` + 版本快照；纯函数闸门（键白名单/单次 0.03/单日 0.08/棱角 0.25）；演化溯源绑真实记忆 id；回滚追加版本不删历史；管道 15 → 16 个 pipe；636 单测、pipeline-smoke 13 项、http-smoke 83 项 |
