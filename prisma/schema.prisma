@@ -349,6 +349,14 @@ model Persona {
 
 // ─────────────────────────── 规则引擎 ───────────────────────────
 
+/// 【预留未启用，别当成规则引擎】
+///
+/// 这是 M1 时的设计（多租户作用域、keyword/regex 匹配、replace/rewrite/handoff 动作），
+/// **代码里一次都没用过**。实际落地的规则是 `InstanceRule`（D051）：实例级、纯文本包含、
+/// 只做「不接」和「不发」两种动作。
+///
+/// 为什么留着：删表要迁移，而它不影响任何运行路径；留着 + 这段注释比"删了以后想不起来当初想做什么"好。
+/// **新的规则需求请改 `InstanceRule`，不要往这里加字段。**
 model RuleSet {
   id        String   @id @default(cuid())
   tenantId  String
@@ -458,7 +466,7 @@ model MemoryItem {
   sessionId  String?
   session    Session?    @relation(fields: [sessionId], references: [id])
 
-  scope        String // episodic（每日摘要）| semantic（关于人的事实）
+  scope        String // episodic（每攒够 N 条反思出的一段摘要）| semantic（关于人的事实）
   subjectId    String? // 关联的对方标识（平台内 id）；跨平台身份不合并（D023）
   kind         String // summary | fact | event | preference
   content      String

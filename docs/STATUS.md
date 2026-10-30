@@ -41,7 +41,7 @@ persist-inbound → load-context → governance → guard-input（D051 入站禁
 → load-mind → load-window
 → attention（判掉就不花 token）→ collect-media
 → load-memory（D045，读回事实/摘要）→ load-self（D046，读回"现在的你"）
-→ assemble-prompt（D020：种子 → 现在的你 → 印象 → 情境 → 语气）
+→ assemble-prompt（D020：红线 → 种子 → 现在的你 → 印象 → 情境 → 语气）
 → think（D036，可关）→ generate（D024 预算 / D025 熔断 / 记账）
 → guard-output（D051 出站禁语，命中不发但落库）
 → decide-quote（D030）→ throttle（D049：会话/日上限、复读、连续冷却）
@@ -64,13 +64,13 @@ persist-inbound → load-context → governance → guard-input（D051 入站禁
 
 ## 仓库
 
-- 远程：`git@github.com:Honestman69/aamps.git`（网页：https://github.com/Honestman69/aamps）
+- 远程：`git@github.com:Honestman69/aamps.git`（网页：<https://github.com/Honestman69/aamps）>
 - 分支：`main`，首个提交 `ceccdc6`
 - **里程碑标签**（回档锚点，见 `AGENTS.md`「分支与合并纪律」）：
   - `m1-skeleton` —— M1 骨架合并点（`9c933b9`，当时 token 鉴权还是坏的）
   - `m1-verified` —— M1 真机验收通过点（反向 WS + token 401 + pong，见「第 7 步」）
   - `m3-persona` —— M3 拟人完成点（状态机 / 发言决策 / 多模态 / 素材库 / 表达层 / 独白）
-  - `m4-admin` —— M4 后台完成点（`bf23e4f`：人设 API、后台九页、管道拆 13 个 pipe、清单驱动）
+  - `m4-admin` —— M4 后台完成点（`bf23e4f`：人设 API、后台九页〔当时〕、管道拆 13 个 pipe、清单驱动）
   - `m5-memory` —— M5 记忆与自主完成点（`2b681d2`：反思式记忆、人格演化与回滚、主动消息默认关）
   - 合并一律 `git merge --no-ff`，分支保留不删；回档首选 `git revert -m 1 <merge>`
 - 网络：remote 是 **HTTPS**（`https://github.com/Honestman69/aamps.git`），本机没有 SSH key。
@@ -153,6 +153,8 @@ persist-inbound → load-context → governance → guard-input（D051 入站禁
 - [x] `bootstrap.service.ts` —— 首次启动建 superadmin（幂等，不改已有账号密码）
 - [x] `repositories/prisma-*.ts` —— Prisma 实现（CAS 用 `updateMany` + where 带旧值，一条 SQL 完成）
 - [x] Prisma 首次迁移 `20261023145901_init` 已应用，`data/dev.db` 已建
+
+
 - [x] `scripts/auth-smoke.ts` —— 真实 SQLite 端到端冒烟
 
 **验收**：
@@ -167,6 +169,8 @@ persist-inbound → load-context → governance → guard-input（D051 入站禁
 - **CAS 必须用一条 SQL**：`updateMany({ where: { id, passwordHash, wrappedDek } })`，不要"先读再判断再写"。两个并发改密请求之间只要有空隙，就会出现"哈希写成新的、wrappedDek 还是旧的"这种最难排查的损坏。
 - **`dekVersion` 只在重置时 +1**。改密是"换 KEK 重包裹同一把 DEK"，DEK 本身没换代，版本号不该动。
 - **审计 `createdAt` 在进程内严格递增**（同一毫秒顺延 1ms），且**下限取自数据库最后一条**，不只看内存字段。否则按时间重算链时同毫秒记录的顺序会退化成按 cuid 排序，一条没被改过的链会被误报断链；重启 + 时钟回拨时同样会误报。跨进程仍需数据库序列，当前单进程 + SQLite（D010）。
+  |  |  |  |
+  | --- | --- | --- |
 - **审计 payload 裁剪按字段名精确判定 + 值形态兜底**，不能用 `/(dek|key|token)/` 这类宽正则——曾经把 `dekVersion`、`wrapDekDestroyed` 也抹了，审计当场失去意义。
 
 ### ~~第 4 步：HTTP 层与启动装配~~ ✅ 已完成
@@ -202,6 +206,7 @@ persist-inbound → load-context → governance → guard-input（D051 入站禁
 
 ### ~~第 5 步：凭据管理 + 零知识验收（M0 收尾）~~ ✅ 已完成
 
+
 - [x] `CredentialRepository`：只有 `createForUser` / `listForUser` / `findForUser(userId, id)` / `updateForUser` / `deleteForUser` / `countForUser`，**没有 `findById` / `findMany`**
 - [x] `CredentialService`：新增时用 owner 的 DEK 加密、只存 `keyMasked`，**模块内没有任何解密函数**
 - [x] 接口：`GET/POST /api/credentials`、`PATCH/DELETE /api/credentials/:id`
@@ -234,6 +239,8 @@ persist-inbound → load-context → governance → guard-input（D051 入站禁
 - [x] 收到消息 → 回 `pong`（带引用回复）
 - [x] 发送节流（令牌桶，参数取自 `capabilities.rateLimitHint`）
 - [x] 实例模块：QQ 号 / WS 地址 / token 全部存在 `BotInstance` 里，**没有任何写死的号或地址**
+  |  |  |
+  | --- | --- |
 - [x] 实例接口：`GET/POST /api/instances`、`PATCH/DELETE /api/instances/:id`、`POST /api/instances/:id/connect|disconnect`
 - [x] `GET /api/adapters`：返回 manifest，前端据此渲染配置表单
 - [x] 接入地址护栏：默认只允许回环/私网，公网需 `ALLOW_REMOTE_ADAPTER=true`
@@ -269,18 +276,18 @@ persist-inbound → load-context → governance → guard-input（D051 入站禁
 
 **2026-10-24 联调结果**：环境就绪，`pong` 闭环跑通；随后发现上游 token 缺陷并改为反向 WS。
 
-| 项 | 结果 |
-|---|---|
-| NapCat / QQ | v4.18.41 / 9.9.33-52230（绿色版在 `D:\napcat`，仓库外） |
-| 登录 | 小号 `31****69`（完整号不进文档，见 `AGENTS.md` 硬性规则 6）；勾"记住设备"后 `-q` 快速登录，无需再扫码 |
-| 接入配置 | `onebot11_<uin>.json` → 反向 `ws://127.0.0.1:3002`（正向 3001 已停用）；`webui.json` → `127.0.0.1:6099` |
-| aamps 连接 | 建实例 → `connect` 返回 `online` → 发消息收到 `pong` ✅ |
-| 账号核验 | `get_login_info` 与实例配置一致（不一致会被拒） |
-| **token 鉴权** | 反向模式：错 token 握手 HTTP 401，正确 token 连入 `online`（真机验证 ✅） |
+| 项            | 结果                                                                                            |
+| ------------ | --------------------------------------------------------------------------------------------- |
+| NapCat / QQ  | v4.18.41 / 9.9.33-52230（绿色版在 `D:\napcat`，仓库外）                                                 |
+| 登录           | 小号 `31****69`（完整号不进文档，见 `AGENTS.md` 硬性规则 6）；勾"记住设备"后 `-q` 快速登录，无需再扫码                          |
+| 接入配置         | `onebot11_<uin>.json` → 反向 `ws://127.0.0.1:3002`（正向 3001 已停用）；`webui.json` → `127.0.0.1:6099` |
+| aamps 连接     | 建实例 → `connect` 返回 `online` → 发消息收到 `pong` ✅                                                  |
+| 账号核验         | `get_login_info` 与实例配置一致（不一致会被拒）                                                              |
+| **token 鉴权** | 反向模式：错 token 握手 HTTP 401，正确 token 连入 `online`（真机验证 ✅）                                         |
 
 - [x] NapCat 配置接入方向（反向 WS，`ws://127.0.0.1:3002`）
 - [x] 建实例：QQ 号 + 监听地址 + token → `POST /api/instances/:id/connect`（M4 前没有页面，
-      用 `pnpm connect`）→ 日志出现 `adapter.listening` + `adapter.peer_connected`
+  用 `pnpm connect`）→ 日志出现 `adapter.listening` + `adapter.peer_connected`
 - [x] 私聊发一条消息 → 收到引用回复 `pong`（正向模式真机 1 次；反向模式用对端脚本验过回包内容）
 - [ ] 群里 `@机器人` 一条 → 应收到 `pong`；不 @ 时不回复（`isMentioned` 生效）
 - [x] 停掉对端 → 观察重连；对端恢复后自愈（反向模式下 NapCat 每 5 秒重试，实测 1~5 秒回到 `online`）
@@ -304,13 +311,13 @@ POST /api/instances/<id>/connect    → 200 {"status":"online"}（2.6 秒，NapC
 
 **2026-10-24 合并前全量验证**（`AGENTS.md` 规定的四条 + 数据闸门，全绿才算可合并）：
 
-| 检查 | 命令 | 结果 |
-|---|---|---|
-| 类型 | `pnpm typecheck` | 通过 |
-| 单测 | `pnpm test` | **129 个全过**（新增反向 WS 16 个 + 仓储契约 3 个） |
-| 构建 | `pnpm build` | contracts + adapter-qq + 主服务均出产物 |
-| 端到端 | `scripts/http-smoke.ts`（独立库 `zk.db`、端口 3111） | `HTTP SMOKE PASSED`（26 项） |
-| 数据闸门 | `pnpm check:local-data` | `PASSED`（141 个已跟踪文件） |
+| 检查   | 命令                                           | 结果                                   |
+| ---- | -------------------------------------------- | ------------------------------------ |
+| 类型   | `pnpm typecheck`                             | 通过                                   |
+| 单测   | `pnpm test`                                  | **129 个全过**（新增反向 WS 16 个 + 仓储契约 3 个） |
+| 构建   | `pnpm build`                                 | contracts + adapter-qq + 主服务均出产物     |
+| 端到端  | `scripts/http-smoke.ts`（独立库 `zk.db`、端口 3111） | `HTTP SMOKE PASSED`（26 项）            |
+| 数据闸门 | `pnpm check:local-data`                      | `PASSED`（141 个已跟踪文件）                 |
 
 这轮端到端**抓到两个单测抓不到的问题**，都已修：
 
@@ -337,6 +344,7 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 后果：本机任何进程都能连 `127.0.0.1:3001` 控制机器人，**唯一防线是端口绑定**。
 
 **待定方案**：
+
 - A 降级 NapCat 到校验正常的版本（要重新验证 QQ 版本兼容，下载慢）
 - **B 改反向 WS（推荐）**：NapCat 作客户端连我们，token 由我们校验；附带好处是云端部署不用开入站端口
 - C 接受现状：仅 `127.0.0.1` 防护，等上游修复
@@ -391,7 +399,7 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 - [x] `Credential` 加熔断字段：`cooldownUntil` / `unavailableReason`（系统写，用户不可改）
 - [x] 凭据 DTO 暴露 `balance`（三态）与 `health`（available / reason / cooldownUntil）
 - [x] `src/modules/model/providers/presets.ts`：Provider 预设表，**余额接口用声明表达**
-      （DeepSeek `/user/balance` 已核实；OpenAI/Anthropic/Gemini 老实标 `inferred`，不编接口）
+  （DeepSeek `/user/balance` 已核实；OpenAI/Anthropic/Gemini 老实标 `inferred`，不编接口）
 - [x] `MODEL-ACCESS.md` 第 7 节重写：重试 / 熔断三层 / 兜底按故障时长分级 / 余额三态 / 通知去重
 - [x] 迁移 `20261024125311_credential_balance_and_cooldown`
 - [x] AGENTS 错题表补第 9 条（禁止所有失败回同一句话术）
@@ -412,6 +420,7 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 - [x] 迁移 `20261024130331_persona_fallbacks`
 - [x] 文档：D026、`MODEL-ACCESS` 7.3 关联说明、AGENTS 错题表第 9 条
 
+
 **验收**：`pnpm test` **164 个用例全绿**（新增 15 条话术规则用例）；`typecheck` / `build` 通过。
 
 **为什么不让模型生成**：故障时模型恰好不可用，让它"编一句兜底"就是死循环。
@@ -419,7 +428,7 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 
 ---
 
-### 第 12 步：M2-1 配置解析 + 切换 Provider 的写路径 ← 已完成一半
+### ~~第 12 步：M2-1 配置解析 + 切换 Provider 的写路径~~ ✅ 已完成
 
 **已完成的**：
 
@@ -445,12 +454,12 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 
 ---
 
-### 第 13 步：M2-2 ModelGateway ✅（主体完成，预算与流式未接）
+### ~~第 13 步：M2-2 ModelGateway~~ ✅ 已完成（预算第 15 步接上；流式与 anthropic/gemini 仍未做，见「遗留未做清单」）
 
 - [x] `gateway/classify.ts` —— 错误分类（纯函数）：`balance` / `auth` / `rate_limit` / `provider` / `network`，
-      每种带"是否重试 + 冷却时长"
+  每种带"是否重试 + 冷却时长"
 - [x] `providers/openai-compatible.ts` —— 手写 fetch（不引 SDK）：超时、外部 signal、usage 解析、
-      错误带状态码与响应体抛给分类器
+  错误带状态码与响应体抛给分类器
 - [x] `gateway/gateway.service.ts` —— 选路（配置指定的 Key 优先 → 按 priority）→ 重试 → 熔断 → 记账
 - [x] `metering/price.ts` —— token × **当次 Key 的目录价** → 分，向上取整；缺价记 0 并标记 `priced:false`
 - [x] `gateway/repositories/prisma-gateway.repository.ts` —— 候选查询（跳过冷却、带 ownerUserId）+ 只写健康层
@@ -512,6 +521,8 @@ authorize(e, n, r, i)   // HTTP 中间件签名，第 4 参是 next 回调
 ### ~~第 16 步：引用决策（D030）~~ ✅ 已完成
 
 - [x] `src/modules/persona/quote.ts`：`decideQuote` / `stableRoll` / `parseQuoteTendency`
+  |  |  |  |  |
+  | --- | --- | --- | --- |
 - [x] `Persona.quoteTendency`（`never|rare|normal|often`，默认 `normal`），迁移 `20261024134146_persona_quote_tendency`
 - [x] 必要性硬判 7 条（自引 / 直接回应 / 最新冗余 / 私聊连发 / 群聊多人 / 超时 / 隔太多条）
 - [x] 中间地带按倾向概率，`never` 阈值 0 但**不压制必要引用**
@@ -575,14 +586,14 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 **做了什么**
 
 - [x] `rules/red-lines.ts`：8 条系统红线（冒充真人 / 索要凭据 / 钱与链接 / 专业建议 / 约见面 /
-      未成年性内容 / 政治宗教 / 辱骂教唆），**代码常量**，随 prompt 拼在最前
+  未成年性内容 / 政治宗教 / 辱骂教唆），**代码常量**，随 prompt 拼在最前
 - [x] `GET /api/meta/red-lines` 只读（`editable: false`）—— 前端用它回答"哪些底线改不了"
 - [x] 表 `InstanceRule`（`kind` / `pattern` / `note` / `enabled`）+ 迁移 `20261030121508_instance_rules`
 - [x] `rules/match.ts`（**纯函数**）：小写 + 去空白归一化、纯文本包含、最长优先、空词不命中
 - [x] 两条新 pipe：`guard-input`（governance 之后，命中不回且不调模型）、
-      `guard-output`（generate 之后，命中不发但落库）
+  `guard-output`（generate 之后，命中不发但落库）
 - [x] `Message.blocked/blockReason` 终于有人写了（`rule:<id>`）；
-      **被拦消息不进上下文、不占限频**（窗口与节流查询都带 `blocked: false`）
+  **被拦消息不进上下文、不占限频**（窗口与节流查询都带 `blocked: false`）
 - [x] 接口：`GET/POST /api/instances/:id/rules`、`PATCH/DELETE /api/rules/:id`，全部带归属校验与审计
 - [x] 前端「规则与约束词」页：上半只读红线、下半增删改；实例列表加入口
 - [x] 管道 17 → 19 个 pipe
@@ -606,16 +617,16 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 
 ### 整体功能测试（2026-10-30，第 38 步后全量回归）
 
-| 层 | 命令 | 结果 |
-|---|---|---|
-| 类型（含 packages） | `pnpm typecheck` | 通过 |
-| 单测 | `pnpm test` | **738 / 738 全绿**（57 个文件） |
-| 构建（两个包 + 主服务） | `pnpm build` | 通过 |
-| 前端类型 | `pnpm web:typecheck` | 通过 |
-| 前端构建 | `pnpm web:build` | 通过（11 个页面 chunk 全部产出） |
-| 管道端到端（真 SQLite） | `scripts/pipeline-smoke.ts` | **17 项 PASSED** |
-| 接口端到端（真服务 + 真库） | `scripts/http-smoke.ts` | **95 项 PASSED** |
-| 数据闸门 | `pnpm check:local-data` | PASSED（358 文件） |
+| 层               | 命令                          | 结果                       |
+| --------------- | --------------------------- | ------------------------ |
+| 类型（含 packages）  | `pnpm typecheck`            | 通过                       |
+| 单测              | `pnpm test`                 | **738 / 738 全绿**（57 个文件） |
+| 构建（两个包 + 主服务）   | `pnpm build`                | 通过                       |
+| 前端类型            | `pnpm web:typecheck`        | 通过                       |
+| 前端构建            | `pnpm web:build`            | 通过（11 个页面 chunk 全部产出）    |
+| 管道端到端（真 SQLite） | `scripts/pipeline-smoke.ts` | **17 项 PASSED**          |
+| 接口端到端（真服务 + 真库） | `scripts/http-smoke.ts`     | **95 项 PASSED**          |
+| 数据闸门            | `pnpm check:local-data`     | PASSED（358 文件）           |
 
 **覆盖到的功能面**：登录/会话/锁定、实例 CRUD 与接入配置清单、密钥信封加密与轮换、人设生命周期、
 素材库、会话查看、审计与哈希链、用户管理、记忆与人格演化、主动消息、风控巡检与降级、
@@ -638,12 +649,12 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 **做了什么**
 
 - [x] 后端 `GET /api/instances/:id/events?limit=`（默认 50、上限 200、未知参数 400、别人的实例 404）；
-      `metaJson` 坏掉 → 返回 `{}`（一条脏数据不该让整页 500）
+  `metaJson` 坏掉 → 返回 `{}`（一条脏数据不该让整页 500）
 - [x] 前端「健康与事件」页（`/instances/:id/health`）：分数 + 等级徽标 + 理由、
-      当前处置（连续被拦 / 本次动作 / 静默截止 / 实例状态）、最近 50 条事件表
+  当前处置（连续被拦 / 本次动作 / 静默截止 / 实例状态）、最近 50 条事件表
 - [x] 实例列表加「健康」入口；**页面零操作**（没有解除静默、没有重置分数 —— D050）
 - [x] 实例设置页新增「行为」卡片：`nightQuiet`（`HH:MM-HH:MM` / `off`）与
-      `proactiveEnabled` 两个开关 —— 之前**只有接口没有界面**，事实上不可用
+  `proactiveEnabled` 两个开关 —— 之前**只有接口没有界面**，事实上不可用
 - [x] 契约类型与客户端方法（`RiskOverview` / `InstanceEvent` / `api.risk.*`）
 
 **验收**
@@ -672,15 +683,16 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 **做了什么**
 
 - [x] `src/modules/safety/throttle.ts`（**纯函数**）：归一化（去空白/标点/emoji）、
-      `countSimilar`、`countConsecutive`（遇到对方说话就停）、`decideOutbound`
+  `countSimilar`、`countConsecutive`（遇到对方说话就停）、`decideOutbound`
 - [x] `src/modules/safety/quiet.ts`（**纯函数**）：`parseQuietWindow` / `isWithinQuiet`，
-      左闭右开、跨零点靠 `start > end`、`off` 与坏值都等于关闭
+  左闭右开、跨零点靠 `start > end`、`off` 与坏值都等于关闭
 - [x] `safety` 模块（独立：`Pipeline → Risk → Instance → Pipeline` 会成环，节流只能独立成模块）
 - [x] 新 pipe `11a-throttle`（`decide-quote` 之后、`deliver` 之前）：
-      超上限 **DROP**（这次不说）、连续 5 条 **等冷却剩余时间**（用 `ctx.wait`）
+  超上限 **DROP**（这次不说）、连续 5 条 **等冷却剩余时间**（用 `ctx.wait`）
 - [x] 治理 pipe 加夜间静默：**群聊** + 未 @ + 在窗口内 → DROP；私聊不受影响
 - [x] `nightQuiet` 接进实例接口（`HH:MM-HH:MM` / `off`，坏格式 400）—— 之前**没有任何入口能改它**
 - [x] 管道 16 → 17 个 pipe
+
 
 **验收**
 
@@ -712,16 +724,16 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 **做了什么**
 
 - [x] 信号落库：`InstanceService` 在 `send-blocked` 时写 `InstanceEvent(send_blocked)`；
-      适配器 status 只有三态，**平台封禁拿不到事件，不假装能判**（D048 明确不做）
+  适配器 status 只有三态，**平台封禁拿不到事件，不假装能判**（D048 明确不做）
 - [x] `src/modules/risk/health.ts`（**纯函数**）：`assessHealth` 算分（24h 窗口，
-      拦截 -25/次 上限 -60、掉线 -10/次 上限 -30、状态 risk -20 / banned -100），
-      `planDegradation` 只按"连续拦截次数"给动作
+  拦截 -25/次 上限 -60、掉线 -10/次 上限 -30、状态 risk -20 / banned -100），
+  `planDegradation` 只按"连续拦截次数"给动作
 - [x] 降级阶梯：1 次 → 冷却 10 分钟；2 次 → 只收不发 6 小时 + `status=risk`；≥3 次 →
-      `enabled=false` + `status=banned` + 断连接；静默**只升不降**
+  `enabled=false` + `status=banned` + 断连接；静默**只升不降**
 - [x] `workers/risk.worker.ts` 每 5 分钟巡检；`RiskRepository` 落分 + 降级 + 写
-      `InstanceEvent(auto_degrade)`（半夜不回话要能查到原因）
+  `InstanceEvent(auto_degrade)`（半夜不回话要能查到原因）
 - [x] **治理 pipe 认 `silentUntil`**：静默期只入库、一个字都不发（连兜底话术也不发）；
-      `InstanceOwner` 增加 `silentUntil`，由 `findOwner` 一并取出
+  `InstanceOwner` 增加 `silentUntil`，由 `findOwner` 一并取出
 - [x] 接口：`GET /api/instances/:id/risk` 只读（分数/等级/理由/连续次数/本次动作/静默截止）
 - [x] 实例 DTO 暴露 `healthScore`；实例 CRUD **不接受**写它（手改等于伪造体检报告）
 
@@ -753,16 +765,16 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 **做了什么**
 
 - [x] `BotInstance.proactiveEnabled`（**默认 false**）+ `Message.proactive`（标记"这条是主动发的"）
-      + 迁移 `20261028142141_proactive`
+  \+ 迁移 `20261028142141_proactive`
 - [x] `src/modules/proactive/`：`decide.ts`（**纯函数五道闸**）/ `ports.ts` / `repositories/` /
-      `proactive.service.ts` / `proactive.module.ts`
+  `proactive.service.ts` / `proactive.module.ts`
 - [x] 五道闸（全确定性，模型不参与）：夜间 23:00–08:00 · 亲密度 ≥ 40 · 48h 未互动 ·
-      同一人 72h 冷却 · 实例每天 ≤ 3 条；参数写死在 `PROACTIVE_LIMITS`
+  同一人 72h 冷却 · 实例每天 ≤ 3 条；参数写死在 `PROACTIVE_LIMITS`
 - [x] 候选查询**下推到 SQL**（亲密度 + 时间边界），不捞全表再筛
 - [x] 生成：人设 + 记忆 + 演化自述 + 心智状态 → 一段"主动开口"指令（含三条禁令：
-      别提"好久没聊"、别问"在吗"、别自我介绍）
+  别提"好久没聊"、别问"在吗"、别自我介绍）
 - [x] 出站：`InstanceService.sendOutbound`（唯一出口，走 `InstanceRuntime` 里的 adapter）→
-      **先发后落库**并标 `proactive`
+  **先发后落库**并标 `proactive`
 - [x] 尊重会话级 `aiPaused` / `muted`
 - [x] `src/workers/proactive.worker.ts`：每 10 分钟一次，带重入保护；`ScheduleModule.forRoot()` 装配
 - [x] 实例接口可读写开关（`PATCH /api/instances/:id`）
@@ -798,20 +810,22 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 **做了什么**
 
 - [x] `SelfState`（`traitsJson` + `narrative` + `version`，`instanceId` 唯一）
-      + `SelfStateVersion`（快照 + `deltasJson` + `reason` + `sourceMemoryIds`），迁移 `20261027134339_self_state`
+  \+ `SelfStateVersion`（快照 + `deltasJson` + `reason` + `sourceMemoryIds`），迁移 `20261027134339_self_state`
 - [x] `src/modules/persona/self/`：`traits.ts`（四维定义）/ `evolution.ts`（**纯函数闸门**）/
-      `ports.ts` / `repositories/prisma-self-state.repository.ts` / `self-state.service.ts` / `self.controller.ts` / `dto.ts`
+  `ports.ts` / `repositories/prisma-self-state.repository.ts` / `self-state.service.ts` / `self.controller.ts` / `dto.ts`
 - [x] **闸门**（D020 第 5 条原样落地，写死在代码里）：键白名单（只允许 `traits`/`narrative`）、
-      单次 |Δ| ≤ 0.03、单日累计 ≤ 0.08、clamp 到 [0.05, 0.95]、`edge` ≥ 0.25、自述 ≤ 1200 字
+  |  |  |  |
+  | --- | --- | --- |
+  单次 |Δ| ≤ 0.03、单日累计 ≤ 0.08、clamp 到 [0.05, 0.95]、`edge` ≥ 0.25、自述 ≤ 1200 字
 - [x] 反思输出多一段 `self`：`{"traits":{"edge":0.02},"narrative":"…"}`
-      （`memory/reflect.ts` 只做透传，闸门与落库归 persona —— 谁定规则谁校验）
+  （`memory/reflect.ts` 只做透传，闸门与落库归 persona —— 谁定规则谁校验）
 - [x] **溯源**：把这次真正写入的 `MemoryItem.id` 绑进 `sourceMemoryIds`；没有新记忆就不动性格
 - [x] 越界（`self` 里出现 `rules` / `redLines` 之类）→ 整次丢弃 + 审计 `self.evolution_rejected`
 - [x] 接受时先补一版 v0 基线，再写 v1；审计 `self.evolve`（只记版本与特质，**不记自述正文**）
 - [x] 版本与回滚：`GET /api/instances/:id/self`（当前 + 版本列表）、
-      `POST /api/instances/:id/self/rollback`（追加新版本，历史不删）
+  `POST /api/instances/:id/self/rollback`（追加新版本，历史不删）
 - [x] prompt：`buildSelfSection` 插在「出生设定」与「对这个人的印象」之间；
-      特质**只在明显偏离 0.5 时**说一两句（和语气提示同一个思路，避免每轮都"你性格如何"）
+  特质**只在明显偏离 0.5 时**说一两句（和语气提示同一个思路，避免每轮都"你性格如何"）
 - [x] 管道 15 → 16：`load-self`（与 `load-memory` 并列，都在 `attention` 之后）
 
 **验收**
@@ -845,29 +859,29 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 **做了什么**
 
 - [x] `src/modules/memory/`：`types.ts` / `reflect.ts`（纯函数）/ `ports.ts` /
-      `repositories/prisma-memory.repository.ts` / `memory.service.ts` / `memory.module.ts`
+  `repositories/prisma-memory.repository.ts` / `memory.service.ts` / `memory.module.ts`
 - [x] **反思**（写）：按条数触发（默认 30 条，`reflectEvery`）。先 `COUNT` 够不够、
-      够了才拉最近 40 条消息 → 调 `purpose: 'reflection'`（走 `modelCheap`）→ 解析 JSON → 落库
+  够了才拉最近 40 条消息 → 调 `purpose: 'reflection'`（走 `modelCheap`）→ 解析 JSON → 落库
 - [x] **代码闸门**：事实 ≤4 条、单条 ≤60 字（**超出丢弃**，超长的事实已不是事实而是叙事）、
-      摘要 ≤160 字（截断）、正文去重（忽略空白与标点）、`kind` 白名单、`importance` 夹到 1-5
+  摘要 ≤160 字（截断）、正文去重（忽略空白与标点）、`kind` 白名单、`importance` 夹到 1-5
 - [x] **归属**：摘要挂会话（`sessionId`）、事实挂人（`subjectId`，`sessionId = null`）——
-      私聊里知道的，到了群里也记得
+  私聊里知道的，到了群里也记得
 - [x] **读回**：`load-memory` pipe 取 top 6 事实 + 最近 3 条摘要 → `assemble-prompt` 把它们拼进
-      system 的「印象」段（`persona/prompt.ts` 新增记忆段）
+  system 的「印象」段（`persona/prompt.ts` 新增记忆段）
 - [x] 记忆段**只进 system，不进对话历史**；且必带"不用复述，也别一条条汇报"
 - [x] `MemoryItem` 补两个索引（`(instanceId, subjectId, scope)` / `(sessionId, scope, createdAt)`），迁移 `20261027131956_memory_retrieval_indexes`
 - [x] 管道 13 → 15 个 pipe：`load-memory`（attention 之后，判掉的消息不花这次查询）、
-      `write-memory`（deliver 之后，反思耗时不影响对方收到回复）
+  `write-memory`（deliver 之后，反思耗时不影响对方收到回复）
 - [x] **两端都不许抛**：读失败 = 这次不记得；写失败 = 这次没记住。
-      写这一步跑在"消息已发出"之后，抛出去会让对方在正常回复之外再收到一句兜底话术
+  写这一步跑在"消息已发出"之后，抛出去会让对方在正常回复之外再收到一句兜底话术
 
 **验收**
 
 - `pnpm test` **597 个用例全绿**（新增 30：反思解析 10、服务 12、管道 5、顺序不变量 2 等）
 - `pnpm typecheck` / `pnpm build` / `pnpm web:typecheck` 通过
 - `pipeline-smoke` **12 项**（新增⑫）：真实 SQL 上跑出反思 → 1 条摘要（挂会话、能溯源到真实消息 id）
-  + 1 条事实（`sessionId` 为空、`importance=5`）→ 下一条消息的 system prompt 里**真的带上了**这条事实
-  → 再跑一轮相同内容**没有重复入库**（去重生效）
+  - 1 条事实（`sessionId` 为空、`importance=5`）→ 下一条消息的 system prompt 里**真的带上了**这条事实
+    → 再跑一轮相同内容**没有重复入库**（去重生效）
 - `http-smoke` **78 项**全过（DI 装配改动后服务照常启动，既有功能无回归）
 - `check:local-data` PASSED（305 文件）
 
@@ -891,17 +905,17 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 **做了什么**
 
 - [x] `web/src/views/AuditView.vue`：只读审计页 —— 时间 / 操作者 / 动作 / 目标 / IP 五列，
-      工具条可按关键词与模块筛选，条数三档（100 / 200 / 500）
+  工具条可按关键词与模块筛选，条数三档（100 / 200 / 500）
 - [x] 动作码给中文（`credential.rotate` → 轮换密钥）+ 原码小字；**没配文案的动作显示原码**，
-      新动作不用先改前端才能上
+  新动作不用先改前端才能上
 - [x] 危险动作（删除 / 轮换 / 停用 / 归档 / 重置密码 / 代登录）红标，登录与解锁类弱化为灰
 - [x] 展开行：改前/改后并排，真正变了的字段加重；只有一侧时标「新建」/「删除」，
-      两侧都空时明说"这类事件只记发生过"；下方给该条的 `hash` 与 `prev`
+  两侧都空时明说"这类事件只记发生过"；下方给该条的 `hash` 与 `prev`
 - [x] **id → 名字**：另拉 `/api/admin/users` + `/api/instances` 建对照表，
-      操作者/目标/归属都显示人名或实例名；查不到（含已删除实例）退回短 id
+  操作者/目标/归属都显示人名或实例名；查不到（含已删除实例）退回短 id
 - [x] 「校验链完整性」按钮 → `POST /api/admin/audit/verify`：成功显示核对了多少条，
-      失败显示第 N 条 + 原因 + 记录 id，并把该行标红 + 「只看这条」；
-      断点比当前窗口更早时明说"调大显示条数"，不给点了没反应的按钮
+  失败显示第 N 条 + 原因 + 记录 id，并把该行标红 + 「只看这条」；
+  断点比当前窗口更早时明说"调大显示条数"，不给点了没反应的按钮
 - [x] 路由 `/audit`（`adminOnly`）+ 侧栏入口（仅 superadmin）
 - [x] `web/src/api/`：`AuditEntry` / `AuditChainVerifyResult` 类型 + `admin.audit()` / `admin.verifyAudit()`
 - [x] `http-smoke` 补 2 项：三档 `limit` 全部 200、`0` / `501` 均 400（前端档位与服务端上限的契约）
@@ -913,11 +927,11 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 - `http-smoke` **78 项**全过（新增 2 项 `limit` 边界），`pipeline-smoke` 11 项不受影响
 - `check:local-data` PASSED（304 文件）
 - **真浏览器**（Chrome headless + CDP，14 项断言）：表单登录 → 点侧栏「审计」→ 38 条记录、
-      五列齐全、时间 `2026-10-27 21:00:59` 可读、动作有中文、操作者显示 `smoke_http_admin`
-      → 展开显示出「新建 / 2 个字段 / hash + prev」→ 校验返回「链完整…38 条」
-      → 关键词 `credential.rotate` 过滤到 1 条 → 无 JS 异常
+  五列齐全、时间 `2026-10-27 21:00:59` 可读、动作有中文、操作者显示 `smoke_http_admin`
+  → 展开显示出「新建 / 2 个字段 / hash + prev」→ 校验返回「链完整…38 条」
+  → 关键词 `credential.rotate` 过滤到 1 条 → 无 JS 异常
 - **断链路径**（真实篡改一条 `afterJson` 后再还原）：页面显示「链在第 11 条断了 / hash 与内容不匹配 /
-      记录 id …」，该行标红，「只看这条」把表筛成 1 行；还原后重算回到「链完整」
+  记录 id …」，该行标红，「只看这条」把表筛成 1 行；还原后重算回到「链完整」
 
 **实现补充（后续不要改）**
 
@@ -937,20 +951,21 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 **做了什么**
 
 - [x] `GET /api/instances/:instanceId/sessions`：会话列表（对端、类型、实时条数、最后一条摘要、
-      `aiPaused` / `muted` 标记），返回 `total`
+  `aiPaused` / `muted` 标记），返回 `total`
 - [x] `GET /api/sessions/:sessionId/messages?limit=&before=`：消息历史，**按时间升序**返回，
-      `hasMore` 表示还能往前翻
+  `hasMore` 表示还能往前翻
 - [x] `session/` 第一次有自己的 module + controller：只读仓储 `PrismaSessionAdminRepository`，
-      与 Pipeline 的写入仓储分开（写路径不该长出 `listForUser` 这种查询方法）
+  与 Pipeline 的写入仓储分开（写路径不该长出 `listForUser` 这种查询方法）
 - [x] 消息条数**实时 groupBy**（`Session.messageCount` 列从未被维护，读它每个会话都是 0）
 - [x] 「最后一条消息」用一次 groupBy + 一次 `(sessionId, createdAt)` OR 查询，不是每会话一条（避免 N+1）
 - [x] 游标用 **message id**（Prisma `cursor` + `(createdAt desc, id desc)`）：拆条发送时两条消息
-      可能同一毫秒落库，用时间戳做游标会漏
+  可能同一毫秒落库，用时间戳做游标会漏
 - [x] 媒体只返回**类型标签**（`image` / `voice` / `at` …），**不带 URL**
 - [x] 内心独白解析成结构（兼容库里 camelCase 与模型 snake_case），坏数据降级为 `null`
 - [x] 前端 `SessionsView`：左会话列表 + 右消息流（气泡、日期分隔、媒体标签、拦截标记、
-      内心独白折叠），打开即滚到最新一句，可「加载更早」
+  内心独白折叠），打开即滚到最新一句，可「加载更早」
 - [x] 实例列表行加「会话」入口
+
 
 **验收**
 
@@ -979,25 +994,27 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 
 ### ~~第 29 步：M4-5 用户管理——建号 / 角色 / 启停~~ ✅ 已完成（D042）
 
-**为什么现在做**：`role` 早就是 `superadmin | user` 两种，业务接口完全不看它，
-但**没有建号入口** —— 只有 `BOOTSTRAP_ADMIN_*` 能建那一个管理员，想给家人/朋友开个号只能改库。
-"管理员自己也当普通用户用"是支持的（他不需要第二个账号），缺的只是"再建一个人"这件事。
+|                                                                |                      |
+| -------------------------------------------------------------- | -------------------- |
+| **为什么现在做**：`role` 早就是 \`superadmin                             | user\` 两种，业务接口完全不看它， |
+| 但**没有建号入口** —— 只有 `BOOTSTRAP_ADMIN_*` 能建那一个管理员，想给家人/朋友开个号只能改库。 |                      |
+| "管理员自己也当普通用户用"是支持的（他不需要第二个账号），缺的只是"再建一个人"这件事。                  |                      |
 
 **做了什么**
 
 - [x] `src/modules/auth/user-admin.service.ts`：建号（只写 `keySalt`、不生成 DEK、租户只取会话）、
-      改显示名 / 角色 / 启停、幂等判断、审计（`user.create` / `user.update`）
+  改显示名 / 角色 / 启停、幂等判断、审计（`user.create` / `user.update`）
 - [x] `IUserAdminMutationRepository.updateForAdmin`：`updateMany` + `where {id, tenantId}`，
-      跨租户只会得到 0 条（不"先查再判"，没有 TOCTOU 窗口）
+  跨租户只会得到 0 条（不"先查再判"，没有 TOCTOU 窗口）
 - [x] **改角色 / 停用必须撤销会话**（`SessionService.destroyForUser`）：`role` 与 `status`
-      在会话里是登录时的快照，不踢会话会出现"降级了但还是管理员"
+  在会话里是登录时的快照，不踢会话会出现"降级了但还是管理员"
 - [x] **停用还要 `keyStore.clearForUser`**：不清内存 DEK，主链路仍能按 owner 取到它，
-      机器人会继续替一个已停用的账号说话
+  机器人会继续替一个已停用的账号说话
 - [x] **不能停用自己、不能降级自己**（403）：单管理员部署里那是把自己锁死
 - [x] `POST /api/admin/users`、`PATCH /api/admin/users/:id`；列表补 `isSelf`
 - [x] 前端 `UsersView`：账号列表（角色下拉 / 启停开关 / DEK 是否初始化 / 最后登录）、
-      新建（用户名·显示名·密码·角色）、重置密码（要求二次输入目标用户名）；
-      自己那行的停用/降级/重置按钮全部置灰
+  新建（用户名·显示名·密码·角色）、重置密码（要求二次输入目标用户名）；
+  自己那行的停用/降级/重置按钮全部置灰
 - [x] 导航「用户」只对 superadmin 显示；路由 `adminOnly` 守卫（普通用户手敲 URL 静默送回列表）
 
 **验收**
@@ -1033,24 +1050,24 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 **做了什么**
 
 - [x] `contracts`：`ConfigField` 增 `mapsTo`（指向 `accountId` / `adapterMode` / `endpoint` / `accessToken`）
-      与 `requiredWhen: { field, in }`（条件必填）
+  与 `requiredWhen: { field, in }`（条件必填）
 - [x] `packages/adapter-qq/manifest.ts`：四个字段各自声明 `mapsTo`；
-      token 的 `requiredWhen` 写 `{ field: 'mode', in: ['server'] }` ——
-      "反向必须有 token"（D019）从此只有一份定义，前端星号与后端校验都读它
+  token 的 `requiredWhen` 写 `{ field: 'mode', in: ['server'] }` ——
+  "反向必须有 token"（D019）从此只有一份定义，前端星号与后端校验都读它
 - [x] `src/modules/adapter/manifest-config.ts`：
-      `assertAdapterManifest`（注册时校验：缺 `mapsTo` / 抢槽位 / select 选项非法 / `requiredWhen` 指向不存在的字段 /
-      没有 `accountId` 映射）、`translateAdapterConfig`（未知字段 400、必填 400、类型规整）、
-      `isFieldRequired` / `requiredFieldKeys`
+  `assertAdapterManifest`（注册时校验：缺 `mapsTo` / 抢槽位 / select 选项非法 / `requiredWhen` 指向不存在的字段 /
+  没有 `accountId` 映射）、`translateAdapterConfig`（未知字段 400、必填 400、类型规整）、
+  `isFieldRequired` / `requiredFieldKeys`
 - [x] `AdapterRegistry.register` 里调用 `assertAdapterManifest`：不合规的适配器**启动即失败**
 - [x] `POST /api/instances` 与 `PATCH /api/instances/:id` 接受 `adapterConfig`；
-      与四条平铺槽位字段**互斥**（同时给 → 400）；更新是**增量**且按当前实例的清单翻译
+  与四条平铺槽位字段**互斥**（同时给 → 400）；更新是**增量**且按当前实例的清单翻译
 - [x] `web/src/components/AdapterConfigForm.vue`：按清单渲染 text / password / number / switch / select / textarea，
-      新建与设置**共用**；`web/src/api/adapter-config.ts` 放共享判定（必填、默认值、从实例反查、算增量）
+  新建与设置**共用**；`web/src/api/adapter-config.ts` 放共享判定（必填、默认值、从实例反查、算增量）
 - [x] 设置页的接入区块改为清单驱动：`valuesFromInstance` 按 `mapsTo` 反查当前值，
-      保存只发 `changedValues(...)` 的差分（否则每次保存都触发重连）
+  保存只发 `changedValues(...)` 的差分（否则每次保存都触发重连）
 - [x] **顺手修掉一个从第 25 步就存在的真 bug**：设置页 `dirty` 是 computed，
-      首次求值时 `origin` 还是 `null` 且非响应式 → 早退分支没收集依赖 → `dirty` 永远 `false`，
-      现象是"改了东西但保存按钮一直灰着"。现在 `origin` / `originConfig` 都是 `ref`
+  首次求值时 `origin` 还是 `null` 且非响应式 → 早退分支没收集依赖 → `dirty` 永远 `false`，
+  现象是"改了东西但保存按钮一直灰着"。现在 `origin` / `originConfig` 都是 `ref`
 
 **验收**
 
@@ -1087,25 +1104,25 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 
 - [x] `pipeline.Service` 只留编排：入队串行、跑链、兜底、清理（**706 → 190 行**）
 - [x] `pipeline/pipes/` 一步一文件，共 13 个：
-      `persist-inbound` → `load-context` → `governance` → `load-mind` → `load-window` →
-      `attention` → `collect-media` → `assemble-prompt` → `think` → `generate` →
-      `decide-quote` → `deliver` → `persist-interaction`
+  `persist-inbound` → `load-context` → `governance` → `load-mind` → `load-window` →
+  `attention` → `collect-media` → `assemble-prompt` → `think` → `generate` →
+  `decide-quote` → `deliver` → `persist-interaction`
 - [x] `PipelineContext`（强类型，不用 `Map<string, unknown>`）；
-      `createContext` 是**全文唯一一处 `as`**，并把"为什么"写在旁边
+  `createContext` 是**全文唯一一处 `as`**，并把"为什么"写在旁边
 - [x] 每个 pipe 声明 `requires` / `provides`，`assertPipeGraph` 在**构造函数里**校验
-      （字段没人提供 / 两个 pipe 抢写 / 名字重复 → 启动即失败）
+  （字段没人提供 / 两个 pipe 抢写 / 名字重复 → 启动即失败）
 - [x] `DROP`（判定不该回）与 `throw`（故障 → 兜底话术）在代码路径上分开，
-      `runPipeChain` 里**故意没有 try**
+  `runPipeChain` 里**故意没有 try**
 - [x] `pipeline/deps.ts`：依赖类型独立成文件，断掉 `service ↔ pipes` 的循环 import
 
 **验收（这次的关键是"数值不变"）**
 
 - `pnpm test` **502 个用例全绿**（+13，全在 `test/pipeline/pipes.test.ts`）；
-      **没有修改任何既有用例** —— 这是纯重构的证据
+  **没有修改任何既有用例** —— 这是纯重构的证据
 - `pipeline-smoke` 10 项：`energy=0.740`、`affinity=3`、`mood=1.00` 与重构前**逐位相同**
 - `http-smoke` 52 项、`typecheck`、`build`、`web:build` 全过
 - 新增顺序不变量测试 4 条：落库在最前/回写在最后、`attention` 早于 `generate`、
-      `governance` 早于 `load-mind`、`decide-quote` 早于 `deliver`
+  `governance` 早于 `load-mind`、`decide-quote` 早于 `deliver`
 
 **实现补充（后续不要改）**
 
@@ -1126,14 +1143,14 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 **做了什么**
 
 - [x] `MediaModule`：把素材库 / 图片抓取 / 语音合成从 Pipeline 私有提升为模块级，
-      Pipeline 变成它的消费者（不再在 `pipeline.module.ts` 里 `new` 这些实现）
+  Pipeline 变成它的消费者（不再在 `pipeline.module.ts` 里 `new` 这些实现）
 - [x] 仓储加 5 个**带 owner** 的方法：`listForUser` / `countForUser` / `statsForUser` /
-      `findForUser` / `softDeleteForUser`，where 一律 `instance: { ownerUserId }`
+  `findForUser` / `softDeleteForUser`，where 一律 `instance: { ownerUserId }`
 - [x] `MediaAdminService`：列表 + 统计、软删、取文件；删除记审计（`asset.delete`，只记别名与字节数）
 - [x] 三个接口：`GET /api/instances/:id/assets`、`DELETE /api/instances/:id/assets/:assetId`、
-      `GET /api/instances/:id/assets/:assetId/file`（流式返回字节，`private, max-age=300`）
+  `GET /api/instances/:id/assets/:assetId/file`（流式返回字节，`private, max-age=300`）
 - [x] 前端 `AssetsView`：统计条（用量/上限、占用、已删）、缩略图网格、含已删除开关、
-      删除二次确认、破图降级（不再显示裂图图标）
+  删除二次确认、破图降级（不再显示裂图图标）
 - [x] 入口：实例列表行内「素材」、实例设置「打开素材库」
 
 **验收**
@@ -1165,16 +1182,16 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 
 - [x] `web/` 成为 pnpm workspace 成员（Vue 3 + Vite + TS + Pinia + vue-router + Element Plus）
 - [x] **五页**：登录 / 实例列表（含新建、连接、断开、启用开关、删除）/ 实例设置（基础·预算·模型·多模态·接入）
-      / 人设编辑器（基本信息·补充设定·示例·开场白·软禁区·行为参数·故障话术）/ 密钥（新增·轮换·启停·删除）
+  / 人设编辑器（基本信息·补充设定·示例·开场白·软禁区·行为参数·故障话术）/ 密钥（新增·轮换·启停·删除）
 - [x] `web/src/api/client.ts`：只用相对 `/api`，错误统一成 `ApiError`（带 `code`/`status`），
-      **网络错误不当 401**（后端重启不该把人踢回登录页）
+  **网络错误不当 401**（后端重启不该把人踢回登录页）
 - [x] 路由守卫：未登录送 `/login?next=`；已登录访问登录页回列表
 - [x] 布局里显式提示"密钥库已锁定"并就地解锁 —— 服务重启后会话还在、DEK 没了，
-      不提示的话用户只会看到"机器人不回消息"
+  不提示的话用户只会看到"机器人不回消息"
 - [x] `src/common/http/serve-admin.ts`：主服务托管 `web/dist`（SPA 回落 + `/api` 不回落 +
-      目录穿越 403 + hash 资源长缓存），产物缺失时只打印一行提示、不阻塞纯后端开发
+  目录穿越 403 + hash 资源长缓存），产物缺失时只打印一行提示、不阻塞纯后端开发
 - [x] `scripts/http-smoke.ts` 增加 6 项托管断言（首页 / 深链回落 / 未知接口 404 JSON /
-      `/api` 鉴权不受影响 / immutable 缓存 / 目录穿越 403）
+  `/api` 鉴权不受影响 / immutable 缓存 / 目录穿越 403）
 
 **验收**
 
@@ -1198,6 +1215,8 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 - **静态资源本身不鉴权**：`index.html` 只是空壳，数据全靠会话 cookie；这和安全不冲突。
 - **前端类型是手抄的**（`web/src/api/types.ts`），不共享主服务类型：两边编译目标不同
   （Bundler/DOM vs commonjs），共享会把 zod 打进前端包。
+
+
 
 ---
 
@@ -1422,6 +1441,8 @@ POST   /api/personas/:id/activate
   "每次调用扣一点"，查询与定时任务都会偷偷扣，最后表现为"人格莫名其妙没精神了"。
 - **时钟回拨不衰减**，但 `busyUntil` 是否过期照常判断——它是"此刻的事实"，与经过多少时间无关。
 - **`mood` 目前没有推动来源**：只有回归基线。真正的推动量来自 M3-4 内心独白的 `emotion_shift`；
+|  |  |  |
+| --- | --- | --- |
   现在凭文本猜情绪等于瞎猜，猜错比不动更糟。所以提示词里 mood 只在 `|mood| ≥ 0.25` 时出现，
   日常几乎不会触发——这是刻意留白，不是漏做。
 - **attention 在网关之前**，这是它省钱的地方；因此它**看不到模型输出**，只判"要不要开口"，
@@ -1474,6 +1495,7 @@ POST   /api/personas/:id/activate
       同时错误 token 仍被 HTTP 401 拒绝
 - [x] 测试：`token-digest` 7 个 + 服务层 5 个（无 DEK 连接 / 自监听 / 跳过与回填 / 清 token）
 
+
 **代价**：换 `SESSION_SECRET` 会让所有摘要失效 → 需要在后台重新保存一次 token（已写进 SECURITY）。
 
 ### M2 最小闭环 ✅ 已完成
@@ -1522,9 +1544,54 @@ POST   /api/personas/:id/activate
 
 ### M6 风控与观测
 
-- [ ] 健康分 + 风控巡检
-- [ ] 自动降级（只读 → 停实例）
-- [ ] 看板与告警
+- [x] 健康分 + 风控巡检（第 35 步，D048：`risk/health.ts` 纯函数 + `risk.worker` 每 5 分钟）
+- [x] 自动降级（只读 → 停实例）—— 第 35 步，D048（10 分钟冷却 / 6 小时只收不发 / 停实例）
+- [x] 看板与告警 —— 第 37 步，D050（健康与事件页；**告警只做"能看见"不做推送**）
+- [x] 行为拟人（限频 / 夜间静默 / 复读拦截）—— 第 36 步，D049
+- [x] 红线与约束词（M4 遗留）—— 第 38 步，D051
+
+---
+
+## 遗留未做清单（2026-10-30 逐项核对代码后汇总）
+
+> M1~M6 的主线都完成了，但**"某个里程碑完成"不等于"那一节的设计全实现了"**。
+> 这张表把散落在各步、各章节里的未做项集中起来，避免"文档说做完了、实际没有"。
+
+### 真没做（有意留着，或还没轮到）
+
+| 能力 | 现状 | 出处 |
+|---|---|---|
+| `compliance/`（AI 标识 / 日志留存期 / 未成年人措辞） | 空目录，**下一步优先做** | 顶部「下一步」 |
+| 内容审核 pipe（`moderate`） | 不存在。现在只有 owner 配的**约束词**（`guard-*`），不是审核 | ARCHITECTURE 5 节 |
+| 记忆的可编辑 / 可删除界面 | 只有读回注入，没有"它记得我什么"的界面与接口 | ARCHITECTURE 8 节 |
+| 人格演化的界面 | 有 `GET/POST /api/instances/:id/self*`，后台没有页面 | README 未做清单 |
+| 流式响应 | `stream: false` 写死；表达层的"打字感"是靠延迟模拟，不是真流式 | STATUS 第 13 步 |
+| `anthropic` / `gemini` 协议适配 | 遇到明确标 `unsupported_protocol` 并跳过（不假装能调） | STATUS 第 13 步 |
+| 欠费后的 `balanceSource='inferred'` 运行时回写 | 只在 `presets.ts` 里有静态声明，没有写库逻辑 | STATUS 第 13 步 |
+| 重连退避 | ARCHITECTURE 7.2 写了"指数增长、10 次后停止"，**代码里没有** | ARCHITECTURE 7.2 |
+| 密钥页「强制测试连接」 | 未做（只能靠真实调用验证） | STATUS M4 清单 |
+| 偶发行为（错别字修正 / 撤回 / 追加表情） | 未做 | ARCHITECTURE 6.4 |
+| 自我叙事（多段自述压成 ≤600 token 一段） | 未做；现在直接把最近一版自述整段放进 prompt（自述 ≤1200 字由闸门保证） | ARCHITECTURE 6.6 |
+| 未完结话题 / 纪念日两个主动触发 | 未做（只做"久未联系"） | D047 |
+| 记忆检索（FTS / 向量） | 未做；现在按"人取事实、会话取摘要"的固定规则读回 | ARCHITECTURE 8 节 |
+| 入站语音转文字 | 未做（入站语音仍是占位） | README 未做清单 |
+
+### 明确不做（有决策记录，别再提议）
+
+| 事项 | 为什么不做 |
+|---|---|
+| 告警推送（钉钉 / 邮件 / Webhook） | D028 / D050：自用场景"打开看一眼"够用，推送要引入外部依赖与凭据 |
+| 健康趋势折线图 | D050：事件列表已能回答"为什么"；折线要先做定时快照 |
+| 手工解除风控静默 / 手工改健康分 | D048：人手关静默的理由永远是"现在要见客户" |
+| 手工编辑红线 | D051：改红线要改代码 + 评审，这是"不可协商"的成本 |
+| 约束词支持正则 | D051：用户一条 `(a+)+$` 能拖死每条消息都要跑的主链路 |
+| 主动消息的参数旋钮（时段/频率/冷却） | D047：只给一个开关，参数写死，否则一定被调到"每天十条" |
+| 给自述/特质开手工编辑接口 | D046：手改等于绕过闸门 |
+
+### 扩展类（等真要用时再做，见 ARCHITECTURE 第 10 节）
+
+删除账号 / 转移实例所有权、审计导出与时间筛选、消息搜索与导出、素材上传、Docker 化、
+多租户套餐限制、BullMQ、PG 迁移。
 
 ---
 
@@ -1546,6 +1613,7 @@ POST   /api/personas/:id/activate
 - [x] 2026-10-23 依赖安装与测试链路打通（`vitest.config.ts` 别名、`pnpm test` 可跑、`pnpm typecheck` 全绿）
 - [x] 2026-10-23 **认证与密钥库** `src/modules/auth/`（RuntimeKeyStore / PasswordService / UnlockService / AuditService / Bootstrap + Prisma 仓储 + 启动自检）
 - [x] 2026-10-23 **HTTP 层**：NestJS(Fastify) 启动装配、会话与签名 cookie、6 个认证/管理接口、全局异常过滤器、14 项 HTTP 冒烟
+
 - [x] 2026-10-23 Prisma 首次迁移 `20261023145901_init`，`scripts/auth-smoke.ts` 真实库冒烟通过
 - [x] 2026-10-24 **凭据管理** `src/modules/credential/`：仓储归属隔离（`ownerUserId` 下推 SQL）、加密写入 + 掩码、4 个接口、`.strict()` 入参、审计四动作
 - [x] 2026-10-24 **零知识验收**：`scripts/zero-knowledge-check.ts` 全库 15 张表直查，明文命中 0；HTTP 冒烟扩到 23 项
@@ -1591,6 +1659,7 @@ POST   /api/personas/:id/activate
 
 | 日期 | 变更 |
 |---|---|
+| 2026-10-30 | **全仓文档一致性审计**（逐文件核对代码）：修 29 处 md 与实现不符 —— M6 清单未勾、ARCHITECTURE 第 8 节写了三层记忆+FTS+cron（与 D045 矛盾）、目录树里 `src/contracts` 与 `workers/` 下 `reflection` / `decay` 等不存在的文件、README 说 `rules/` 与 `workers/` 是空目录、"定时任务尚未使用"、"演化每日一次"、扩展点 9/7、AGENTS 表格编号乱序、CONVENTIONS 的超长文件清单漏 6 个、SECURITY 的"未实现两条"实为一条；新增「遗留未做清单」与 schema 里 `RuleSet/Rule` 的"预留未启用"说明 |
 | 2026-10-30 | **M6 合并**：`feat/m6-risk` `--no-ff` 合入 `main`（`5377da7`）+ 标签 `m6-risk`；合并前七条检查全绿（typecheck / 738 单测 / build / web:typecheck / web:build / pipeline-smoke 17 项 / http-smoke 95 项 / 数据闸门 374 文件），四条远端 ref 用 `git ls-remote` 复核 |
 | 2026-10-30 | M4 遗留补齐（D051）：8 条红线做成代码常量 + 实例约束词表与 CRUD + 两条 guard pipe（入站不回/出站不发但落库）+ 被拦消息不进上下文不占限频 + 前端「规则」页；738 单测、pipeline-smoke 17 项、http-smoke 95 项；整体回归全绿 |
 | 2026-10-29 | 观测与看板落地（D050）：`GET /instances/:id/events` 只读接口、前端「健康与事件」页（分数/等级/处置/事件表）、实例设置页补 `nightQuiet` 与 `proactiveEnabled` 两个开关；717 单测、pipeline-smoke 16 项、http-smoke 90 项 |

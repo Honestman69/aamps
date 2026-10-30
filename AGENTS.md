@@ -150,15 +150,16 @@ pnpm web:build        # 产物能出来（挂载失败只有真浏览器能看�
 | 9 | 所有失败都回同一句话术，或者反过来"欠费时每条消息都回一句" | 前者让 owner 分不清是欠费、Key 坏了还是我们的 bug；后者在群里是刷屏、在私聊是持续敷衍，比不说话更伤关系 | 按原因分槽位并**限频**：`faultToSlot` + `decideSpeak`（D028）。欠费也走话术，不做主动通知；用户配了 `null` 就必须静默 |
 | 10 | 给实例设了预算，但凭据里没填目录价 | 每次调用都记 0 分，**预算永远不触发**；用户以为设了限额，实际一次都没拦住 | 建 Key 时填 `catalogJson` 价格；Gateway 有 warn，看到就补（D029） |
 | 11 | 把 `web/dist` 或 `web/node_modules` 提交上去 | 产物是构建结果，冲突起来只能全量重编 | `.gitignore` 已覆盖；只提交源码 |
-| 14 | 在 `src/` 或 `web/` 里手写平台字段名（`selfId` / `wsUrl`） | 换平台就得改主服务与前端，D013 的承诺作废 | 用 `mapsTo` 声明槽位，前端只按清单渲染（D041） |
-| 13 | 把新逻辑直接塞进 `pipeline.service.ts`（那里只剩编排） | 706 行的巨石就是这么做出来的；顺序与依赖一旦藏在注释里就没人维护 | 新建 pipe，填 `requires`/`provides`，在 `pipes/index.ts` 插一行（D040） |
 | 12 | 为了让前端跨端口调用而打开 CORS + `SameSite=None` | 等于为开发方便削弱线上 cookie 策略（D005） | 开发期用 Vite 代理，生产期同源托管（D038） |
+| 13 | 把新逻辑直接塞进 `pipeline.service.ts`（那里只剩编排） | 706 行的巨石就是这么做出来的；顺序与依赖一旦藏在注释里就没人维护 | 新建 pipe，填 `requires`/`provides`，在 `pipes/index.ts` 插一行（D040） |
+| 14 | 在 `src/` 或 `web/` 里手写平台字段名（`selfId` / `wsUrl`） | 换平台就得改主服务与前端，D013 的承诺作废 | 用 `mapsTo` 声明槽位，前端只按清单渲染（D041） |
+
 ---
 
 ## 目录地图
 
 ```
-newjob/                         pnpm workspace
+aamps/                          pnpm workspace
 ├─ AGENTS.md                ← 你正在读
 ├─ README.md                人类入口
 ├─ pnpm-workspace.yaml
@@ -224,23 +225,32 @@ fix/audit-clock-rollback          # 修 bug
 **2. 分支上按逻辑拆提交**（不是按文件），每条提交信息写清"验证了什么"。
 一个提交要么能独立解释，要么说明它依赖前一条。**不要出现"一堆改动 + 'update'"**。
 
-**3. 合并前必须全绿**，四条一起过（缺一条都别合）：
+**3. 合并前必须全绿**，下面五条一起过（缺一条都别合）：
 
 | 检查 | 命令 | 通过标准 |
 |---|---|---|
-| 类型 | `pnpm typecheck` | 无输出错误 |
+| 类型 | `pnpm typecheck` | 无输出错误（含 `packages/*`） |
 | 单测 | `pnpm test` | 全绿，安全相关用例必须包含 |
 | 构建 | `pnpm build` | 两个包 + 主服务都出产物 |
 | 端到端 | `scripts/http-smoke.ts`（起真服务、真 SQLite） | `HTTP SMOKE PASSED` |
 | 数据闸门 | `pnpm check:local-data` | `PASSED` |
 
+**动了 `web/` 再加两条**：`pnpm web:typecheck`、`pnpm web:build`。
+**动了管道 / 记忆 / 风控 / 规则再加一条**：`scripts/pipeline-smoke.ts`（真库，不需要起服务）。
+
 端到端冒烟跑法（**别指向 `dev.db`**）：
 
 ```bash
-rm -f data/zk.db* && DATABASE_URL="file:../data/zk.db" npx prisma migrate deploy
-DATABASE_URL="file:../data/zk.db" PORT=3111 BOOTSTRAP_ADMIN_USERNAME=smoke_http_admin \
+# 用一个**全新**的库名，别删旧的：这台机器上 rm 常被 safe-delete 包装，
+# 删除失败会让整条 && 链中断（踩过）。http-smoke 会改管理员密码，同一个库重跑必然 401。
+DATABASE_URL="file:../data/zk-$(date +%s).db" npx prisma migrate deploy
+DATABASE_URL="file:../data/zk-1.db" PORT=3111 BOOTSTRAP_ADMIN_USERNAME=smoke_http_admin \
   BOOTSTRAP_ADMIN_PASSWORD=smoke-http-pass-01 node dist/src/main.js &
 BASE_URL=http://127.0.0.1:3111 npx tsx scripts/http-smoke.ts
+
+# 管道冒烟不需要起服务，但同样要用新库
+DATABASE_URL="file:../data/ps-$(date +%s).db" npx prisma migrate deploy
+DATABASE_URL="file:../data/ps-1.db" npx tsx scripts/pipeline-smoke.ts
 ```
 
 **4. 用 `--no-ff` 合并 + 打标签**，让"这个里程碑的整体状态"在历史里有一个可点名、可回退的锚点：
