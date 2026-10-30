@@ -12,12 +12,18 @@ export class PrismaPipelineRepository implements IPipelineRepository {
   async findOwner(instanceId: string): Promise<InstanceOwner | null> {
     const row = await this.prisma.botInstance.findUnique({
       where: { id: instanceId },
-      select: { id: true, ownerUserId: true, name: true, accountId: true },
+      select: { id: true, ownerUserId: true, name: true, accountId: true, silentUntil: true },
     });
     if (!row) {
       return null;
     }
-    return { instanceId: row.id, ownerUserId: row.ownerUserId, name: row.name, accountId: row.accountId };
+    return {
+      instanceId: row.id,
+      ownerUserId: row.ownerUserId,
+      name: row.name,
+      accountId: row.accountId,
+      silentUntil: row.silentUntil,
+    };
   }
 
   async findActivePersona(instanceId: string): Promise<ActivePersona | null> {

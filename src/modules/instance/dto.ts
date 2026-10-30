@@ -37,6 +37,18 @@ const budgetPolicySchema = z.enum(['downgrade', 'block']);
 /** 音色名：厂商相关，只做长度与空白校验，不猜合法取值 */
 const ttsVoiceSchema = z.string().trim().min(1).max(60);
 /** 图片域名白名单：逗号分隔，空串 = 不限（仍受私网拦截约束，见 D033） */
+/** 夜间静默：`HH:MM-HH:MM`，或 `off` 关闭（M6-2）。格式错了直接 400，不要静默按关闭处理 */
+const nightQuietSchema = z
+  .string()
+  .trim()
+  .max(32)
+  .refine(
+    (value) =>
+      value.toLowerCase() === 'off' ||
+      /^([01]?\d|2[0-3]):[0-5]\d-([01]?\d|2[0-3]):[0-5]\d$/.test(value),
+    '格式应为 HH:MM-HH:MM 或 off',
+  );
+
 const imageHostsSchema = z
   .string()
   .max(500)
@@ -94,6 +106,8 @@ export const createInstanceSchema = z
     imageHosts: imageHostsSchema.optional(),
     /** 主动消息（M5-3 / D047）：默认关闭；打开后才会"隔了很久主动说一句" */
     proactiveEnabled: z.boolean().optional(),
+    /** 夜间静默（M6-2）：群聊在这段时间内不主动说话（被 @ 除外）；`off` 关闭 */
+    nightQuiet: nightQuietSchema.optional(),
     /** 由适配器清单驱动的接入配置（D041）；与下面四个槽位字段互斥 */
     adapterConfig: adapterConfigSchema.optional(),
   })
@@ -134,6 +148,8 @@ export const updateInstanceSchema = z
     imageHosts: imageHostsSchema.optional(),
     /** 主动消息（M5-3 / D047）：默认关闭；打开后才会"隔了很久主动说一句" */
     proactiveEnabled: z.boolean().optional(),
+    /** 夜间静默（M6-2）：群聊在这段时间内不主动说话（被 @ 除外）；`off` 关闭 */
+    nightQuiet: nightQuietSchema.optional(),
     /**
      * 接入配置的**增量**（D041）：只传改过的键。
      * 没传 = 不改；传了空值的必填项仍会被拒（不允许把必填项改空）。
@@ -186,6 +202,10 @@ export type InstancePublicDTO = {
   imageHosts: string;
   /** 主动消息开关（M5-3） */
   proactiveEnabled: boolean;
+  /** 夜间静默时段（M6-2），`off` = 关闭 */
+  nightQuiet: string;
+  /** 健康分（M6-1）：由风控巡检写，只读 */
+  healthScore: number;
   status: string;
   createdAt: string;
   updatedAt: string;
@@ -216,6 +236,8 @@ export function toInstanceDTO(row: InstancePublicRow): InstancePublicDTO {
     ttsVoice: row.ttsVoice,
     imageHosts: row.imageHosts,
     proactiveEnabled: row.proactiveEnabled,
+    nightQuiet: row.nightQuiet,
+    healthScore: row.healthScore,
     status: row.status,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),

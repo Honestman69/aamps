@@ -1,0 +1,2 @@
+export const RULE_REPOSITORY = 'RULE_REPOSITORY';
+export const RULE_SERVICE = 'RULE_SERVICE';

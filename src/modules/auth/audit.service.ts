@@ -40,6 +40,10 @@ export const AuditAction = {
   PersonaActivate: 'persona.activate',
   /** 素材：只记"删了哪张、多大"，图片内容本来就不在库里 */
   AssetDelete: 'asset.delete',
+  /** 约束词（D051）：记 pattern 与 kind —— 它本身就是人写的配置，不是隐私 */
+  RuleCreate: 'rule.create',
+  RuleUpdate: 'rule.update',
+  RuleDelete: 'rule.delete',
   /** 人格演化（M5-2）：只记版本号与特质数值，自述正文在版本表里 */
   SelfEvolve: 'self.evolve',
   /** 演进被闸门拒绝（例如模型试图写 rules / redLines）：这是安全事件，必须留痕 */

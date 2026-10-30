@@ -23,9 +23,15 @@ import type { TtsService } from '../media/tts';
 import { MemoryModule } from '../memory/memory.module';
 import { MEMORY_SERVICE } from '../memory/tokens';
 import { PersonaModule } from '../persona/persona.module';
+import { RuleModule } from '../rules/rule.module';
+import { RULE_SERVICE } from '../rules/tokens';
+import type { RuleService } from '../rules/rule.service';
+import { SafetyModule } from '../safety/safety.module';
+import { OUTBOUND_GUARD } from '../safety/tokens';
+import type { OutboundGuardService } from '../safety/outbound-guard.service';
 import { SELF_STATE_SERVICE } from '../persona/tokens';
 import type { SelfStateService } from '../persona/self/self-state.service';
-import type { PipelineMemory, PipelineSelf } from './deps';
+import type { PipelineMemory, PipelineRules, PipelineSelf, PipelineThrottle } from './deps';
 import { PrismaMindStateRepository } from '../mind/state/repositories/prisma-mind-state.repository';
 import type { IMindStateRepository } from '../mind/state/ports';
 import { ModelModule } from '../model/model.module';
@@ -47,7 +53,18 @@ import {
 } from './tokens';
 
 @Module({
-  imports: [AuthModule, ConfigModule, MediaModule, MemoryModule, ModelModule, PersonaModule],
+  imports: [
+    AuthModule,
+    ConfigModule,
+    MediaModule,
+    MemoryModule,
+    ModelModule,
+    PersonaModule,
+    // 约束词（D051）：两条 guard pipe 要读规则
+    RuleModule,
+    // 出站节流（M6-2）：独立模块，避免 Pipeline → Risk → Instance → Pipeline 成环
+    SafetyModule,
+  ],
   providers: [
     {
       provide: PIPELINE_REPOSITORY,
@@ -81,8 +98,12 @@ import {
         images: IImageFetcher,
         tts: TtsService,
         assets: MediaAssetService,
+        guard: OutboundGuardService,
+        ruleService: RuleService,
         memory: PipelineMemory,
         self: PipelineSelf,
+        throttle: PipelineThrottle,
+        rules: PipelineRules,
         config: {
           get(
             instanceId: string,
@@ -101,6 +122,8 @@ import {
           assets,
           memory,
           self,
+          throttle: guard,
+          rules: ruleService,
           config,
           gateway,
         }),
@@ -112,6 +135,8 @@ import {
         IMAGE_FETCHER,
         TTS_SERVICE,
         MEDIA_ASSET_SERVICE,
+        OUTBOUND_GUARD,
+        RULE_SERVICE,
         MEMORY_SERVICE,
         SELF_STATE_SERVICE,
         CONFIG_SERVICE,

@@ -12,8 +12,11 @@ import { InstanceModule } from './modules/instance/instance.module';
 import { MediaModule } from './modules/media/media.module';
 import { PersonaModule } from './modules/persona/persona.module';
 import { ProactiveModule } from './modules/proactive/proactive.module';
+import { RiskModule } from './modules/risk/risk.module';
+import { RuleModule } from './modules/rules/rule.module';
 import { SessionModule } from './modules/session/session.module';
 import { ProactiveWorker } from './workers/proactive.worker';
+import { RiskWorker } from './workers/risk.worker';
 
 /**
  * Prisma 作为全局单例，所有模块共用一条连接。
@@ -30,8 +33,8 @@ class PrismaModule {}
   imports: [
     // 只加载 .env，不往全局塞任何"主密钥"类配置（见 .env.example 顶部说明）
     ConfigModule.forRoot({ isGlobal: true, cache: true }),
-    // 定时任务（M5-3）：目前只有主动消息心跳。默认关闭的开关在实例上，
-    // 没有实例打开时 worker 每 10 分钟空跑一次（只查一次"有没有开着的实例"）
+    // 定时任务：主动消息心跳（M5-3，每 10 分钟）+ 风控巡检（M6-1，每 5 分钟）。
+    // 两者都是"没有可做的工作就什么都不写"，不会空转打日志
     ScheduleModule.forRoot(),
     PrismaModule,
     AuthModule,
@@ -44,7 +47,9 @@ class PrismaModule {}
     PersonaModule,
     SessionModule,
     ProactiveModule,
+    RiskModule,
+    RuleModule,
   ],
-  providers: [ProactiveWorker],
+  providers: [ProactiveWorker, RiskWorker],
 })
 export class AppModule {}

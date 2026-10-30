@@ -20,6 +20,11 @@ export type InstanceOwner = {
   name: string;
   /** 机器人自己的平台账号 id（QQ 号等），引用决策判断"是不是自引"用 */
   accountId: string;
+  /**
+   * 实例级静默截止时间（M6-1）：被风控降级时会写成"未来某刻"。
+   * 期间**只入库不回复**（`governance` 拦在这里），连兜底话术都不说 —— 那也是一种发送。
+   */
+  silentUntil: Date | null;
 };
 
 /**

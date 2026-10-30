@@ -47,6 +47,13 @@ export class PrismaSessionRepository implements ISessionRepository {
     };
   }
 
+  async markBlocked(messageId: string, reason: string): Promise<void> {
+    await this.prisma.message.updateMany({
+      where: { id: messageId },
+      data: { blocked: true, blockReason: reason },
+    });
+  }
+
   async saveInbound(input: {
     sessionId: string;
     message: InboundMessage;
@@ -79,6 +86,8 @@ export class PrismaSessionRepository implements ISessionRepository {
     replyToMessageId?: string | null;
     thinkJson?: string | null;
     proactive?: boolean;
+    blocked?: boolean;
+    blockReason?: string | null;
   }): Promise<StoredMessage> {
     const row = await this.prisma.message.create({
       data: {
@@ -92,6 +101,7 @@ export class PrismaSessionRepository implements ISessionRepository {
           : '[]',
         ...(input.thinkJson ? { thinkJson: input.thinkJson } : {}),
         ...(input.proactive ? { proactive: true } : {}),
+        ...(input.blocked ? { blocked: true, blockReason: input.blockReason ?? null } : {}),
       },
     });
 

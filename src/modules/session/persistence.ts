@@ -64,5 +64,20 @@ export interface ISessionRepository {
      * 而"今天主动了几次"是每次心跳都要问的。
      */
     proactive?: boolean;
+    /**
+     * 这条被规则拦了（D051）。**仍然落库**：会话查看里要能看到"它本来想说什么"，
+     * 这是排查"它怎么不回我"最直接的一条证据。
+     */
+    blocked?: boolean;
+    /** `rule:<id>` | moderation | owner */
+    blockReason?: string | null;
   }): Promise<StoredMessage>;
+
+  /**
+   * 把一条**已入库**的消息标成被拦（D051）。
+   *
+   * 入站消息在第 ① 步就落库了，等规则命中时它已经在库里 —— 所以这里只是补个标记，
+   * 不是再插一条。标记的意义是：会话查看里能看出"这条被规则拦了，不是它没看见"。
+   */
+  markBlocked(messageId: string, reason: string): Promise<void>;
 }

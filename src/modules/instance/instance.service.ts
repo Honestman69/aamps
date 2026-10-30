@@ -313,6 +313,7 @@ export class InstanceService {
     if (input.ttsVoice !== undefined) patch.ttsVoice = input.ttsVoice;
     if (input.imageHosts !== undefined) patch.imageHosts = input.imageHosts;
     if (input.proactiveEnabled !== undefined) patch.proactiveEnabled = input.proactiveEnabled;
+    if (input.nightQuiet !== undefined) patch.nightQuiet = input.nightQuiet;
 
     // 预算是人格级配置（D024）：改它不需要重连，也不碰任何密钥
     if (input.dailyBudgetCents !== undefined) patch.dailyBudgetCents = input.dailyBudgetCents;
@@ -553,13 +554,25 @@ export class InstanceService {
         void this.deps.instances
           .setStatusForUser(input.ownerUserId, config.id, event.status)
           .catch(() => undefined);
+        // 注意：适配器的 status 只有 offline/connecting/online 三态（契约里没有 risk/banned）。
+        // 平台层面的封禁拿不到事件，只能靠 send-blocked 累计 + 人工标记 —— 别在这里假装能判。
       }
       if (event.kind === 'send-blocked') {
-        // 风控信号：M6 的 risk.worker 会据此降级，这里先只落一条 warn
+        // 风控信号（M6-1）：落事件 → risk.worker 据此算分并降级。
+        // 只记返回码，不记消息内容与账号（硬性规则 6）
         createAdapterLogger(`instance:${config.id}`).warn(
           { event: 'adapter.send_blocked', code: event.code },
           '发送被平台拦截',
         );
+        void this.deps.instances
+          .recordEvent({
+            instanceId: config.id,
+            level: 'risk',
+            code: 'send_blocked',
+            message: '发送被平台拦截',
+            meta: { code: event.code },
+          })
+          .catch(() => undefined);
       }
     });
 
@@ -652,6 +665,22 @@ export class InstanceService {
    * 内部断连：**不写审计**（审计由调用方决定记什么原因），
    * 但一定要清运行时与库里的状态 —— 漏掉任何一处都会留下"幽灵连接"。
    */
+  /**
+   * 风险巡检专用：断开当前连接，但**不改库里的状态**（M6-1 / D048）。
+   *
+   * 库里 `status` / `enabled` 由风险模块写（它算出了这个结论），
+   * 进程内的 adapter 只有这里知道 —— 两边各管一件事。
+   */
+  async dropConnection(instanceId: string, _reason: string): Promise<boolean> {
+    const adapter = this.deps.runtime.get(instanceId);
+    if (!adapter) {
+      return false;
+    }
+    await adapter.disconnect().catch(() => undefined);
+    this.deps.runtime.remove(instanceId);
+    return true;
+  }
+
   /**
    * 主动消息的唯一出口（M5-3 / D047）。
    *

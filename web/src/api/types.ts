@@ -71,6 +71,12 @@ export type Instance = {
   ttsModel: string | null;
   ttsVoice: string;
   imageHosts: string;
+  /** 主动消息开关（M5-3）：默认关闭 */
+  proactiveEnabled: boolean;
+  /** 夜间静默时段（M6-2）：`HH:MM-HH:MM` 或 `off`；只作用于群聊 */
+  nightQuiet: string;
+  /** 健康分（M6-1）：0-100，由风控巡检写入，只读 */
+  healthScore: number;
   status: string;
   createdAt: string;
   updatedAt: string;
@@ -236,9 +242,51 @@ export type InstancePatch = Partial<{
   ttsModel: string | null;
   ttsVoice: string;
   imageHosts: string;
+  /** 主动消息开关（M5-3） */
+  proactiveEnabled: boolean;
+  /** 夜间静默（M6-2）：`HH:MM-HH:MM` 或 `off` */
+  nightQuiet: string;
   /** 接入配置增量（D041）：只放改过的键，没放 = 不改 */
   adapterConfig: AdapterConfigValues;
 }>;
+
+/** 实例健康（M6-1 / D048）：分数给人看，动作由机器执行 */
+export type RiskOverview = {
+  instanceId: string;
+  score: number;
+  level: 'healthy' | 'degraded' | 'readonly' | 'stopped';
+  reasons: string[];
+  consecutiveBlocks: number;
+  action: { kind: string; until?: string; reason?: string };
+  silentUntil: string | null;
+};
+
+/** 约束词（D051）：owner 可配的"别聊这个/别出现这个词" */
+export type RuleKind = 'input_block' | 'output_block';
+
+export type InstanceRule = {
+  id: string;
+  instanceId: string;
+  kind: RuleKind;
+  pattern: string;
+  note: string | null;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** 系统红线：代码常量，只读（没有编辑入口） */
+export type RedLine = { id: string; text: string };
+
+/** 实例事件（M6-3）：登录态、拦截、降级都记在这里 */
+export type InstanceEvent = {
+  id: string;
+  level: string;
+  code: string;
+  message: string;
+  meta: unknown;
+  createdAt: string;
+};
 
 /** 管理端用户视图（D042）：只有身份与状态，没有任何密钥材料 */
 export type AdminUser = {

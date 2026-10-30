@@ -51,6 +51,18 @@ export const router = createRouter({
           meta: { title: '会话记录' },
         },
         {
+          path: 'instances/:id/rules',
+          name: 'instance-rules',
+          component: () => import('@/views/RulesView.vue'),
+          meta: { title: '规则与约束词' },
+        },
+        {
+          path: 'instances/:id/health',
+          name: 'instance-health',
+          component: () => import('@/views/HealthView.vue'),
+          meta: { title: '健康与事件' },
+        },
+        {
           path: 'instances/:id/assets',
           name: 'instance-assets',
           component: () => import('@/views/AssetsView.vue'),

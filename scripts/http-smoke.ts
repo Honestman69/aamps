@@ -350,6 +350,18 @@ async function main(): Promise<void> {
   res = await call('PATCH', `/api/instances/${instanceId}`, { proactiveEnabled: 'yes' });
   assert.equal(res.status, 400, '布尔字段不接字符串');
 
+  step('实例：夜间静默（M6-2）可改可读回，坏格式 400，off 关闭');
+  res = await call('PATCH', `/api/instances/${instanceId}`, { nightQuiet: '23:00-07:30' });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(res.body.nightQuiet, '23:00-07:30');
+  res = await call('PATCH', `/api/instances/${instanceId}`, { nightQuiet: '25:00-07:30' });
+  assert.equal(res.status, 400, '越界小时应被拦（不能静默按关闭处理）');
+  res = await call('PATCH', `/api/instances/${instanceId}`, { nightQuiet: 'garbage' });
+  assert.equal(res.status, 400);
+  res = await call('PATCH', `/api/instances/${instanceId}`, { nightQuiet: 'off' });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.nightQuiet, 'off');
+
   res = await call('PATCH', `/api/instances/${instanceId}`, { name: '改过名的实例' });
   assert.equal(res.status, 200, JSON.stringify(res.body));
   assert.equal(res.body.name, '改过名的实例');
@@ -631,6 +643,101 @@ async function main(): Promise<void> {
   step('自我：实例不存在 → 404');
   res = await call('GET', '/api/instances/no-such-instance/self');
   assert.equal(res.status, 404);
+
+  // ── 健康分（M6-1 / D048）──
+  step('风控：新实例 → 200 + 100 分 + healthy + 无动作');
+  res = await call('GET', `/api/instances/${sessionInstanceId}/risk`);
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(res.body.score, 100);
+  assert.equal(res.body.level, 'healthy');
+  assert.equal(res.body.consecutiveBlocks, 0);
+  assert.equal(res.body.action.kind, 'none');
+  assert.deepEqual(res.body.reasons, ['无异常信号']);
+
+  step('前端：健康页路由刷新 → 回落 index.html（M6-3）');
+  const healthPage = await fetch(`${BASE}/instances/whatever/health`, {
+    headers: { accept: 'text/html' },
+  });
+  assert.equal(healthPage.status, 200, '新页面的深链刷新不能 404');
+  assert.ok((await healthPage.text()).includes('<div id="app">'), '应返回后台的挂载点');
+
+  step('风控：事件列表（M6-3）→ 200，且默认限 50 条');
+  res = await call('GET', `/api/instances/${sessionInstanceId}/events`);
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.deepEqual(res.body.items, [], '新实例还没有事件');
+  res = await call('GET', `/api/instances/${sessionInstanceId}/events?limit=500`);
+  assert.equal(res.status, 400, 'limit 越界应 400');
+  res = await call('GET', `/api/instances/${sessionInstanceId}/events?foo=1`);
+  assert.equal(res.status, 400, '未知参数应 400');
+  res = await request('GET', `/api/instances/${sessionInstanceId}/events`, undefined, memberCookie2);
+  assert.equal(res.status, 404, '别人的实例 → 404');
+
+  step('风控：别人的实例 → 404');
+  res = await request('GET', `/api/instances/${sessionInstanceId}/risk`, undefined, memberCookie2);
+  assert.equal(res.status, 404, JSON.stringify(res.body));
+
+  step('风控：实例不存在 → 404');
+  res = await call('GET', '/api/instances/no-such-instance/risk');
+  assert.equal(res.status, 404);
+
+  // ── 规则与约束词（D051）──
+  step('规则：系统红线只读（8 条，标 editable=false）');
+  res = await call('GET', '/api/meta/red-lines');
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.ok(Array.isArray(res.body.items) && res.body.items.length >= 8);
+  assert.equal(res.body.editable, false, '红线不可编辑');
+
+  step('规则：新建约束词 → 201，列表能查到');
+  res = await call('POST', `/api/instances/${sessionInstanceId}/rules`, {
+    kind: 'input_block',
+    pattern: '离婚',
+    note: '家里的事不要接',
+  });
+  assert.equal(res.status, 201, JSON.stringify(res.body));
+  const ruleId = res.body.id as string;
+  assert.equal(res.body.enabled, true);
+  res = await call('GET', `/api/instances/${sessionInstanceId}/rules`);
+  assert.equal(res.status, 200);
+  assert.equal(res.body.length, 1);
+
+  step('规则：改启用状态 → 200；未知字段 / 非法类型 / 空词 / 超长 都 400');
+  res = await call('PATCH', `/api/rules/${ruleId}`, { enabled: false });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.enabled, false);
+  res = await call('PATCH', `/api/rules/${ruleId}`, { kind: 'output_block' });
+  assert.equal(res.status, 400, '类型不该能改（删掉重建更清楚）');
+  res = await call('POST', `/api/instances/${sessionInstanceId}/rules`, {
+    kind: 'regex',
+    pattern: 'a.*b',
+  });
+  assert.equal(res.status, 400, '不接受正则类型');
+  res = await call('POST', `/api/instances/${sessionInstanceId}/rules`, {
+    kind: 'input_block',
+    pattern: '   ',
+  });
+  assert.equal(res.status, 400, '空词应被拒');
+  res = await call('POST', `/api/instances/${sessionInstanceId}/rules`, {
+    kind: 'input_block',
+    pattern: 'x'.repeat(65),
+  });
+  assert.equal(res.status, 400, '超过 64 字应被拒');
+
+  step('规则：别人的实例 / 别人的规则 → 404');
+  res = await request('GET', `/api/instances/${sessionInstanceId}/rules`, undefined, memberCookie2);
+  assert.equal(res.status, 404);
+  res = await request('PATCH', `/api/rules/${ruleId}`, { enabled: true }, memberCookie2);
+  assert.equal(res.status, 404, '改不动别人的规则');
+  res = await request('DELETE', `/api/rules/${ruleId}`, undefined, memberCookie2);
+  assert.equal(res.status, 404);
+
+  step('规则：删除 → 200，列表清空');
+  res = await call('DELETE', `/api/rules/${ruleId}`);
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body, { removed: true });
+  res = await call('GET', `/api/instances/${sessionInstanceId}/rules`);
+  assert.deepEqual(res.body, []);
+  res = await call('DELETE', `/api/rules/${ruleId}`);
+  assert.equal(res.status, 404, '删过的再删 → 404（不是静默成功）');
 
   res = await call('DELETE', `/api/instances/${sessionInstanceId}`);
   assert.equal(res.status, 200);

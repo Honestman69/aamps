@@ -1,0 +1,2 @@
+export const RISK_REPOSITORY = 'RISK_REPOSITORY';
+export const RISK_SERVICE = 'RISK_SERVICE';

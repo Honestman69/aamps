@@ -40,6 +40,10 @@ export type InstancePublicRow = {
   imageHosts: string;
   /** 主动消息开关（M5-3 / D047） */
   proactiveEnabled: boolean;
+  /** 健康分（M6-1 / D048）：0-100，由风控巡检写入 */
+  healthScore: number;
+  /** 夜间静默时段（M6-2）：`HH:MM-HH:MM` 或 `off` */
+  nightQuiet: string;
   status: string;
   createdAt: Date;
   updatedAt: Date;
@@ -96,6 +100,7 @@ export type InstanceCreateInput = {
   ttsVoice?: string;
   imageHosts?: string;
   proactiveEnabled?: boolean;
+  nightQuiet?: string;
 };
 
 export type InstanceUpdatePatch = {
@@ -122,6 +127,7 @@ export type InstanceUpdatePatch = {
   ttsVoice?: string;
   imageHosts?: string;
   proactiveEnabled?: boolean;
+  nightQuiet?: string;
 };
 
 export interface IInstanceRepository {
@@ -141,5 +147,16 @@ export interface IInstanceRepository {
   deleteForUser(userId: string, id: string): Promise<boolean>;
   /** 把连接状态落到库里，后台刷新页面时看到的不是内存里的旧值 */
   setStatusForUser(userId: string, id: string, status: string): Promise<boolean>;
+  /**
+   * 记一条实例事件（M6-1）。**系统行为，不带 userId** —— 它是从适配器事件里来的，
+   * 那时没有用户会话；归属由 `instanceId` 决定，而它来自已经鉴权过的连接。
+   */
+  recordEvent(input: {
+    instanceId: string;
+    level: string;
+    code: string;
+    message: string;
+    meta?: Record<string, unknown>;
+  }): Promise<void>;
   countForUser(userId: string): Promise<number>;
 }

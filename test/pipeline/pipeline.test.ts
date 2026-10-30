@@ -82,14 +82,29 @@ class FakeSessionRepo implements ISessionRepository {
     return rec;
   }
 
+  async markBlocked(messageId: string, reason: string): Promise<void> {
+    this.blockedInbound.push({ messageId, reason });
+  }
+
+  blockedInbound: Array<{ messageId: string; reason: string }> = [];
+
+  /** 被规则拦下的出站（D051）：单独记一份，断言用 */
+  blockedOutbound: Array<{ content: string; blockReason: string | null }> = [];
+
   async saveOutbound(input: {
     sessionId: string;
     content: string;
     senderId: string | null;
     replyToMessageId?: string | null;
     thinkJson?: string | null;
+    proactive?: boolean;
+    blocked?: boolean;
+    blockReason?: string | null;
   }): Promise<StoredMessage> {
     this.thinkJson.push(input.thinkJson ?? null);
+    if (input.blocked) {
+      this.blockedOutbound.push({ content: input.content, blockReason: input.blockReason ?? null });
+    }
     const rec: StoredMessage = {
       id: nextId(),
       sessionId: input.sessionId,
@@ -234,6 +249,31 @@ class FakeSelf {
   }
 }
 
+class FakeRules {
+  rules: Array<{ id: string; kind: string; pattern: string; enabled: boolean }> = [];
+
+  async activeRules(): Promise<Array<{ id: string; kind: string; pattern: string; enabled: boolean }>> {
+    return this.rules;
+  }
+}
+
+class FakeThrottle {
+  /** 默认放行；测试可以改成"要等"或"拒发" */
+  decision: { allow: true; waitMs: number } | { allow: false; reason: string } = {
+    allow: true,
+    waitMs: 0,
+  };
+  calls: Array<{ text: string; dailyCap?: number }> = [];
+
+  async check(input: {
+    text: string;
+    dailyCap?: number;
+  }): Promise<{ allow: true; waitMs: number } | { allow: false; reason: string }> {
+    this.calls.push({ text: input.text, dailyCap: input.dailyCap });
+    return this.decision;
+  }
+}
+
 class FakeWindowRepo implements ISessionWindowRepository {
   slice: WindowSlice | null = null;
   /** 按 target 分片覆盖：并发/串行场景里两条消息的 target 不同 */
@@ -250,6 +290,7 @@ class FakePipelineRepo implements IPipelineRepository {
     ownerUserId: 'user-1',
     name: '小雅',
     accountId: 'bot-1',
+    silentUntil: null,
   };
   persona: ActivePersona | null = null;
 
@@ -383,6 +424,8 @@ type Harness = {
   assets: FakeAssetService;
   memory: FakeMemory;
   self: FakeSelf;
+  throttle: FakeThrottle;
+  rules: FakeRules;
   sent: OutboundAction[];
   /** 表达层请求过的延迟（毫秒），按调用顺序 */
   sleeps: number[];
@@ -408,6 +451,8 @@ function makeHarness(
   const assets = new FakeAssetService();
   const memory = new FakeMemory();
   const self = new FakeSelf();
+  const throttle = new FakeThrottle();
+  const rules = new FakeRules();
   const sent: OutboundAction[] = [];
   const sleeps: number[] = [];
   const gateway = overrides.gateway ?? gatewayStub({});
@@ -437,6 +482,8 @@ function makeHarness(
     assets: assets as unknown as MediaAssetService,
     memory,
     self,
+    throttle,
+    rules,
     config,
     gateway: gateway as unknown as GatewayService,
     clock: () => new Date('2026-10-24T12:00:00'),
@@ -462,6 +509,8 @@ function makeHarness(
     assets,
     memory,
     self,
+    throttle,
+    rules,
     sent,
     sleeps,
     service,
@@ -1212,5 +1261,213 @@ describe('管道里的人格演化（M5-2 / D046）', () => {
     await h.service.handle(msg, h.send, { capabilities: CAPS });
 
     expect(sentText(h.sent)).toEqual(['你好呀']);
+  });
+});
+
+describe('风控静默（M6-1 / D048）', () => {
+  const personaNoThink = {
+    ...PERSONA_LONG_OUTAGE,
+    fallbacksJson: '{}',
+    behaviorJson: JSON.stringify({ think: { enabled: false } }),
+  };
+
+  it('静默期内：入库但不回复，也不调模型（连兜底话术都不发）', async () => {
+    const h = makeHarness({ persona: personaNoThink });
+    // ctx.now 固定为 12:00（见 makeHarness 的 clock）
+    h.pipelineRepo.owner = {
+      ...h.pipelineRepo.owner!,
+      silentUntil: new Date('2026-10-24T12:10:00'),
+    };
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(h.sessions.inboundMessages).toHaveLength(1); // 消息照常入库，可查
+    expect(h.sent).toHaveLength(0); // 一个字都不发
+    expect(h.gateway.calls).toHaveLength(0); // 连模型都不调
+  });
+
+  it('静默期已过期：照常回复', async () => {
+    const h = makeHarness({ persona: personaNoThink });
+    h.pipelineRepo.owner = {
+      ...h.pipelineRepo.owner!,
+      silentUntil: new Date('2026-10-24T11:59:00'),
+    };
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(sentText(h.sent)).toEqual(['你好呀']);
+  });
+});
+
+describe('出站节流（M6-2 / D049）', () => {
+  const personaNoThink = {
+    ...PERSONA_LONG_OUTAGE,
+    fallbacksJson: '{}',
+    behaviorJson: JSON.stringify({ think: { enabled: false } }),
+  };
+
+  it('拒发时不发送，但消息照常入库（人能查到它本来想说什么）', async () => {
+    const h = makeHarness({ persona: personaNoThink });
+    h.throttle.decision = { allow: false, reason: 'session-hour-limit' };
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(h.sent).toHaveLength(0);
+    expect(h.sessions.inboundMessages).toHaveLength(1);
+    expect(h.sessions.outboundMessages).toHaveLength(0);
+  });
+
+  it('要等冷却时按算出的时长等，再发', async () => {
+    const h = makeHarness({ persona: personaNoThink });
+    h.throttle.decision = { allow: true, waitMs: 25_000 };
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(h.sleeps).toContain(25_000);
+    expect(sentText(h.sent)).toEqual(['你好呀']);
+  });
+
+  it('节流拿到的是要发出去的正文与配置里的日上限', async () => {
+    const h = makeHarness({ persona: personaNoThink, config: { dailyMsgCap: 123 } });
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(h.throttle.calls).toHaveLength(1);
+    expect(h.throttle.calls[0]?.dailyCap).toBe(123);
+  });
+});
+
+describe('夜间静默（M6-2 / D049）', () => {
+  const personaNoThink = {
+    ...PERSONA_LONG_OUTAGE,
+    fallbacksJson: '{}',
+    behaviorJson: JSON.stringify({ think: { enabled: false } }),
+  };
+  /** ctx.now 固定 12:00，所以把静默窗口设成 11:00-13:00 就等于"现在是夜里" */
+  const nightConfig = { nightQuiet: '11:00-13:00' };
+
+  it('群聊 + 未 @ + 静默期 → 不回复', async () => {
+    const h = makeHarness({ persona: personaNoThink, config: nightConfig });
+    const msg = inbound({
+      session: { kind: 'group', peerId: 'group-1' },
+      isMentioned: false,
+    });
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(h.sent).toHaveLength(0);
+    expect(h.sessions.inboundMessages).toHaveLength(1);
+    // 静默在 governance 就 DROP 了，连状态都不该写（人工接管同理）
+    expect(h.mind.savedStates).toHaveLength(0);
+  });
+
+  it('群聊 + 被 @ → 照常回复（明确叫它就该应）', async () => {
+    const h = makeHarness({ persona: personaNoThink, config: nightConfig });
+    const msg = inbound({
+      session: { kind: 'group', peerId: 'group-1' },
+      isMentioned: true,
+    });
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(sentText(h.sent)).toEqual(['你好呀']);
+  });
+
+  it('私聊不受夜间静默影响（作息由 owner 自己定）', async () => {
+    const h = makeHarness({ persona: personaNoThink, config: nightConfig });
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(sentText(h.sent)).toEqual(['你好呀']);
+  });
+
+  it('nightQuiet 配成 off → 静默不再拦，消息会走到 attention 那一步', async () => {
+    const h = makeHarness({ persona: personaNoThink, config: { nightQuiet: 'off' } });
+    const msg = inbound({ session: { kind: 'group', peerId: 'group-1' }, isMentioned: false });
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    // 群里没被 @ 时 attention 本来就会判"不回"，但那是**判断**不是**静默**：
+    // 区别在于它会写状态/关系（静默是连这一步都不做）
+    expect(h.mind.savedStates).toHaveLength(1);
+  });
+});
+
+describe('约束词（D051）', () => {
+  const personaNoThink = {
+    ...PERSONA_LONG_OUTAGE,
+    fallbacksJson: '{}',
+    behaviorJson: JSON.stringify({ think: { enabled: false } }),
+  };
+
+  it('入站命中"别聊这个"：不回复、不调模型，但把这条消息标成被拦', async () => {
+    const h = makeHarness({ persona: personaNoThink });
+    h.rules.rules = [{ id: 'r-in', kind: 'input_block', pattern: '离婚', enabled: true }];
+    const msg = inbound({ plainText: '我最近在办离婚', segments: [{ type: 'text', text: '我最近在办离婚' }] });
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(h.sent).toHaveLength(0);
+    expect(h.gateway.calls).toHaveLength(0);
+    // 消息 id 由假仓储生成，只断言"有一条被标记，且原因是这条规则"
+    expect(h.sessions.blockedInbound).toHaveLength(1);
+    expect(h.sessions.blockedInbound[0]?.reason).toBe('rule:r-in');
+  });
+
+  it('出站命中"别出现这个词"：不发，但把想说的那句落库并标记', async () => {
+    const h = makeHarness({
+      persona: personaNoThink,
+      gateway: gatewayStub({ text: '你前女友最近怎么样' }),
+    });
+    h.rules.rules = [{ id: 'r-out', kind: 'output_block', pattern: '前女友', enabled: true }];
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(h.sent).toHaveLength(0);
+    expect(h.sessions.blockedOutbound).toEqual([
+      { content: '你前女友最近怎么样', blockReason: 'rule:r-out' },
+    ]);
+    // 节流在它之后，不该被走到
+    expect(h.throttle.calls).toHaveLength(0);
+  });
+
+  it('没配规则时一切照旧', async () => {
+    const h = makeHarness({ persona: personaNoThink });
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(sentText(h.sent)).toEqual(['你好呀']);
+    expect(h.sessions.blockedInbound).toHaveLength(0);
+  });
+
+  it('system prompt 开头是红线段（D020 的组装顺序）', async () => {
+    const h = makeHarness({ persona: personaNoThink });
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    const system = (chatCall(h)?.messages as Array<{ content: unknown }>)[0]?.content as string;
+    expect(system.startsWith('【底线（不可协商）】')).toBe(true);
   });
 });

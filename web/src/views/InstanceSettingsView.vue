@@ -57,6 +57,10 @@ type FormState = {
   ttsModel: string;
   ttsVoice: string;
   imageHosts: string;
+  /** 夜间静默（M6-2）：`HH:MM-HH:MM` 或 `off`。只作用于群聊 */
+  nightQuiet: string;
+  /** 主动消息（M5-3）：默认关闭，打开后才会"隔了很久主动说一句" */
+  proactiveEnabled: boolean;
   /**
    * 接入配置（D041）：键来自适配器清单。
    * 敏感项（token）不回显，留空 = 不修改。
@@ -80,6 +84,8 @@ const form = reactive<FormState>({
   ttsModel: '',
   ttsVoice: 'alloy',
   imageHosts: '',
+  nightQuiet: '00:30-07:30',
+  proactiveEnabled: false,
   adapterConfig: {},
 });
 
@@ -118,6 +124,8 @@ function fill(row: Instance): void {
   form.ttsModel = row.ttsModel ?? '';
   form.ttsVoice = row.ttsVoice || 'alloy';
   form.imageHosts = row.imageHosts;
+  form.nightQuiet = row.nightQuiet || 'off';
+  form.proactiveEnabled = row.proactiveEnabled;
   // 接入参数按清单反查（靠 mapsTo，不靠字段名）；token 永远不回显
   form.adapterConfig = valuesFromInstance(manifest.value, row);
   originConfig.value = { ...form.adapterConfig };
@@ -192,6 +200,12 @@ function buildPatch(): InstancePatch {
     patch.ttsVoice = form.ttsVoice.trim();
   }
   if (form.imageHosts.trim() !== base.imageHosts) patch.imageHosts = form.imageHosts.trim();
+  if (form.nightQuiet.trim() && form.nightQuiet.trim() !== base.nightQuiet) {
+    patch.nightQuiet = form.nightQuiet.trim();
+  }
+  if (form.proactiveEnabled !== base.proactiveEnabled) {
+    patch.proactiveEnabled = form.proactiveEnabled;
+  }
 
   // 接入参数：只发真的变了的键。没变就不发 —— 发了会触发一次不必要的重连
   const configPatch = changedValues(manifest.value, originConfig.value, form.adapterConfig);
@@ -403,6 +417,33 @@ const voiceReady = computed(
           <el-input v-model="form.imageHosts" placeholder="example.com,img.example.com" />
           <div class="hint">
             留空 = 允许任意公网 https 图片；填了就只允许这些域名。内网地址与 http 出站一律拒绝。
+          </div>
+        </el-form-item>
+      </div>
+    </div>
+
+    <!-- 行为（M5-3 / M6-2）：两个开关都默认"不打扰"，打开前先讲清代价 -->
+    <div class="card card-pad">
+      <h2 class="section-title">行为</h2>
+      <p class="section-desc">
+        这两项决定它"什么时候主动说话"。默认都是最保守的一档：不主动、夜里在群里不接话。
+      </p>
+
+      <div class="grid-2">
+        <el-form-item label="夜间静默（群聊）">
+          <el-input v-model="form.nightQuiet" placeholder="00:30-07:30 或 off" />
+          <div class="hint">
+            群聊在这段时间内不主动接话（被 @ 除外）；私聊不受影响。填 <code>off</code> 关闭。
+            格式 <code>HH:MM-HH:MM</code>，可跨零点。
+          </div>
+        </el-form-item>
+
+        <el-form-item label="主动消息">
+          <el-switch v-model="form.proactiveEnabled" />
+          <div class="hint">
+            打开后：很久没聊（48 小时）且关系够近的人，它可能自己先说一句。
+            受夜间静默、同一人 72 小时冷却、每天最多 3 条约束 —— 但它仍然是在<strong>打扰别人</strong>，
+            请确认这是你要的。
           </div>
         </el-form-item>
       </div>
