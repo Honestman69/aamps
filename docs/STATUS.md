@@ -83,7 +83,7 @@ persist-inbound → load-context → governance → guard-input（D051 入站禁
   `corepack pnpm install` 首次约 9 分钟，别以为卡死了。
 - 构建：`pnpm build` 先构建 `packages/*`（契约包 `main` 指向 `dist/index.js`）再编译主服务。
   只跑 `tsc` 不构建包，运行时会 `ERR_MODULE_NOT_FOUND`。
-- **推送状态**：2026-10-30 已推到 `main` = `5377da7`（M6 合并提交），
+- **推送状态**：2026-10-30 已推到 `main` = `3cbdf20`（M6 合并 `5377da7` + 文档一致性审计 `3cbdf20`），
   标签 `m6-risk` → `5377da7`，分支 `feat/m6-risk` = `6bf16b9`（三处均用 `git ls-remote` 复核）。
   远端现有 `main` + 各阶段的 `feat/*` 分支（每个里程碑一条，合并后保留作追溯）+
   六个标签（`m1-skeleton` / `m1-verified` / `m3-persona` / `m4-admin` / `m5-memory` / `m6-risk`）。
