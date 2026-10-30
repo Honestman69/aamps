@@ -17,9 +17,11 @@
  *    "你必须…"只会让模型背设定（D020）。
  * 2. **宽容解析**：Persona 的 JSON 字段坏了、为空、被手工改坏，一律跳过该段而不是抛错。
  *    人格数据坏了不能让机器人崩 —— 少一段设定比不说话好。
- * 3. **红线不在 Persona 里**：`boundariesJson` 是软禁区（可协商），红线是独立表
- *    （还没建）。这里绝不把软禁区当红线用。
+ * 3. **红线不在 Persona 里**：`boundariesJson` 是软禁区（可协商），红线是代码常量
+ *    （`rules/red-lines.ts`，D051）。这里绝不把软禁区当红线用。
  */
+
+import { buildRedLineSection } from '../rules/red-lines';
 
 export type PersonaSeed = {
   name: string;
@@ -358,7 +360,8 @@ function buildSelfSection(self: PromptContext['self']): string {
 export function assemblePrompt(seed: PersonaSeed, context: PromptContext): AssembledPrompt {
   const sections: string[] = [];
 
-  // ① 红线（只读）：还没实现独立红线表，先留一行明确占位，不让"没红线"被误读成"什么都能说"
+  // ① 红线（只读，D051）：代码常量，永远在最前。它是设定的**边界**，不是设定的一部分
+  sections.push(buildRedLineSection());
   sections.push('你是一个有自己性格的人，不是客服，也不是搜索引擎。');
 
   // ② 出生设定（种子）

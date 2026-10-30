@@ -13,6 +13,7 @@ import { MediaModule } from './modules/media/media.module';
 import { PersonaModule } from './modules/persona/persona.module';
 import { ProactiveModule } from './modules/proactive/proactive.module';
 import { RiskModule } from './modules/risk/risk.module';
+import { RuleModule } from './modules/rules/rule.module';
 import { SessionModule } from './modules/session/session.module';
 import { ProactiveWorker } from './workers/proactive.worker';
 import { RiskWorker } from './workers/risk.worker';
@@ -47,6 +48,7 @@ class PrismaModule {}
     SessionModule,
     ProactiveModule,
     RiskModule,
+    RuleModule,
   ],
   providers: [ProactiveWorker, RiskWorker],
 })

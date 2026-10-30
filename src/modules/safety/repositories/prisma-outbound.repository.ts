@@ -14,7 +14,8 @@ export class PrismaOutboundRepository implements IOutboundRepository {
 
   async listOutbound(sessionId: string, since: Date, limit: number): Promise<OutboundRow[]> {
     return this.prisma.message.findMany({
-      where: { sessionId, role: 'assistant', createdAt: { gte: since } },
+      // blocked 的不算"发出去过"：它们没到平台，计进限频会让真实额度被虚耗（D051）
+      where: { sessionId, role: 'assistant', blocked: false, createdAt: { gte: since } },
       orderBy: { createdAt: 'desc' },
       take: limit,
       select: { content: true, createdAt: true },
@@ -23,7 +24,7 @@ export class PrismaOutboundRepository implements IOutboundRepository {
 
   async listRecentMessages(sessionId: string, limit: number): Promise<Array<{ role: string }>> {
     return this.prisma.message.findMany({
-      where: { sessionId },
+      where: { sessionId, blocked: false },
       orderBy: { createdAt: 'desc' },
       take: limit,
       select: { role: true },
@@ -32,7 +33,7 @@ export class PrismaOutboundRepository implements IOutboundRepository {
 
   async countOutboundForInstance(instanceId: string, since: Date): Promise<number> {
     return this.prisma.message.count({
-      where: { role: 'assistant', createdAt: { gte: since }, session: { instanceId } },
+      where: { role: 'assistant', blocked: false, createdAt: { gte: since }, session: { instanceId } },
     });
   }
 }

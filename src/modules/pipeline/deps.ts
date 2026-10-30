@@ -24,6 +24,18 @@ import type { ISessionWindowRepository } from '../session/ports';
 import type { IPipelineRepository } from './ports';
 
 /**
+ * 约束词（D051）：入站/出站各问一句"这条命中 owner 的禁语了吗"。
+ *
+ * 只读、只返回启用的规则；实现方永不 throw（读失败 = 没有规则）。
+ * 红线不在这里 —— 它是代码常量，随 prompt 一起拼，不经过管道判断。
+ */
+export type PipelineRules = {
+  activeRules(instanceId: string): Promise<
+    Array<{ id: string; kind: string; pattern: string; enabled: boolean }>
+  >;
+};
+
+/**
  * 出站节流（M6-2）：`deliver` 之前问一句"现在能不能发"。
  *
  * 三个结果：放行、放行但要等（连续发言的冷却）、拒发（会话小时上限 / 日上限 / 复读）。
@@ -93,6 +105,8 @@ export type PipelineDeps = {
   self: PipelineSelf;
   /** 出站节流（M6-2）：单会话/单日上限、连续冷却、复读拦截 */
   throttle: PipelineThrottle;
+  /** 约束词（D051）：入站/出站禁语 */
+  rules: PipelineRules;
   config: {
     get(
       instanceId: string,

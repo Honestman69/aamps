@@ -82,14 +82,29 @@ class FakeSessionRepo implements ISessionRepository {
     return rec;
   }
 
+  async markBlocked(messageId: string, reason: string): Promise<void> {
+    this.blockedInbound.push({ messageId, reason });
+  }
+
+  blockedInbound: Array<{ messageId: string; reason: string }> = [];
+
+  /** 被规则拦下的出站（D051）：单独记一份，断言用 */
+  blockedOutbound: Array<{ content: string; blockReason: string | null }> = [];
+
   async saveOutbound(input: {
     sessionId: string;
     content: string;
     senderId: string | null;
     replyToMessageId?: string | null;
     thinkJson?: string | null;
+    proactive?: boolean;
+    blocked?: boolean;
+    blockReason?: string | null;
   }): Promise<StoredMessage> {
     this.thinkJson.push(input.thinkJson ?? null);
+    if (input.blocked) {
+      this.blockedOutbound.push({ content: input.content, blockReason: input.blockReason ?? null });
+    }
     const rec: StoredMessage = {
       id: nextId(),
       sessionId: input.sessionId,
@@ -231,6 +246,14 @@ class FakeSelf {
       throw new Error('self db down');
     }
     return this.loaded;
+  }
+}
+
+class FakeRules {
+  rules: Array<{ id: string; kind: string; pattern: string; enabled: boolean }> = [];
+
+  async activeRules(): Promise<Array<{ id: string; kind: string; pattern: string; enabled: boolean }>> {
+    return this.rules;
   }
 }
 
@@ -402,6 +425,7 @@ type Harness = {
   memory: FakeMemory;
   self: FakeSelf;
   throttle: FakeThrottle;
+  rules: FakeRules;
   sent: OutboundAction[];
   /** 表达层请求过的延迟（毫秒），按调用顺序 */
   sleeps: number[];
@@ -428,6 +452,7 @@ function makeHarness(
   const memory = new FakeMemory();
   const self = new FakeSelf();
   const throttle = new FakeThrottle();
+  const rules = new FakeRules();
   const sent: OutboundAction[] = [];
   const sleeps: number[] = [];
   const gateway = overrides.gateway ?? gatewayStub({});
@@ -458,6 +483,7 @@ function makeHarness(
     memory,
     self,
     throttle,
+    rules,
     config,
     gateway: gateway as unknown as GatewayService,
     clock: () => new Date('2026-10-24T12:00:00'),
@@ -484,6 +510,7 @@ function makeHarness(
     memory,
     self,
     throttle,
+    rules,
     sent,
     sleeps,
     service,
@@ -1378,5 +1405,69 @@ describe('夜间静默（M6-2 / D049）', () => {
     // 群里没被 @ 时 attention 本来就会判"不回"，但那是**判断**不是**静默**：
     // 区别在于它会写状态/关系（静默是连这一步都不做）
     expect(h.mind.savedStates).toHaveLength(1);
+  });
+});
+
+describe('约束词（D051）', () => {
+  const personaNoThink = {
+    ...PERSONA_LONG_OUTAGE,
+    fallbacksJson: '{}',
+    behaviorJson: JSON.stringify({ think: { enabled: false } }),
+  };
+
+  it('入站命中"别聊这个"：不回复、不调模型，但把这条消息标成被拦', async () => {
+    const h = makeHarness({ persona: personaNoThink });
+    h.rules.rules = [{ id: 'r-in', kind: 'input_block', pattern: '离婚', enabled: true }];
+    const msg = inbound({ plainText: '我最近在办离婚', segments: [{ type: 'text', text: '我最近在办离婚' }] });
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(h.sent).toHaveLength(0);
+    expect(h.gateway.calls).toHaveLength(0);
+    // 消息 id 由假仓储生成，只断言"有一条被标记，且原因是这条规则"
+    expect(h.sessions.blockedInbound).toHaveLength(1);
+    expect(h.sessions.blockedInbound[0]?.reason).toBe('rule:r-in');
+  });
+
+  it('出站命中"别出现这个词"：不发，但把想说的那句落库并标记', async () => {
+    const h = makeHarness({
+      persona: personaNoThink,
+      gateway: gatewayStub({ text: '你前女友最近怎么样' }),
+    });
+    h.rules.rules = [{ id: 'r-out', kind: 'output_block', pattern: '前女友', enabled: true }];
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(h.sent).toHaveLength(0);
+    expect(h.sessions.blockedOutbound).toEqual([
+      { content: '你前女友最近怎么样', blockReason: 'rule:r-out' },
+    ]);
+    // 节流在它之后，不该被走到
+    expect(h.throttle.calls).toHaveLength(0);
+  });
+
+  it('没配规则时一切照旧', async () => {
+    const h = makeHarness({ persona: personaNoThink });
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    expect(sentText(h.sent)).toEqual(['你好呀']);
+    expect(h.sessions.blockedInbound).toHaveLength(0);
+  });
+
+  it('system prompt 开头是红线段（D020 的组装顺序）', async () => {
+    const h = makeHarness({ persona: personaNoThink });
+    const msg = inbound();
+    h.windowRepo.slice = latestOnlySlice(msg);
+
+    await h.service.handle(msg, h.send, { capabilities: CAPS });
+
+    const system = (chatCall(h)?.messages as Array<{ content: unknown }>)[0]?.content as string;
+    expect(system.startsWith('【底线（不可协商）】')).toBe(true);
   });
 });

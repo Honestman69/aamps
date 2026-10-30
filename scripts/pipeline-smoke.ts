@@ -278,6 +278,8 @@ async function main(): Promise<void> {
     memory,
     self: selfService,
     throttle: outboundGuard,
+    // 约束词（D051）：⑰ 之前先给一个空实现（管道里两个 guard 都依赖它）
+    rules: { activeRules: async () => [] },
     config,
     gateway: gatewayStub,
     clock: () => new Date(),
@@ -919,6 +921,99 @@ async function main(): Promise<void> {
   );
   process.stdout.write(
     `⑯ 节流：小时上限/复读被拦，连续 5 条要求等待 ${Math.round((burstDecision.allow ? burstDecision.waitMs : 0) / 1000)}s\n`,
+  );
+
+  // ⑰ 约束词（D051）：入站命中不接、出站命中不发但落库、被拦的不进上下文
+  const { RuleService } = await import('../src/modules/rules/rule.service');
+  const { PrismaRuleRepository } = await import('../src/modules/rules/repositories/prisma-rule.repository');
+  const ruleService = new RuleService({
+    repo: new PrismaRuleRepository(prisma),
+    audit: new AuditService(new PrismaAuditLogRepository(prisma)),
+  });
+  const ruleActor = { userId: user.id, tenantId: user.tenantId, role: 'user', ip: null };
+  const inputRule = await ruleService.create(ruleActor, instance.id, {
+    kind: 'input_block',
+    pattern: '离婚',
+    note: '家里的事不要接',
+  });
+  const outputRule = await ruleService.create(ruleActor, instance.id, {
+    kind: 'output_block',
+    pattern: '前女友',
+  });
+  // 把它接到管道的 deps 上（真实仓储 + 真实规则表）
+  baseDeps.rules = ruleService;
+
+  // 清掉静默，让消息能走到规则这一层
+  await prisma.botInstance.update({
+    where: { id: instance.id },
+    data: { silentUntil: null, status: 'online' },
+  });
+
+  const beforeBlocked = sent.length;
+  await pipeline.handle(
+    inbound({
+      instanceId: instance.id,
+      plainText: '我最近在办离婚',
+      segments: [{ type: 'text', text: '我最近在办离婚' }],
+    }),
+    async (a) => {
+      sent.push(a);
+      return { messageId: 'out-rule-in' };
+    },
+    { capabilities: CAPS },
+  );
+  assert.equal(sent.length, beforeBlocked, '入站命中约束词不应回复');
+  const blockedInbound = await prisma.message.findFirst({
+    where: { session: { instanceId: instance.id }, content: '我最近在办离婚' },
+    orderBy: { createdAt: 'desc' },
+  });
+  assert.ok(blockedInbound?.blocked, '入站被拦的消息要标 blocked');
+  assert.equal(blockedInbound?.blockReason, `rule:${inputRule.id}`);
+
+  // 出站：让模型说一句带禁语的话
+  gatewayReply = '你前女友最近怎么样';
+  const beforeOutput = sent.length;
+  await pipeline.handle(
+    inbound({ instanceId: instance.id, plainText: '聊点别的', segments: [{ type: 'text', text: '聊点别的' }] }),
+    async (a) => {
+      sent.push(a);
+      return { messageId: 'out-rule-out' };
+    },
+    { capabilities: CAPS },
+  );
+  assert.equal(sent.length, beforeOutput, '出站命中约束词不应发送');
+  const blockedOutbound = await prisma.message.findFirst({
+    where: { session: { instanceId: instance.id }, content: '你前女友最近怎么样' },
+    orderBy: { createdAt: 'desc' },
+  });
+  assert.ok(blockedOutbound?.blocked, '被拦的回复仍要落库（便于排查）');
+  assert.equal(blockedOutbound?.blockReason, `rule:${outputRule.id}`);
+
+  // 被拦的消息不进上下文：窗口查询拿不到它
+  const windowSlice = await windowRepo.loadSlice({
+    sessionId: blockedOutbound!.sessionId,
+    targetMessageId: blockedInbound!.id,
+    beforeLimit: 30,
+    afterLimit: 30,
+  });
+  assert.equal(windowSlice, null, '被拦的消息不应成为窗口锚点（等于没发生过）');
+
+  // 删掉规则后恢复正常（真删，不是软删）
+  await ruleService.remove(ruleActor, inputRule.id);
+  await ruleService.remove(ruleActor, outputRule.id);
+  gatewayReply = '随便聊聊';
+  const afterDelete = sent.length;
+  await pipeline.handle(
+    inbound({ instanceId: instance.id, plainText: '在吗', segments: [{ type: 'text', text: '在吗' }] }),
+    async (a) => {
+      sent.push(a);
+      return { messageId: 'out-rule-clear' };
+    },
+    { capabilities: CAPS },
+  );
+  assert.ok(sent.length > afterDelete, '删掉规则后应恢复回复');
+  process.stdout.write(
+    `⑰ 约束词：入站命中不回（标 rule:id）、出站命中不发但落库、被拦的不进窗口、删规则即恢复\n`,
   );
 
   process.stdout.write('\nPIPELINE SMOKE PASSED\n');

@@ -261,6 +261,23 @@ export type RiskOverview = {
   silentUntil: string | null;
 };
 
+/** 约束词（D051）：owner 可配的"别聊这个/别出现这个词" */
+export type RuleKind = 'input_block' | 'output_block';
+
+export type InstanceRule = {
+  id: string;
+  instanceId: string;
+  kind: RuleKind;
+  pattern: string;
+  note: string | null;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** 系统红线：代码常量，只读（没有编辑入口） */
+export type RedLine = { id: string; text: string };
+
 /** 实例事件（M6-3）：登录态、拦截、降级都记在这里 */
 export type InstanceEvent = {
   id: string;

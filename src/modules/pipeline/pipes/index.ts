@@ -2,7 +2,7 @@
  * 入站管道：**顺序即真相**。
  *
  * 这里是一张平铺的清单，不是被拆散的逻辑 —— 想知道"一条消息经过哪些步骤"，
- * 看这 17 行就够了。加一个行为 = 新建一个 pipe 文件 + 在这里插一行。
+ * 看这 19 行就够了。加一个行为 = 新建一个 pipe 文件 + 在这里插一行。
  *
  * 两条纪律：
  *   1. **顺序靠 `assertPipeGraph` 校验**，不靠注释里的编号。谁把 `attention`
@@ -18,6 +18,7 @@ import { isDrop } from '@newjob/contracts';
 import { persistInboundPipe } from './01-persist-inbound';
 import { loadContextPipe } from './02-load-context';
 import { governancePipe } from './03-governance';
+import { guardInputPipe } from './04a-guard-input';
 import { loadMindPipe } from './04-load-mind';
 import { loadWindowPipe } from './05-load-window';
 import { attentionPipe } from './06-attention';
@@ -27,6 +28,7 @@ import { loadSelfPipe } from './07b-load-self';
 import { assemblePromptPipe } from './08-assemble-prompt';
 import { thinkPipe } from './09-think';
 import { generatePipe } from './10-generate';
+import { guardOutputPipe } from './10a-guard-output';
 import { decideQuotePipe } from './11-decide-quote';
 import { throttlePipe } from './11a-throttle';
 import { deliverPipe } from './12-deliver';
@@ -42,6 +44,8 @@ export const INBOUND_PIPES: readonly Pipe[] = [
   persistInboundPipe,
   loadContextPipe,
   governancePipe,
+  // 入站约束词（D051）：命中 owner 的"别聊这个"就不接，省掉后面所有步骤
+  guardInputPipe,
   // 状态与窗口：后面所有判断的输入
   loadMindPipe,
   loadWindowPipe,
@@ -55,6 +59,8 @@ export const INBOUND_PIPES: readonly Pipe[] = [
   assemblePromptPipe,
   thinkPipe,
   generatePipe,
+  // 出站约束词（D051）：命中就不发（但仍落库，便于排查）
+  guardOutputPipe,
   // 出站：引用 → 节流 → 发送 → 回写 → 反思
   decideQuotePipe,
   // 节流在 deliver 之前：超上限就这一次不说（消息已入库）

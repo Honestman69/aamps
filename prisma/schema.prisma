@@ -190,6 +190,9 @@ model BotInstance {
   /// 主动开口是封号高危行为，也是一个"会打扰人"的行为 —— 必须由人显式打开。
   proactiveEnabled Boolean @default(false)
 
+  // 实例级约束词（M4 遗留补齐 / D051）：owner 自己加的"别聊这个""别出现这个词"
+  rules InstanceRule[]
+
   // 当前生效的人设。人格与记忆属于**这个社交平台账号**（D023）
   activePersonaId String?  @unique
   activePersona   Persona? @relation("ActivePersona", fields: [activePersonaId], references: [id])
@@ -210,6 +213,32 @@ model BotInstance {
 
   @@unique([platform, accountId])
   @@index([ownerUserId])
+}
+
+// ─────────────────────── 实例约束词（D051）───────────────────────
+
+/// owner 可配的约束词。**与红线不是一回事**（红线是代码里的常量，谁都改不了）：
+///   - `input_block`：收到含这个词的消息就不接（不花 token）
+///   - `output_block`：生成的回复含这个词就不发
+///
+/// `pattern` 是**纯文本片段**，不是正则：正则交给用户写会带来灾难性回溯，
+/// 而且"为什么被拦"没法解释给人听（见 D051）。
+model InstanceRule {
+  id         String      @id @default(cuid())
+  instanceId String
+  instance   BotInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+
+  /// input_block | output_block
+  kind    String
+  pattern String
+  /// 给人看的备注（"甲方爸爸的名字别乱提"）
+  note    String?
+  enabled Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([instanceId, kind])
 }
 
 // ─────────────────────── 人格演化（D020 的第三层）───────────────────────

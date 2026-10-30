@@ -55,7 +55,9 @@ export class PrismaSessionWindowRepository implements ISessionWindowRepository {
   }): Promise<WindowSlice | null> {
     const targetRow = await this.prisma.message.findFirst({
       // 带 sessionId 一起查：拿别的会话的 messageId 过来也读不到，避免跨会话串数据
-      where: { id: input.targetMessageId, sessionId: input.sessionId },
+      // 被规则拦掉的消息不进上下文（D051）：它对模型来说等于"没发生过"，
+      // 否则它会以为自己说过那句被拦的话，下一轮的语气就错位了
+      where: { id: input.targetMessageId, sessionId: input.sessionId, blocked: false },
       select: SELECT,
     });
     if (!targetRow) {
@@ -70,23 +72,23 @@ export class PrismaSessionWindowRepository implements ISessionWindowRepository {
     // 丢一条同毫秒消息的代价只是少一句上下文（极罕见，批量导入才会遇到）。
     const [beforeRows, afterRows, afterCount, speakerGroups] = await Promise.all([
       this.prisma.message.findMany({
-        where: { sessionId: input.sessionId, createdAt: { lt: targetRow.createdAt } },
+        where: { sessionId: input.sessionId, createdAt: { lt: targetRow.createdAt }, blocked: false },
         orderBy: [{ createdAt: 'desc' }],
         take: input.beforeLimit,
         select: SELECT,
       }),
       this.prisma.message.findMany({
-        where: { sessionId: input.sessionId, createdAt: { gt: targetRow.createdAt } },
+        where: { sessionId: input.sessionId, createdAt: { gt: targetRow.createdAt }, blocked: false },
         orderBy: [{ createdAt: 'desc' }],
         take: input.afterLimit,
         select: SELECT,
       }),
       this.prisma.message.count({
-        where: { sessionId: input.sessionId, createdAt: { gt: targetRow.createdAt } },
+        where: { sessionId: input.sessionId, createdAt: { gt: targetRow.createdAt }, blocked: false },
       }),
       this.prisma.message.groupBy({
         by: ['senderId'],
-        where: { sessionId: input.sessionId, createdAt: { gt: targetRow.createdAt } },
+        where: { sessionId: input.sessionId, createdAt: { gt: targetRow.createdAt }, blocked: false },
       }),
     ]);
 

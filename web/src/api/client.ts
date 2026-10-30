@@ -15,7 +15,10 @@
 import type {
   AdapterConfigValues,
   InstanceEvent,
+  InstanceRule,
+  RedLine,
   RiskOverview,
+  RuleKind,
   AdapterManifest,
   AdminUser,
   AuditChainVerifyResult,
@@ -192,6 +195,31 @@ export const api = {
 
     /** 重算整条哈希链。能报出断在第几条、断在哪条记录（`brokenAtId`） */
     verifyAudit: (): Promise<AuditChainVerifyResult> => request('POST', '/api/admin/audit/verify'),
+  },
+
+  /**
+   * 约束词（D051）。
+   *
+   * `redLines` 是**只读**的：红线是代码常量，谁都改不了（含 superadmin）。
+   * 能改的只有 `list/create/update/remove` 这几个实例级约束词。
+   */
+  rules: {
+    redLines: (): Promise<{ items: RedLine[]; editable: boolean }> =>
+      request('GET', '/api/meta/red-lines'),
+    list: (instanceId: string): Promise<InstanceRule[]> =>
+      request('GET', `/api/instances/${encodeURIComponent(instanceId)}/rules`),
+    create: (
+      instanceId: string,
+      input: { kind: RuleKind; pattern: string; note?: string | null },
+    ): Promise<InstanceRule> =>
+      request('POST', `/api/instances/${encodeURIComponent(instanceId)}/rules`, input),
+    update: (
+      ruleId: string,
+      patch: Partial<{ pattern: string; note: string | null; enabled: boolean }>,
+    ): Promise<InstanceRule> =>
+      request('PATCH', `/api/rules/${encodeURIComponent(ruleId)}`, patch),
+    remove: (ruleId: string): Promise<{ removed: true }> =>
+      request('DELETE', `/api/rules/${encodeURIComponent(ruleId)}`),
   },
 
   /**
