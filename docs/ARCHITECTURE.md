@@ -163,7 +163,7 @@ newjob/
 │  │  ├─ session/              # 会话与消息：写入归 Pipeline，读取（后台查看）在这里（D043）
 │  │  ├─ pipeline/             # 消息主链路（D040）
 │  │  │  ├─ pipeline.service.ts # 只做编排：入队串行 / 跑链 / 兜底 / 清理
-│  │  │  └─ pipes/             # 16 个 pipe，一步一文件；顺序见 pipes/index.ts
+│  │  │  └─ pipes/             # 19 个 pipe，一步一文件；顺序见 pipes/index.ts
 │  │  ├─ mind/                 # 【表现层】可选装饰器，可整体关闭
 │  │  │  ├─ state/             # 情绪、精力、关系、日程
 │  │  │  ├─ attention/         # 发言决策
@@ -175,7 +175,7 @@ newjob/
 │  │  │  └─ assets/            # 素材库（D034）：存图/表情、按别名取用、内容去重
 │  │  ├─ memory/               # 记忆（M5-1）：反思写入 + 读回注入（D045）
 │  │  ├─ persona/              # 人设卡片与版本（M4：CRUD + 发布/归档/启用，D037）
-│  │  ├─ rules/                # 【预留】约束词与规则引擎
+│  │  ├─ rules/                # 红线（代码常量）+ 约束词（表 + 纯文本匹配，D051）
 │  │  ├─ model/                # 【模型接入】见 MODEL-ACCESS.md
 │  │  │  ├─ catalog/           # Provider 预设与模型目录（含定价）
 │  │  │  ├─ credential/        # 密钥托管、加密、掩码、轮换
@@ -195,7 +195,7 @@ newjob/
 └─ web/                        # Vue3 管理后台（pnpm workspace 成员，构建产物由主服务托管，D038）
    ├─ src/api/                 # 接口客户端与手抄的 DTO 类型
    ├─ src/stores/              # Pinia（登录态）
-   ├─ src/views/               # 登录 / 实例 / 设置 / 人设 / 素材 / 会话记录 / 健康与事件 / 密钥 / 用户 / 审计（后两个仅管理员）
+   ├─ src/views/               # 登录 / 实例 / 设置 / 人设 / 素材 / 会话记录 / 规则 / 健康与事件 / 密钥 / 用户 / 审计
    └─ dist/                    # vite build 产物（不进版本库）
 ```
 
@@ -203,7 +203,8 @@ newjob/
 
 ## 5. 消息处理管道
 
-**已落地**（D040 拆出 13 个，M5 加 `load-memory` / `load-self` / `write-memory` 共 16 个）：
+**已落地**（D040 拆出 13 个；M5 加 `load-memory` / `load-self` / `write-memory`；
+M6 加 `throttle` 与两条 `guard-*`，共 19 个）：
 pipe 在 `src/modules/pipeline/pipes/`，顺序写在 `pipes/index.ts` 一张平铺的清单里。
 加功能 = 新建一个 pipe 文件 + 在清单里插一行，不改编排。
 
@@ -226,20 +227,23 @@ interface Pipe {
 |---|---|---|---|
 | ① | `persist-inbound` | 取处理时刻、upsert 会话、入站消息落库 | 抛错 → 兜底 |
 | ② | `load-context` | owner + 人设 + 配置（含会话开关） | 实例没了 → DROP |
-| ③ | `governance` | 人工接管 / 会话静默 → 只入库 | DROP（不写状态） |
-| ④ | `load-mind` | 状态衰减到 now、读关系 | 读失败 → 用默认值 |
-| ⑤ | `load-window` | 取窗口切片并 `buildWindow`（D031） | 空窗口 → DROP |
-| ⑥ | `attention` | **判断要不要回**（详见 6.2） | 不回 → 写状态/关系后 DROP |
-| ⑦ | `collect-media` | 入站图片 → 多模态段、素材清单（D033/D034） | 失败只丢这一张 |
-| ⑧ | `load-memory` | 读回记忆：这个人的事实 + 本会话最近摘要（D045） | 读失败 → 空记忆 |
-| ⑨ | `load-self` | 读回"现在的你"：自述 + 由特质推出的几句（D046） | 读失败 → 空自述 |
-| ⑩ | `assemble-prompt` | 拼 system（D020：种子 → 现在的你 → 印象 → 情境 → 语气）+ 消息数组 | — |
-| ⑪ | `think` | A 阶段内心独白（D036），产出导演指令 | 失败/关闭 → 退化为无独白 |
-| ⑫ | `generate` | B 阶段生成；带图时指定视觉模型且不参与预算降级 | 抛错 → 兜底话术 |
-| ⑬ | `decide-quote` | 引用决策（D030） | — |
-| ⑭ | `deliver` | 媒体意图 → TTS → 拆条/延迟/回 @ → 发送 + 落库（D033/D035） | 语音失败 → 降级为文字 |
-| ⑮ | `persist-interaction` | 花精力、`emotion_shift` 推动 mood、长亲密度 | 吞异常 |
-| ⑯ | `write-memory` | 攒够条数就反思：摘要 + 事实写库（D045），顺带人格演化（D046） | **绝不抛**（抛了会多一条兜底话术） |
+| ③ | `governance` | 人工接管 / 会话静默 / 夜间群聊 → 只入库 | DROP（不写状态） |
+| ④ | `guard-input` | owner 配的入站约束词（D051）：命中就不接 | DROP（标 `blocked`） |
+| ⑤ | `load-mind` | 状态衰减到 now、读关系 | 读失败 → 用默认值 |
+| ⑥ | `load-window` | 取窗口切片并 `buildWindow`（D031） | 空窗口 → DROP |
+| ⑦ | `attention` | **判断要不要回**（详见 6.2） | 不回 → 写状态/关系后 DROP |
+| ⑧ | `collect-media` | 入站图片 → 多模态段、素材清单（D033/D034） | 失败只丢这一张 |
+| ⑨ | `load-memory` | 读回记忆：这个人的事实 + 本会话最近摘要（D045） | 读失败 → 空记忆 |
+| ⑩ | `load-self` | 读回"现在的你"：自述 + 由特质推出的几句（D046） | 读失败 → 空自述 |
+| ⑪ | `assemble-prompt` | 拼 system（D020：红线 → 种子 → 现在的你 → 印象 → 情境 → 语气）+ 消息数组 | — |
+| ⑫ | `think` | A 阶段内心独白（D036），产出导演指令 | 失败/关闭 → 退化为无独白 |
+| ⑬ | `generate` | B 阶段生成；带图时指定视觉模型且不参与预算降级 | 抛错 → 兜底话术 |
+| ⑭ | `guard-output` | owner 配的出站约束词（D051）：命中就不发 | DROP（仍落库并标 `blocked`） |
+| ⑮ | `decide-quote` | 引用决策（D030） | — |
+| ⑯ | `throttle` | 会话/日上限、连续冷却、复读（D049） | 超限 DROP；连续发言等冷却 |
+| ⑰ | `deliver` | 媒体意图 → TTS → 拆条/延迟/回 @ → 发送 + 落库（D033/D035） | 语音失败 → 降级为文字 |
+| ⑱ | `persist-interaction` | 花精力、`emotion_shift` 推动 mood、长亲密度 | 吞异常 |
+| ⑲ | `write-memory` | 攒够条数就反思：摘要 + 事实写库（D045），顺带人格演化（D046） | **绝不抛**（抛了会多一条兜底话术） |
 
 **两种"不回"必须区分**：`DROP` 是"判定不该回"（安静结束），`throw` 是故障
 （交给 `PipelineService.handleFailure` 按 D028 分槽位说兜底话术，可能静默）。
@@ -409,7 +413,7 @@ prompt 要求模型先输出一段结构化思考：
 
 | 层 | 载体 | 谁能改 | 重启后 |
 |---|---|---|---|
-| 不可演化 | 独立红线字段/表（系统级，不随账号） | 谁都改不了（含 superadmin） | 不变 |
+| 不可演化 | **代码常量**（`rules/red-lines.ts`，D051 修正了 D020 的"独立表"） | 谁都改不了（含 superadmin） | 不变 |
 | 种子 | `Persona`（挂在 `BotInstance`，version + archivedAt） | owner 编辑（生成新版本） | 不变 |
 | **演化** | `SelfState`（挂在 `BotInstance`，traits + 自述） | **只有反思任务**，过代码闸门 | 从库里恢复 |
 | 瞬态 | `AgentState`（mood / energy，挂实例） | 每轮对话 + 衰减 | 从基线重新开始 |

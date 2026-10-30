@@ -6,8 +6,8 @@
 > 仓库里没有 `.env`、没有数据库，直接 `pnpm dev` 会失败。
 
 **最后更新**：2026-10-27
-**当前阶段**：**M6 完成**（35 健康分与降级 / 36 行为拟人 / 37 观测与看板：D048/D049/D050）。
-M5 已合并并推送（标签 `m5-memory`）；M6 尚未合并。
+**当前阶段**：**M6 完成 + M4 遗留补齐**（35 健康分与降级 / 36 行为拟人 / 37 观测与看板 / 38 红线与约束词：
+D048~D051）。M5 已合并并推送（标签 `m5-memory`）；M6 与第 38 步尚未合并。
 M5 全部完成并已合并（记忆 / 人格演化 / 主动消息）。
 M4 合并点 `bf23e4f`（标签 `m4-admin`）；M5 合并点 `2b681d2`（标签 `m5-memory`，`--no-ff`）。
 M4 一览：人设 API（24）、前端工程与静态托管（25）、素材库（26）、管道拆 13 个 pipe（27）、
@@ -17,9 +17,9 @@ M5-2（33，D046）：人格演化 —— 同一次反思顺带产出"我变了�
 回滚走版本追加，`GET/POST /api/instances/:id/self*` 可看可退。
 M5-3（34，D047）：主动消息 —— 久未联系且关系够近时主动说一句；默认关闭，五道确定性闸门。
 
-**下一步（默认走这条）**：**M6 合并** —— `feat/m6-risk` → `main`（`--no-ff`）+ 标签 `m6-risk`，
-然后按 `ARCHITECTURE` 的 M6 清单盘点剩余项（规则/约束词配置、合规壳子），
-再决定是补 M4 遗留的「规则/约束词配置」还是开 M7。
+**下一步（默认走这条）**：**合并** —— `feat/m6-risk` → `main`（`--no-ff`）+ 标签 `m6-risk`
+（含第 35~38 步）。之后按 `docs/CONVENTIONS.md` 与 `SECURITY.md` 盘一遍还剩的壳子
+（`compliance/` 的标识与日志留存、`observability/` 的趋势图），再决定要不要开 M7。
 
 > M4 清单里还剩「规则/约束词配置」未做 —— 它要先把红线存储的 API 形状定下来（见 M4 小节），
 > 何时做都行，不阻塞 M5。
@@ -28,14 +28,16 @@ M5-3（34，D047）：主动消息 —— 久未联系且关系够近时主动�
 > 不配就是"能力不存在"——图片只留「[图片]」占位，prompt 里也不提 `[voice]`。
 > **素材库不需要配置**：平台支持发图即可用，模型说 `[save]名字[/save]` 就存，说 `[use]名字[/use]` 就发。
 
-**当前一条消息的完整链路**（17 个 pipe，见 `pipeline/pipes/index.ts` 与 ARCHITECTURE 第 5 节）：
+**当前一条消息的完整链路**（19 个 pipe，见 `pipeline/pipes/index.ts` 与 ARCHITECTURE 第 5 节）：
 
 ```
-persist-inbound → load-context → governance → load-mind → load-window
+persist-inbound → load-context → governance → guard-input（D051 入站禁语）
+→ load-mind → load-window
 → attention（判掉就不花 token）→ collect-media
 → load-memory（D045，读回事实/摘要）→ load-self（D046，读回"现在的你"）
 → assemble-prompt（D020：种子 → 现在的你 → 印象 → 情境 → 语气）
 → think（D036，可关）→ generate（D024 预算 / D025 熔断 / 记账）
+→ guard-output（D051 出站禁语，命中不发但落库）
 → decide-quote（D030）→ throttle（D049：会话/日上限、复读、连续冷却）
 → deliver（D033/D035：媒体 + 拆条 + 延迟 + 回 @）
 → persist-interaction（花精力 / 推动 mood / 长亲密度）
@@ -555,6 +557,70 @@ moderate（输出审核）、express（拆条/打字延迟）。这些是 M3 的
 
 **Pipeline 的出站回调设计**：`send` 作为 `handle(message, send)` 的参数而非依赖注入 ——
 因为 send 绑定到"当前这条连接的 adapter"，每个实例的 adapter 不同，不能全局注入一个。
+
+---
+
+### ~~第 38 步：M4 遗留补齐——红线与约束词~~ ✅ 已完成（D051）
+
+**为什么做**：M4 清单里挂着「规则/约束词配置」挂了一整个 M5/M6。`Persona.boundariesJson`
+（软禁区）早就有了，但那只是"尽量避开"的**文字设定**，模型可以不听。
+真正缺的是**代码判定**：这句话不说、这个词不接。
+
+**做了什么**
+
+- [x] `rules/red-lines.ts`：8 条系统红线（冒充真人 / 索要凭据 / 钱与链接 / 专业建议 / 约见面 /
+      未成年性内容 / 政治宗教 / 辱骂教唆），**代码常量**，随 prompt 拼在最前
+- [x] `GET /api/meta/red-lines` 只读（`editable: false`）—— 前端用它回答"哪些底线改不了"
+- [x] 表 `InstanceRule`（`kind` / `pattern` / `note` / `enabled`）+ 迁移 `20261030121508_instance_rules`
+- [x] `rules/match.ts`（**纯函数**）：小写 + 去空白归一化、纯文本包含、最长优先、空词不命中
+- [x] 两条新 pipe：`guard-input`（governance 之后，命中不回且不调模型）、
+      `guard-output`（generate 之后，命中不发但落库）
+- [x] `Message.blocked/blockReason` 终于有人写了（`rule:<id>`）；
+      **被拦消息不进上下文、不占限频**（窗口与节流查询都带 `blocked: false`）
+- [x] 接口：`GET/POST /api/instances/:id/rules`、`PATCH/DELETE /api/rules/:id`，全部带归属校验与审计
+- [x] 前端「规则与约束词」页：上半只读红线、下半增删改；实例列表加入口
+- [x] 管道 17 → 19 个 pipe
+
+**验收**
+
+- `pnpm test` **738 个用例全绿**（新增 21：红线与匹配 10、规则服务 6、管道拦截 4、别的修正 1）
+- `pnpm typecheck` / `pnpm build` / `pnpm web:typecheck` / `pnpm web:build` 通过
+- `pipeline-smoke` **17 项**（新增⑰，真实库）：入站命中不回且标 `rule:<id>`、出站命中不发但落库、
+  **被拦的消息连窗口锚点都取不到**、删规则后立刻恢复
+- `http-smoke` **95 项**（新增 5）：红线 8 条只读、约束词 201/列表/启停、非法类型与空词与超长 400、
+  别人的实例与别人的规则 404、删两次第二次 404
+- `check:local-data` PASSED（358 文件）
+
+**实现补充（后续不要改）**
+
+- **红线是代码常量**：改它要改代码 + 评审（这是"不可协商"的成本），不落库、不给写接口。
+- **约束词只做纯文本包含**：正则会让用户规则能拖住主链路，且解释不了"为什么被拦"。
+- **被拦的回复仍落库**（排查要看"它本来想说什么"），但**不进上下文、不占限频**。
+- **删就真删**：约束词没有历史引用（素材库那种软删理由在这里不成立）。
+
+### 整体功能测试（2026-10-30，第 38 步后全量回归）
+
+| 层 | 命令 | 结果 |
+|---|---|---|
+| 类型（含 packages） | `pnpm typecheck` | 通过 |
+| 单测 | `pnpm test` | **738 / 738 全绿**（57 个文件） |
+| 构建（两个包 + 主服务） | `pnpm build` | 通过 |
+| 前端类型 | `pnpm web:typecheck` | 通过 |
+| 前端构建 | `pnpm web:build` | 通过（11 个页面 chunk 全部产出） |
+| 管道端到端（真 SQLite） | `scripts/pipeline-smoke.ts` | **17 项 PASSED** |
+| 接口端到端（真服务 + 真库） | `scripts/http-smoke.ts` | **95 项 PASSED** |
+| 数据闸门 | `pnpm check:local-data` | PASSED（358 文件） |
+
+**覆盖到的功能面**：登录/会话/锁定、实例 CRUD 与接入配置清单、密钥信封加密与轮换、人设生命周期、
+素材库、会话查看、审计与哈希链、用户管理、记忆与人格演化、主动消息、风控巡检与降级、
+出站节流、夜间静默、约束词与红线、健康页与事件列表、静态托管与路由回落。
+
+**明确的覆盖盲区**（不是"应该没问题"，是"没测"）：
+
+- **真 NapCat 联调**：冒烟里是假适配器；"私聊收到 pong"这类只有真机能验（见第 7 步）
+- **真模型调用**：网关在测试里全是 stub，真实 provider 的限流/欠费/超时行为没有回归
+- **浏览器交互**：只有 HTTP 层与构建产物验证，没有真实点击（D038 的"真浏览器"一步仍需人工过一遍）
+- **多租户并发**：归属隔离在单测与接口层都验了，但没有并发压测（自用场景暂不需要）
 
 ---
 
@@ -1438,7 +1504,7 @@ POST   /api/personas/:id/activate
 - [x] 用户管理页（第 29 步，D042：建号 / 角色 / 启停 / 重置密码）
 - [x] 会话查看（第 30 步，D043：会话列表 + 消息记录，只读）
 - [x] 审计页（第 31 步，D044：列表 + 改前改后 + 哈希链校验与断点定位，只读）
-- [ ] 规则/约束词配置（红线独立存放，需先定 API 形状）
+- [x] 规则/约束词配置（第 38 步，D051：红线是代码常量 + 实例约束词可配）
 
 ### M5 记忆与自主
 
@@ -1519,6 +1585,7 @@ POST   /api/personas/:id/activate
 
 | 日期 | 变更 |
 |---|---|
+| 2026-10-30 | M4 遗留补齐（D051）：8 条红线做成代码常量 + 实例约束词表与 CRUD + 两条 guard pipe（入站不回/出站不发但落库）+ 被拦消息不进上下文不占限频 + 前端「规则」页；738 单测、pipeline-smoke 17 项、http-smoke 95 项；整体回归全绿 |
 | 2026-10-29 | 观测与看板落地（D050）：`GET /instances/:id/events` 只读接口、前端「健康与事件」页（分数/等级/处置/事件表）、实例设置页补 `nightQuiet` 与 `proactiveEnabled` 两个开关；717 单测、pipeline-smoke 16 项、http-smoke 90 项 |
 | 2026-10-29 | 行为拟人落地（D049）：`safety/throttle.ts` + `safety/quiet.ts` 纯函数、新 pipe `11a-throttle`、治理层夜间静默（仅群聊、@ 放行）、`nightQuiet` 接进接口；714 单测、pipeline-smoke 16 项、http-smoke 88 项 |
 | 2026-10-29 | 健康分与自动降级落地（D048）：`risk/health.ts` 纯函数（24h 窗口 + 扣分矩阵）、降级阶梯（10 分钟冷却 / 6 小时只收不发 / 停实例）、5 分钟巡检 worker、治理 pipe 执行 `silentUntil`、只读接口；684 单测、pipeline-smoke 15 项、http-smoke 87 项 |
