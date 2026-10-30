@@ -5,11 +5,11 @@
 > **换机器 / 全新克隆先读 [`AGENTS.md`](../AGENTS.md) 的「换机器 / 全新克隆」**——
 > 仓库里没有 `.env`、没有数据库，直接 `pnpm dev` 会失败。
 
-**最后更新**：2026-10-27
-**当前阶段**：**M6 完成 + M4 遗留补齐**（35 健康分与降级 / 36 行为拟人 / 37 观测与看板 / 38 红线与约束词：
-D048~D051）。M5 已合并并推送（标签 `m5-memory`）；M6 与第 38 步尚未合并。
-M5 全部完成并已合并（记忆 / 人格演化 / 主动消息）。
-M4 合并点 `bf23e4f`（标签 `m4-admin`）；M5 合并点 `2b681d2`（标签 `m5-memory`，`--no-ff`）。
+**最后更新**：2026-10-30
+**当前阶段**：**M6 完成并已合并**（35 健康分与降级 / 36 行为拟人 / 37 观测与看板 / 38 红线与约束词，
+D048~D051）；M5 早已合并（记忆 / 人格演化 / 主动消息）。
+M4 合并点 `bf23e4f`（标签 `m4-admin`）；M5 合并点 `2b681d2`（标签 `m5-memory`）；
+M6 合并点 `5377da7`（标签 `m6-risk`，`--no-ff`，含第 38 步）。
 M4 一览：人设 API（24）、前端工程与静态托管（25）、素材库（26）、管道拆 13 个 pipe（27）、
 接入配置清单驱动（28，D041）、用户管理（29，D042）、会话查看（30，D043）、审计页（31，D044）。
 M5-1（32，D045）：记忆读写闭环 —— 攒够 30 条就反思写入，下一轮读回注入 prompt。
@@ -17,12 +17,18 @@ M5-2（33，D046）：人格演化 —— 同一次反思顺带产出"我变了�
 回滚走版本追加，`GET/POST /api/instances/:id/self*` 可看可退。
 M5-3（34，D047）：主动消息 —— 久未联系且关系够近时主动说一句；默认关闭，五道确定性闸门。
 
-**下一步（默认走这条）**：**合并** —— `feat/m6-risk` → `main`（`--no-ff`）+ 标签 `m6-risk`
-（含第 35~38 步）。之后按 `docs/CONVENTIONS.md` 与 `SECURITY.md` 盘一遍还剩的壳子
-（`compliance/` 的标识与日志留存、`observability/` 的趋势图），再决定要不要开 M7。
+**下一步（默认走这条）**：**M7 之前先补合规壳子**。M1~M6 的功能面已经齐了（能接、能说、能记、
+会变、会主动、会退烧、有底线），剩下的缺口集中在 `src/modules/compliance/`（现在是空目录）：
 
-> M4 清单里还剩「规则/约束词配置」未做 —— 它要先把红线存储的 API 形状定下来（见 M4 小节），
-> 何时做都行，不阻塞 M5。
+① **「AI 生成」标识**：配置项（实例级，默认开启）+ 在首条主动消息或对方明确问起时带一句说明；
+② **日志留存期**：`Message` / `InstanceEvent` / `AuditLog` 各留多久，加一个清理 worker（默认不删，
+　 要人显式开）+ 后台能看到「当前占用 / 最早一条是哪天」；
+③ **未成年人保护**：现在只有红线里一句「不涉及未成年人的任何性内容」，没有可执行的判定 ——
+　 至少在 persona 的「对方年龄未知」场景上加一条更保守的措辞约束，并在文档里写清「这不是年龄验证」。
+
+三件都是「可执行的小事」，不要一次做成合规平台。动手前先读 `docs/SECURITY.md` 与 D020 第 2 条。
+
+> M4 的「规则/约束词配置」已在第 38 步补齐（D051：红线是代码常量 + 实例约束词表），M4 清单现在全空。
 
 > **多模态要配三样才生效**（都在实例上）：`modelVision`（看图）、`ttsCredentialId` + `ttsModel`（发语音）。
 > 不配就是"能力不存在"——图片只留「[图片]」占位，prompt 里也不提 `[voice]`。
@@ -77,10 +83,10 @@ persist-inbound → load-context → governance → guard-input（D051 入站禁
   `corepack pnpm install` 首次约 9 分钟，别以为卡死了。
 - 构建：`pnpm build` 先构建 `packages/*`（契约包 `main` 指向 `dist/index.js`）再编译主服务。
   只跑 `tsc` 不构建包，运行时会 `ERR_MODULE_NOT_FOUND`。
-- **推送状态**：2026-10-28 已推到 `main` = `3be8590`（M5 合并 + 合并记录），
-  标签 `m5-memory` → `2b681d2`，分支 `feat/m5-memory` = `4bf41c3`（三处均用 `git ls-remote` 复核）。
+- **推送状态**：2026-10-30 已推到 `main` = `5377da7`（M6 合并提交），
+  标签 `m6-risk` → `5377da7`，分支 `feat/m6-risk` = `6bf16b9`（三处均用 `git ls-remote` 复核）。
   远端现有 `main` + 各阶段的 `feat/*` 分支（每个里程碑一条，合并后保留作追溯）+
-  五个标签（`m1-skeleton` / `m1-verified` / `m3-persona` / `m4-admin` / `m5-memory`）。
+  六个标签（`m1-skeleton` / `m1-verified` / `m3-persona` / `m4-admin` / `m5-memory` / `m6-risk`）。
   **成败以远端 ref 为准**（`git ls-remote origin refs/heads/main refs/tags/<tag>`），
   不要用本地 remote-tracking 反推——曾经出现过"本地以为推上去了、实际是用户用桌面端手动推的"这种误判。
   这台机器上会有多个代理进程并存，端口对不上就是 502/超时，不是"网坏了"。
@@ -1585,6 +1591,7 @@ POST   /api/personas/:id/activate
 
 | 日期 | 变更 |
 |---|---|
+| 2026-10-30 | **M6 合并**：`feat/m6-risk` `--no-ff` 合入 `main`（`5377da7`）+ 标签 `m6-risk`；合并前七条检查全绿（typecheck / 738 单测 / build / web:typecheck / web:build / pipeline-smoke 17 项 / http-smoke 95 项 / 数据闸门 374 文件），四条远端 ref 用 `git ls-remote` 复核 |
 | 2026-10-30 | M4 遗留补齐（D051）：8 条红线做成代码常量 + 实例约束词表与 CRUD + 两条 guard pipe（入站不回/出站不发但落库）+ 被拦消息不进上下文不占限频 + 前端「规则」页；738 单测、pipeline-smoke 17 项、http-smoke 95 项；整体回归全绿 |
 | 2026-10-29 | 观测与看板落地（D050）：`GET /instances/:id/events` 只读接口、前端「健康与事件」页（分数/等级/处置/事件表）、实例设置页补 `nightQuiet` 与 `proactiveEnabled` 两个开关；717 单测、pipeline-smoke 16 项、http-smoke 90 项 |
 | 2026-10-29 | 行为拟人落地（D049）：`safety/throttle.ts` + `safety/quiet.ts` 纯函数、新 pipe `11a-throttle`、治理层夜间静默（仅群聊、@ 放行）、`nightQuiet` 接进接口；714 单测、pipeline-smoke 16 项、http-smoke 88 项 |
